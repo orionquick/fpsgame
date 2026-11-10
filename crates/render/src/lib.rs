@@ -94,6 +94,10 @@ struct Globals {
     ground_col: [f32; 4],
     eye: [f32; 4],
     misc: [f32; 4],
+    /// Reflection probe: box min (w: enabled), box max (w: max mip), capture point (w: radiance decode scale).
+    probe_min: [f32; 4],
+    probe_max: [f32; 4],
+    probe_pos: [f32; 4],
 }
 
 pub struct Camera {
@@ -145,6 +149,10 @@ pub struct PointLight {
 }
 
 pub const MAX_LIGHTS: usize = 128;
+pub const PROBE_RES: u32 = 256;
+pub const PROBE_MIPS: u32 = 7;
+/// Radiance is stored scaled down by this in the 8-bit probe and scaled back up when sampled.
+const PROBE_ENCODE: f32 = 0.25;
 
 struct Cascade {
     view: wgpu::TextureView,
@@ -165,6 +173,14 @@ pub struct Renderer {
     globals: wgpu::Buffer,
     lights: wgpu::Buffer,
     n_lights: std::cell::Cell<u32>,
+    probe_tex: wgpu::Texture,
+    probe_down: wgpu::RenderPipeline,
+    probe_down_bgl: wgpu::BindGroupLayout,
+    probe_down_samp: wgpu::Sampler,
+    /// Current probe state (see Globals) and the radiance encode scale while baking (0 = normal output).
+    probe: std::cell::Cell<[[f32; 4]; 3]>,
+    encode: std::cell::Cell<f32>,
+    exposure: std::cell::Cell<f32>,
     bind: wgpu::BindGroup,
     far: Cascade,
     near: Cascade,
@@ -210,6 +226,8 @@ impl Renderer {
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None },
                 depth_tex(3),
                 uniform(4, wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::Cube, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
         });
         let sbgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("shadow"), entries: &[uniform(0, wgpu::ShaderStages::VERTEX)] });
@@ -264,6 +282,18 @@ impl Renderer {
         let near = cascade(SHADOW_NEAR_RES, "shadow near");
         let globals = d.create_buffer(&wgpu::BufferDescriptor { label: Some("globals"), size: std::mem::size_of::<Globals>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let lights = d.create_buffer(&wgpu::BufferDescriptor { label: Some("lights"), size: (MAX_LIGHTS * std::mem::size_of::<PointLight>()) as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let probe_tex = d.create_texture(&wgpu::TextureDescriptor {
+            label: Some("probe"),
+            size: wgpu::Extent3d { width: PROBE_RES, height: PROBE_RES, depth_or_array_layers: 6 },
+            mip_level_count: PROBE_MIPS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: color_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let probe_view = probe_tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
+        let probe_samp = d.create_sampler(&wgpu::SamplerDescriptor { label: Some("probe"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, mipmap_filter: wgpu::MipmapFilterMode::Linear, ..Default::default() });
         let cmp = d.create_sampler(&wgpu::SamplerDescriptor { label: Some("shadow"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, compare: Some(wgpu::CompareFunction::LessEqual), ..Default::default() });
         let bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals"),
@@ -274,6 +304,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&cmp) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&near.view) },
                 wgpu::BindGroupEntry { binding: 4, resource: lights.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&probe_view) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&probe_samp) },
             ],
         });
 
@@ -339,6 +371,23 @@ impl Renderer {
             depth_state(true, wgpu::CompareFunction::Less, shadow_bias),
             Default::default(),
         );
+        let probe_down_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("probe down"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+            ],
+        });
+        let probe_down_samp = d.create_sampler(&wgpu::SamplerDescriptor { label: Some("probe down"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, ..Default::default() });
+        let down_mod = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("probe down"), source: wgpu::ShaderSource::Wgsl(include_str!("probe_down.wgsl").into()) });
+        let probe_down = pipe(
+            "probe down",
+            &layout("probe down", &[Some(&probe_down_bgl)]),
+            wgpu::VertexState { module: &down_mod, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            Some(wgpu::FragmentState { module: &down_mod, entry_point: Some("fs"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+            None,
+            Default::default(),
+        );
         let post_layout = layout("post", &[Some(&bgl), Some(&post_bgl)]);
         let full = wgpu::VertexState { module: &post_mod, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] };
         let ao_pipeline = pipe(
@@ -357,7 +406,79 @@ impl Renderer {
             None,
             Default::default(),
         );
-        Self { lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
+        Self { probe_tex, probe_down, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
+    }
+
+    /// Renders a reflection probe at `pos` for the box `min`..`max` (world): six 90-degree faces, then a blurred mip
+    /// chain for rough reflections and diffuse light. Shading inside the box uses it until the next bake.
+    pub fn bake_probe(&self, gpu: &Gpu, scene: &Scene, batches: &[&Batch], pos: Vec3, min: Vec3, max: Vec3) {
+        self.probe.set([[0.0; 4]; 3]);
+        self.encode.set(PROBE_ENCODE);
+        let t = Targets::new(gpu, self, PROBE_RES, PROBE_RES);
+        let tmp = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("probe face"),
+            size: wgpu::Extent3d { width: PROBE_RES, height: PROBE_RES, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.color_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let tmp_view = tmp.create_view(&Default::default());
+        // WebGPU cube face order and orientation (+X -X +Y -Y +Z -Z), rendered with a mirrored x so the images
+        // land the way cube sampling reads them
+        let faces = [(Vec3::X, Vec3::Y), (Vec3::NEG_X, Vec3::Y), (Vec3::Y, Vec3::NEG_Z), (Vec3::NEG_Y, Vec3::Z), (Vec3::Z, Vec3::Y), (Vec3::NEG_Z, Vec3::Y)];
+        let proj = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.05, 400.0);
+        for (i, (fwd, up)) in faces.iter().enumerate() {
+            let view = Mat4::look_at_rh(pos, pos + *fwd, *up);
+            let cam = Camera { view_proj: proj * view, eye: pos, focus: pos, fog: 0.0009 };
+            let mut enc = gpu.device.create_command_encoder(&Default::default());
+            self.render(gpu, &mut enc, scene, batches, &cam, &t, &tmp_view);
+            enc.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo { texture: &tmp, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: &self.probe_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: 0, z: i as u32 }, aspect: wgpu::TextureAspect::All },
+                wgpu::Extent3d { width: PROBE_RES, height: PROBE_RES, depth_or_array_layers: 1 },
+            );
+            gpu.queue.submit([enc.finish()]);
+        }
+        // blurred mips: each level filters the one above
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        for mip in 1..PROBE_MIPS {
+            for face in 0..6u32 {
+                let src = self.probe_tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: mip - 1, mip_level_count: Some(1), base_array_layer: face, array_layer_count: Some(1), ..Default::default() });
+                let dst = self.probe_tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: mip, mip_level_count: Some(1), base_array_layer: face, array_layer_count: Some(1), ..Default::default() });
+                let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("probe down"),
+                    layout: &self.probe_down_bgl,
+                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.probe_down_samp) }],
+                });
+                let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("probe down"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &dst, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                p.set_pipeline(&self.probe_down);
+                p.set_bind_group(0, &bind, &[]);
+                p.draw(0..3, 0..1);
+            }
+        }
+        gpu.queue.submit([enc.finish()]);
+        self.encode.set(0.0);
+        self.probe.set([[min.x, min.y, min.z, 1.0], [max.x, max.y, max.z, (PROBE_MIPS - 1) as f32], [pos.x, pos.y, pos.z, 1.0 / PROBE_ENCODE]]);
+    }
+
+    /// Camera exposure (1 = outdoor daylight; interiors are exposed brighter, as a camera would).
+    pub fn set_exposure(&self, e: f32) {
+        self.exposure.set(e);
+    }
+
+    /// Turns the reflection probe off (outdoor shots).
+    pub fn clear_probe(&self) {
+        self.probe.set([[0.0; 4]; 3]);
     }
 
     /// Sets the local lights for the next renders; keeps the `MAX_LIGHTS` nearest to `eye`.
@@ -422,13 +543,16 @@ impl Renderer {
             light_far: lf.to_cols_array_2d(),
             light_near: ln.to_cols_array_2d(),
             inv_view_proj: cam.view_proj.inverse().to_cols_array_2d(),
-            sun_dir: [self.sun_dir.x, self.sun_dir.y, self.sun_dir.z, 1.0],
+            sun_dir: [self.sun_dir.x, self.sun_dir.y, self.sun_dir.z, self.exposure.get()],
             sun_col: v4(3.4, 3.1, 2.75, 0.0),
             sky_zenith: v4(0.16, 0.34, 0.78, 0.0),
             sky_horizon: v4(0.62, 0.74, 0.90, 0.0),
             ground_col: v4(0.42, 0.37, 0.30, 0.0),
             eye: [cam.eye.x, cam.eye.y, cam.eye.z, cam.fog],
-            misc: v4(1.15, self.n_lights.get() as f32, 0.0, 0.0),
+            misc: v4(1.15, self.n_lights.get() as f32, if std::env::var("FPS_PROBE_DEBUG").is_ok() && self.encode.get() == 0.0 { 1.0 } else { 0.0 }, self.encode.get()),
+            probe_min: self.probe.get()[0],
+            probe_max: self.probe.get()[1],
+            probe_pos: self.probe.get()[2],
         };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&gl));
         gpu.queue.write_buffer(&self.far.uniform, 0, bytemuck::cast_slice(&lf.to_cols_array()));

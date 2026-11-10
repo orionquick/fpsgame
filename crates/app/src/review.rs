@@ -19,6 +19,8 @@ pub struct Ctx {
     pub building_batches: Vec<render::Batch>,
     /// Interior lamps (nearest ones are uploaded per render).
     pub lights: Vec<render::PointLight>,
+    /// Reflection probes (capture point, box min, box max); the one holding the camera is baked per shot.
+    pub probes: Vec<[glam::Vec3; 3]>,
     focus: Option<[f64; 4]>,
 }
 
@@ -37,7 +39,8 @@ impl Ctx {
             city_batches.extend(crate::bespoke::all_batches(&gpu, &renderer, l, &city));
         }
         let lights = crate::bespoke::all_lights(&city);
-        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], lights, focus: None }
+        let probes = crate::bespoke::all_probes(&city);
+        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], lights, probes, focus: None }
     }
     /// Re-uploads the city with this editor scene's objects.
     pub fn set_scene(&mut self, s: &editor::Scene) {
@@ -100,8 +103,22 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
     let up = std::env::var("FPS_CAM_UP").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.7);
     let y = cx.city.terrain.at(x as f64, z as f64) as f32 + up;
     let cam = Camera::perspective(glam::Vec3::new(x, y, z), yaw, pitch, 70.0, w as f32 / h as f32);
+    let batches = cx.batches();
+    // bake the reflection probe of the room the camera is in (lights set for the capture point first)
+    match cx.probes.iter().find(|p| cam.eye.cmpge(p[1]).all() && cam.eye.cmple(p[2]).all()) {
+        Some(p) if std::env::var("FPS_NO_PROBE").is_err() => {
+            cx.renderer.set_exposure(1.0);
+            cx.renderer.set_lights(&cx.gpu, &cx.lights, p[0]);
+            cx.renderer.bake_probe(&cx.gpu, &cx.scene, &batches, p[0], p[1], p[2]);
+            cx.renderer.set_exposure(std::env::var("FPS_EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.2));
+        }
+        _ => {
+            cx.renderer.clear_probe();
+            cx.renderer.set_exposure(1.0);
+        }
+    }
     cx.renderer.set_lights(&cx.gpu, &cx.lights, cam.eye);
-    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cx.batches(), &cam, w, h)
+    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &batches, &cam, w, h)
 }
 
 /// Grid every 100 m with coordinate labels, plus the play-area outline. `rect` is what the image covers.
@@ -213,7 +230,7 @@ pub fn gallery(cx: &mut Ctx, group: &str, w: u32, h: u32, fit: bool) -> (RgbaIma
         .catalog
         .assets
         .iter()
-        .filter(|a| group.split(',').any(|g| a.group == g || a.id.starts_with(g)) && matches!(a.kind, assets::AssetKind::Model))
+        .filter(|a| group.split(',').any(|g| a.group == g || a.id.starts_with(g)) && (matches!(a.kind, assets::AssetKind::Model) || std::env::var("FPS_SWATCHES").is_ok()))
         .map(|a| {
             let e = crate::library::extent(a);
             (a.id.clone(), a.title.clone(), if fit { 2.2 / e[0].max(e[1]).max(e[2]).max(1e-3) } else { 1.0 })
@@ -230,7 +247,17 @@ pub fn gallery(cx: &mut Ctx, group: &str, w: u32, h: u32, fit: bool) -> (RgbaIma
             crate::library::Placement { asset: id.clone(), part: crate::library::ALL_PARTS, x, z, y: y0, rot: 0.0, scale: [*sc; 3], tint: [1.0; 3], lod: 0, indoor: false }
         })
         .collect();
+    let surfaces: Vec<(usize, String)> = assets.iter().enumerate().filter(|(_, (id, _, _))| lib.catalog.get(id).is_some_and(|a| matches!(a.kind, assets::AssetKind::Surface))).map(|(i, (id, _, _))| (i, id.clone())).collect();
     let mut batches = crate::library::prefab_batches(&cx.gpu, &cx.renderer, lib, &pl);
+    // surfaces: a 2.2 m swatch each, at true texture scale, tilted toward the camera
+    for (i, id) in surfaces {
+        let (x, z) = pos(i);
+        let tile = lib.catalog.get(&id).and_then(|a| a.tile_m).map_or(2.0, |t| t[0]);
+        let m = lib.material(&cx.gpu, &cx.renderer, &id);
+        let (x, z) = (x as f32, z as f32);
+        let q = |dx: f32, dz: f32| render::TexVertex { pos: [x + dx, y0 as f32 + 0.01 + (1.1 - dz) * 0.5, z + dz], nrm: [0.0, 0.894, 0.447], uv: [dx + 1.1, dz + 1.1], tan: [1.0, 0.0, 0.0, 1.0] };
+        batches.extend(render::Batch::new(&cx.gpu, &[q(-1.1, -1.1), q(1.1, -1.1), q(1.1, 1.1), q(-1.1, 1.1)], &[0, 2, 1, 0, 3, 2], &[render::Instance::new(glam::Mat4::IDENTITY, [1.0; 3], 1.0 / tile)], m));
+    }
     // grey platform with a 1 m grid line pattern via the plain material
     let (gw, gd) = (cols as f32 * cell as f32, rows as f32 * cell as f32);
     let q = |x: f32, z: f32| render::TexVertex { pos: [x - cell as f32 / 2.0, y0 as f32 - 0.01, z - cell as f32 / 2.0], nrm: [0.0, 1.0, 0.0], uv: [x, z], tan: [1.0, 0.0, 0.0, 1.0] };

@@ -301,12 +301,31 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         let holes = if k == 0 { vec![] } else { vec![stair_hole(core.stair), core.elevator] };
         slab(&mut g, inner, y, if k == 0 { 0.3 } else { 0.09 }, &holes);
         interior(&mut g, &ground, y, clear, 10 + k as u64, true, k == 0);
-        loft::structure(&mut g, &spec, y, h, k as u64, k != 0);
+        loft::structure(&mut g, &spec, y, h, k as u64, k != 0 && !super::undecorated());
         if k + 1 < LEVELS.len() {
             stair(&mut g, core.stair, y, LEVELS[k + 1].0 - y);
         }
         lift_doors(&mut g, core.elevator, y);
-        let _ = h;
+        // one reflection probe per floor: the open plate between the slab and the deck above
+        g.probe(Vec3::new((T + core.r.x0) * 0.5, y + 1.7, d * 0.5), Vec3::new(T, y, T), Vec3::new(w - T, y + h - 0.1, d - T));
+        if super::undecorated() {
+            // the empty hall of the photos: metal dome high-bays down the bays, nothing else
+            let mut zs = vec![T];
+            zs.extend(spec.girders.iter().copied());
+            zs.push(d - T);
+            for j in 0..zs.len() - 1 {
+                let zc = (zs[j] + zs[j + 1]) * 0.5;
+                let mut x = T + 2.0;
+                while x < core.r.x0 - 1.0 {
+                    let p = v(x, zc);
+                    let hh = fur.bounds("ph_hanging_industrial_lamp").map_or(1.36, |(a, b)| b[1] - a[1]);
+                    fur.put(&mut g, "ph_hanging_industrial_lamp", p, y + clear - hh, v(0.0, 1.0), false);
+                    g.light(Vec3::new(p.x, y + clear - hh - 0.1, p.y), 6.0, [2.4, 2.1, 1.7]);
+                    x += 3.8;
+                }
+            }
+            continue;
+        }
         // zones kept free of desks: meeting rooms, kitchen, lift lobby
         let ne = Rect::new(w - T - 11.0, T, w - T, 6.0);
         let se = Rect::new(w - T - 9.0, d - T - 7.2, w - T, d - T);

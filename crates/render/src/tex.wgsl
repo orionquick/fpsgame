@@ -127,7 +127,8 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     }
 
     let ao = orm.r;
-    let rough = clamp(orm.g, 0.05, 1.0);
+    // params.w (lit surfaces): roughness scale, for oiled timber and polished floors
+    let rough = clamp(orm.g * select(1.0, i.params.w, i.params.x < 0.5 && i.params.w > 0.0), 0.04, 1.0);
     let metal = orm.b;
     let v = normalize(g.eye.xyz - i.world);
     let l = normalize(g.sun_dir.xyz);
@@ -139,17 +140,33 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let sun = g.sun_col.rgb * sun_shadow(i.world, nv) * ndl;
     var c = (kd * base + ggx(n, v, l, rough, f0) * PI) * sun;
     c += kd * local_lights(i.world, n, v, base, rough) * ao;
+    // inside a baked probe: diffuse light and glossy reflections come from the probe (split-sum PBR)
+    let pw = probe_weight(i.world);
     let indoor = i.params.x < 2.5 && i.params.y > 0.0;
-    c += kd * base * ambient(n) * ao * select(1.0, i.params.y, indoor);
+    var amb = kd * base * ambient(n) * ao * select(1.0, i.params.y, indoor);
     if (indoor) {
         // ceiling lamps: soft light from above, some bounce onto walls and ceilings
-        c += kd * base * ao * i.params.z * vec3f(1.0, 0.94, 0.84) * (0.35 + 0.65 * max(n.y, 0.0));
+        amb += kd * base * ao * i.params.z * vec3f(1.0, 0.94, 0.84) * (0.35 + 0.65 * max(n.y, 0.0));
     }
+    var spec_env = vec3f(0.0);
+    if (pw > 0.0 && g.misc.z > 0.5) {
+        // probe debug: perfect mirror
+        return vec4f(tonemap(probe_sample(i.world, reflect(-v, normalize(i.nrm)), 0.0)), 1.0);
+    }
+    if (pw > 0.0) {
+        let maxlod = g.probe_max.w;
+        let rdir = reflect(-v, n);
+        let irr = probe_sample(i.world, n, maxlod);
+        let spec = probe_sample(i.world, rdir, sqrt(rough) * maxlod);
+        amb = mix(amb, kd * base * irr * ao, pw);
+        spec_env = spec * env_brdf(f0, rough, ndv) * ao * pw;
+    }
+    c += amb + spec_env;
     // environment reflection: the sky, strongest on glass and smooth surfaces
     // near-horizontal reflections see the buildings across the street, not sky
     let rd = reflect(-v, n);
     let refl = sky_dir(rd, false) * mix(0.32, 1.0, smoothstep(0.02, 0.45, rd.y));
-    c += fv * refl * mix((1.0 - rough) * 0.5, 0.65, glass) * ao;
+    c += fv * refl * mix((1.0 - rough) * 0.5, 0.65, glass) * ao * (1.0 - pw);
     return vec4f(tonemap(haze(c, i.world)), 1.0);
 }
 

@@ -93,7 +93,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let group = args.get(1).cloned().ok_or("missing asset group")?;
             let mut cx = review::Ctx::new(city::City::load(&city_path())?);
             let (img, legend) = review::gallery(&mut cx, &group, arg(&args, "--w", 1800), arg(&args, "--h", 1100), args.iter().any(|a| a == "--fit"));
-            let p = out_dir().join(format!("gallery_{group}.png"));
+            let name: String = if group.len() > 60 { format!("{}_{}", &group[..20], group.len()) } else { group.clone() };
+            let p = out_dir().join(arg(&args, "--out", format!("gallery_{name}.png")));
             img.save(&p)?;
             for (i, id, t) in legend {
                 println!("{i:3} {id:12} {t}");

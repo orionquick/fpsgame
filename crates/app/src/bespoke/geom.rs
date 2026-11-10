@@ -27,14 +27,21 @@ pub struct Key {
     pub indoor: bool,
     /// Texture tile size override in centimetres (0 = the surface's own size).
     pub tile_cm: u16,
+    /// Roughness scale in hundredths (0 = as textured): lower = glossier (oiled timber, polished tile).
+    pub gloss: u16,
 }
 
 impl Key {
     pub fn new(mat: Mat, tint: [f32; 3]) -> Self {
-        Self { mat, tint: tint.map(|t| (t * 1000.0).round() as u16), indoor: false, tile_cm: 0 }
+        Self { mat, tint: tint.map(|t| (t * 1000.0).round() as u16), indoor: false, tile_cm: 0, gloss: 0 }
     }
     pub fn inside(mut self) -> Self {
         self.indoor = true;
+        self
+    }
+    /// Scale the texture's roughness (0.5 = twice as glossy).
+    pub fn rough(mut self, k: f32) -> Self {
+        self.gloss = (k * 100.0).round() as u16;
         self
     }
     /// Stretch the texture so one tile covers `m` metres.
@@ -71,9 +78,20 @@ pub struct Geo {
     pub blocks: Vec<Block>,
     /// Lamps that light the interior (world space).
     pub lights: Vec<render::PointLight>,
+    /// Reflection probes: capture point, box min, box max (world).
+    pub probes: Vec<[Vec3; 3]>,
 }
 
 impl Geo {
+    /// A reflection probe for the local box `a`..`b`, captured at `p`.
+    pub fn probe(&mut self, p: Vec3, a: Vec3, b: Vec3) {
+        let corners = [Vec3::new(a.x, a.y, a.z), Vec3::new(b.x, a.y, a.z), Vec3::new(a.x, a.y, b.z), Vec3::new(b.x, a.y, b.z), Vec3::new(a.x, b.y, a.z), Vec3::new(b.x, b.y, b.z)];
+        let w: Vec<Vec3> = corners.iter().map(|&c| self.world(c)).collect();
+        let mn = w.iter().fold(Vec3::splat(f32::MAX), |m, v| m.min(*v));
+        let mx = w.iter().fold(Vec3::splat(f32::MIN), |m, v| m.max(*v));
+        self.probes.push([self.world(p), mn, mx]);
+    }
+
     /// A lamp at local `p` with range `radius` and linear colour (intensity folded in).
     pub fn light(&mut self, p: Vec3, radius: f32, color: [f32; 3]) {
         let w = self.world(p);
@@ -85,7 +103,7 @@ impl Geo {
         let ex = Vec3::new(ex.x, 0.0, ex.z).normalize();
         // local +z is +x turned 90 degrees, matching world x-east/z-south handedness
         let ez = Vec3::new(-ex.z, 0.0, ex.x);
-        Self { origin, ex, ez, groups: HashMap::new(), blocks: vec![], lights: vec![] }
+        Self { origin, ex, ez, groups: HashMap::new(), blocks: vec![], lights: vec![], probes: vec![] }
     }
 
     /// World (x, z) of a local plan point.

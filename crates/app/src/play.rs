@@ -42,6 +42,9 @@ struct Gfx {
     targets: Targets,
     batches: Vec<render::Batch>,
     lights: Vec<render::PointLight>,
+    probes: Vec<[Vec3; 3]>,
+    /// Index of the probe currently baked.
+    baked: Option<usize>,
 }
 
 struct App {
@@ -174,7 +177,8 @@ impl ApplicationHandler for App {
         }
         let targets = Targets::new(&gpu, &renderer, config.width, config.height);
         let lights = crate::bespoke::all_lights(&self.city);
-        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches, lights });
+        let probes = crate::bespoke::all_probes(&self.city);
+        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches, lights, probes, baked: None });
         self.last = Instant::now();
     }
 
@@ -213,7 +217,7 @@ impl ApplicationHandler for App {
                 let dt = (now - self.last).as_secs_f32().min(0.05);
                 self.last = now;
                 self.step(dt);
-                let Some(g) = &self.gfx else { return };
+                let Some(g) = &mut self.gfx else { return };
                 let frame = match g.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                     _ => {
@@ -224,6 +228,25 @@ impl ApplicationHandler for App {
                 let view = frame.texture.create_view(&Default::default());
                 let p = &self.player;
                 let cam = Camera::perspective(p.pos + Vec3::Y * EYE, p.yaw, p.pitch, 70.0, g.config.width as f32 / g.config.height as f32);
+                // re-bake the reflection probe when the player moves into another room
+                let inside = g.probes.iter().position(|p| cam.eye.cmpge(p[1]).all() && cam.eye.cmple(p[2]).all());
+                if inside != g.baked {
+                    let refs: Vec<&render::Batch> = g.batches.iter().collect();
+                    match inside {
+                        Some(i) => {
+                            let p = g.probes[i];
+                            g.renderer.set_exposure(1.0);
+                            g.renderer.set_lights(&g.gpu, &g.lights, p[0]);
+                            g.renderer.bake_probe(&g.gpu, &g.scene, &refs, p[0], p[1], p[2]);
+                            g.renderer.set_exposure(2.2);
+                        }
+                        None => {
+                            g.renderer.clear_probe();
+                            g.renderer.set_exposure(1.0);
+                        }
+                    }
+                    g.baked = inside;
+                }
                 g.renderer.set_lights(&g.gpu, &g.lights, cam.eye);
                 let mut enc = g.gpu.device.create_command_encoder(&Default::default());
                 g.renderer.render(&g.gpu, &mut enc, &g.scene, &g.batches.iter().collect::<Vec<_>>(), &cam, &g.targets, &view);

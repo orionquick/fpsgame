@@ -99,7 +99,7 @@ pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool,
             Use::Office | Use::Meeting => k(m::CARPET, if r.kind == Use::Meeting { [0.95, 1.0, 1.1] } else { [1.1, 1.1, 1.12] }),
             Use::Corridor | Use::Lobby => k(m::CORRIDOR_FLOOR, [1.0, 1.0, 1.0]),
             Use::Restroom => k(m::TILE_FLOOR, [1.0, 1.0, 1.0]),
-            Use::Hall => k("pht_concrete_floor_worn_001", [1.35, 1.35, 1.35]),
+            Use::Hall => k("pht_interior_tiles", [0.84, 0.94, 1.14]).tile(3.8).rough(0.16),
             Use::Storage | Use::Riser => k(m::CONCRETE, [0.7, 0.7, 0.7]),
             Use::Stair | Use::Elevator => continue,
         };
@@ -233,6 +233,16 @@ pub fn all_lights(c: &city::City) -> Vec<render::PointLight> {
     all(c).into_iter().flat_map(|b| b.geo.lights).collect()
 }
 
+/// Every bespoke building's reflection probes (capture point, box min, box max).
+pub fn all_probes(c: &city::City) -> Vec<[glam::Vec3; 3]> {
+    all(c).into_iter().flat_map(|b| b.geo.probes).collect()
+}
+
+/// Undecorated mode (FPS_UNDECORATED): structure and finishes only, for judging materials against photos.
+pub fn undecorated() -> bool {
+    std::env::var("FPS_UNDECORATED").is_ok()
+}
+
 pub fn all_batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, c: &city::City) -> Vec<Batch> {
     let mut out = vec![];
     for b in all(c) {
@@ -253,7 +263,8 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, g: &G
     lib.preload(gpu, r, &ids);
     for (key, (v, idx)) in &g.groups {
         let tint = key.tint();
-        let indoor = if key.indoor { [0.0, crate::library::INDOOR_AMBIENT, crate::library::INDOOR_LAMP, 0.0] } else { [0.0; 4] };
+        let gloss = key.gloss as f32 / 100.0;
+        let indoor = if key.indoor { [0.0, crate::library::INDOOR_AMBIENT, crate::library::INDOOR_LAMP, gloss] } else { [0.0, 0.0, 0.0, gloss] };
         let (mat, inst, transparent) = match key.mat {
             Mat::Surface(id) => {
                 let tile = if key.tile_cm > 0 { key.tile_cm as f32 / 100.0 } else { lib.catalog.get(id).and_then(|a| a.tile_m).map_or(2.0, |t| t[0].max(0.05)) };

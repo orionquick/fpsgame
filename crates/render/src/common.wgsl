@@ -10,7 +10,10 @@ struct Globals {
     sky_horizon: vec4f,
     ground_col: vec4f,
     eye: vec4f,          // xyz camera, w: haze density per metre
-    misc: vec4f,         // x: ambient strength
+    misc: vec4f,         // x: ambient strength, y: local light count, w: probe-bake radiance encode (0 = display)
+    probe_min: vec4f,    // w: probe enabled
+    probe_max: vec4f,    // w: max mip
+    probe_pos: vec4f,    // w: radiance decode scale
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -25,6 +28,39 @@ struct PointLight {
     pad: f32,
 };
 @group(0) @binding(4) var<uniform> lights: array<PointLight, 128>;
+@group(0) @binding(5) var probe_tex: texture_cube<f32>;
+@group(0) @binding(6) var probe_samp: sampler;
+
+// How much a point is inside the probe box (fades over the last half metre).
+fn probe_weight(world: vec3f) -> f32 {
+    if (g.probe_min.w < 0.5) {
+        return 0.0;
+    }
+    // full weight up to and on the box faces (floors, outer walls), fading out over 0.4 m beyond them
+    let d = min(world - g.probe_min.xyz, g.probe_max.xyz - world);
+    return clamp((min(min(d.x, d.y), d.z) + 0.45) / 0.4, 0.0, 1.0);
+}
+
+// Box-projected lookup: where the ray from `world` along `r` meets the room box, seen from the capture point.
+fn probe_sample(world: vec3f, r: vec3f, lod: f32) -> vec3f {
+    let rr = select(r, vec3f(1e-4), abs(r) < vec3f(1e-4));
+    let t1 = (g.probe_max.xyz - world) / rr;
+    let t2 = (g.probe_min.xyz - world) / rr;
+    let tf = max(t1, t2);
+    let t = max(min(min(tf.x, tf.y), tf.z), 0.0);
+    let dir = world + r * t - g.probe_pos.xyz;
+    return textureSampleLevel(probe_tex, probe_samp, dir, lod).rgb * g.probe_pos.w;
+}
+
+// Split-sum environment BRDF, analytic fit (Karis, mobile).
+fn env_brdf(f0: vec3f, rough: f32, ndv: f32) -> vec3f {
+    let c0 = vec4f(-1.0, -0.0275, -0.572, 0.022);
+    let c1 = vec4f(1.0, 0.0425, 1.04, -0.04);
+    let r = rough * c0 + c1;
+    let a004 = min(r.x * r.x, exp2(-9.28 * ndv)) * r.x + r.y;
+    let ab = vec2f(-1.04, 1.04) * a004 + r.zw;
+    return f0 * ab.x + ab.y;
+}
 
 // Diffuse + a little specular from the local lights (no shadows; ranges are kept short).
 fn local_lights(world: vec3f, n: vec3f, v: vec3f, base: vec3f, rough: f32) -> vec3f {
@@ -110,6 +146,10 @@ fn haze(c: vec3f, world: vec3f) -> vec3f {
 }
 
 fn tonemap(c: vec3f) -> vec3f {
+    // probe bakes store linear radiance (scaled), not display colour
+    if (g.misc.w > 0.0) {
+        return clamp(c * g.misc.w, vec3f(0.0), vec3f(1.0));
+    }
     let x = c * g.sun_dir.w;
     let a = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0));
     let l = dot(a, vec3f(0.2126, 0.7152, 0.0722));

@@ -29,11 +29,15 @@ fn ins(k: Key) -> Key {
 }
 /// Old-growth heavy timber, darkened with age; grain stretched to suit big members.
 fn timber() -> Key {
-    ins(Key::new(Mat::Surface(TREATED), [0.5, 0.36, 0.26]).tile(0.9))
+    ins(Key::new(Mat::Surface(TREATED), [0.42, 0.28, 0.19]).tile(0.9).rough(0.55))
 }
-/// Plank deck seen from below.
+/// Rough-sawn columns, darker and oilier than the beams (as in the photos).
+fn column_timber() -> Key {
+    ins(Key::new(Mat::Surface(TREATED), [0.24, 0.16, 0.115]).tile(1.1).rough(0.5))
+}
+/// Plank deck seen from below: honey boards.
 fn deck() -> Key {
-    ins(Key::new(Mat::Surface(DECK_PLANKS), [0.78, 0.62, 0.48]))
+    ins(Key::new(Mat::Surface("pht_wood_planks"), [0.95, 0.78, 0.58]).tile(1.5).rough(0.7))
 }
 const OAK: &str = "rd5oqpp0";
 const DECK_PLANKS: &str = "ul4vcieaw";
@@ -108,12 +112,12 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights
     // columns with steel caps
     let col_top = girder_b;
     for c in s.columns() {
-        g.timber(timber(), Vec3::new(c.x - 0.17, y, c.y - 0.17), Vec3::new(c.x + 0.17, col_top, c.y + 0.17));
-        g.block_aabb(Vec3::new(c.x - 0.17, y, c.y - 0.17), Vec3::new(c.x + 0.17, col_top, c.y + 0.17));
+        let r = 0.21;
+        g.timber(column_timber(), Vec3::new(c.x - r, y, c.y - r), Vec3::new(c.x + r, col_top, c.y + r));
+        g.block_aabb(Vec3::new(c.x - r, y, c.y - r), Vec3::new(c.x + r, col_top, c.y + r));
         // timber bolster where the column meets the girder
-        g.timber(timber(), Vec3::new(c.x - 0.17, col_top - 0.02, c.y - 0.55), Vec3::new(c.x + 0.17, col_top + 0.001, c.y + 0.55));
-        g.cuboid(black(), Vec3::new(c.x - 0.2, col_top - 0.25, c.y - 0.2), Vec3::new(c.x + 0.2, col_top, c.y + 0.2));
-        g.cuboid(black(), Vec3::new(c.x - 0.22, y, c.y - 0.22), Vec3::new(c.x + 0.22, y + 0.04, c.y + 0.22));
+        g.timber(timber(), Vec3::new(c.x - 0.2, col_top - 0.3, c.y - 0.7), Vec3::new(c.x + 0.2, col_top + 0.001, c.y + 0.7));
+
     }
     // spiral supply ducts: a main along x near the middle, branches along z, hung under the girders
     let duct_y = girder_b - 0.38;
@@ -139,7 +143,7 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights
         x += 2.4;
     }
     // sprinkler mains (red) and branch lines with heads
-    let red = ins(Key::new(Mat::Plain(90), [0.45, 0.05, 0.04]));
+    let red = ins(Key::new(Mat::Plain(90), [0.06, 0.06, 0.065]));
     let sp_y = joist_b - 0.06;
     for &z in &s.girders {
         let zz = z + 1.6;
