@@ -133,7 +133,8 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     };
     let brick = Key::new(Mat::Surface(brick_id), tint);
     // converted loft: the outer walls are exposed brick inside too
-    let brick_in = Key::new(Mat::Surface(brick_id), tint.map(|c| c * 1.2)).inside();
+    // (darker and browner than outside: aged, out of the sun, as in the interior photos)
+    let brick_in = Key::new(Mat::Surface(brick_id), [tint[0] * 0.9, tint[1] * 0.98, tint[2] * 0.98]).inside();
     let stone = Key::new(Mat::Surface(m::CONCRETE), [0.86, 0.8, 0.72]);
     let plinth = Key::new(Mat::Surface(m::CONCRETE), [0.42, 0.38, 0.35]);
     let sill_in = Key::new(Mat::Plain(160), [0.75, 0.74, 0.71]).inside();

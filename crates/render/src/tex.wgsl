@@ -161,13 +161,24 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
         amb = mix(amb, kd * base * irr * ao, pw);
         spec_env = spec * env_brdf(f0, rough, ndv) * ao * pw;
     }
+    // flood-fill GI: indirect diffuse from the voxel light field replaces the flat indoor ambient
+    let gi = gi_sample(i.world, nv);
+    let giw = select(0.0, gi.a, indoor);
+    if (giw > 0.0) {
+        amb = mix(amb, kd * base * gi.rgb * ao, giw);
+    }
+    if (g.gi_dim.w > 1.5) {
+        // GI debug: the raw light field
+        return vec4f(tonemap(gi.rgb), 1.0);
+    }
     c += amb + spec_env;
     // environment reflection: the sky, strongest on glass and smooth surfaces
     // near-horizontal reflections see the buildings across the street, not sky
     let rd = reflect(-v, n);
     let refl = sky_dir(rd, false) * mix(0.32, 1.0, smoothstep(0.02, 0.45, rd.y));
     c += fv * refl * mix((1.0 - rough) * 0.5, 0.65, glass) * ao * (1.0 - pw);
-    return vec4f(tonemap(haze(c, i.world)), 1.0);
+    // no aerial haze indoors
+    return vec4f(tonemap(select(haze(c, i.world), c, indoor)), 1.0);
 }
 
 // Clear glazing: sky/sun reflection by Fresnel, slight green-grey tint, the interior shows through.

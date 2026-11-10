@@ -45,6 +45,10 @@ struct Gfx {
     probes: Vec<[Vec3; 3]>,
     /// Index of the probe currently baked.
     baked: Option<usize>,
+    /// GI voxelizer inputs and where the GI volume was last centred.
+    gi_tris: Vec<crate::gi::Tri>,
+    gi_city: Vec<crate::gi::Prism>,
+    gi_at: Option<Vec3>,
 }
 
 struct App {
@@ -176,9 +180,11 @@ impl ApplicationHandler for App {
             }
         }
         let targets = Targets::new(&gpu, &renderer, config.width, config.height);
-        let lights = crate::bespoke::all_lights(&self.city);
+        let lights = if crate::bespoke::undecorated() { vec![] } else { crate::bespoke::all_lights(&self.city) };
         let probes = crate::bespoke::all_probes(&self.city);
-        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches, lights, probes, baked: None });
+        let gi_tris = lib.as_ref().map_or(vec![], |l| crate::gi::tris(l, &self.city));
+        let gi_city = crate::gi::prisms(&self.city);
+        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches, lights, probes, baked: None, gi_tris, gi_city, gi_at: None });
         self.last = Instant::now();
     }
 
@@ -230,6 +236,17 @@ impl ApplicationHandler for App {
                 let cam = Camera::perspective(p.pos + Vec3::Y * EYE, p.yaw, p.pitch, 70.0, g.config.width as f32 / g.config.height as f32);
                 // re-bake the reflection probe when the player moves into another room
                 let inside = g.probes.iter().position(|p| cam.eye.cmpge(p[1]).all() && cam.eye.cmple(p[2]).all());
+                // flood-fill GI: re-voxelize around the player on entering a room or after moving 12 m; the light
+                // keeps converging a few steps every frame (the previous field is the starting point)
+                let moved = g.gi_at.is_none_or(|a| a.distance(cam.eye) > 12.0);
+                if !g.gi_tris.is_empty() && std::env::var("FPS_NO_GI").is_err() && (moved || (inside != g.baked && inside.is_some())) {
+                    let terrain = |x: f32, z: f32| self.city.terrain.at(x as f64, z as f64) as f32;
+                    let f = crate::gi::build(&g.gi_tris, &g.gi_city, terrain, &g.lights, g.renderer.sun_dir, cam.eye);
+                    g.renderer.gi.upload(&g.gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, g.gi_at.is_none());
+                    g.renderer.gi_iterate(&g.gpu, 160);
+                    g.gi_at = Some(cam.eye);
+                    g.baked = None;
+                }
                 if inside != g.baked {
                     let refs: Vec<&render::Batch> = g.batches.iter().collect();
                     match inside {
@@ -238,7 +255,7 @@ impl ApplicationHandler for App {
                             g.renderer.set_exposure(1.0);
                             g.renderer.set_lights(&g.gpu, &g.lights, p[0]);
                             g.renderer.bake_probe(&g.gpu, &g.scene, &refs, p[0], p[1], p[2]);
-                            g.renderer.set_exposure(2.2);
+                            g.renderer.set_exposure(if g.renderer.gi.enabled() { 4.5 } else { 2.2 });
                         }
                         None => {
                             g.renderer.clear_probe();
@@ -249,6 +266,9 @@ impl ApplicationHandler for App {
                 }
                 g.renderer.set_lights(&g.gpu, &g.lights, cam.eye);
                 let mut enc = g.gpu.device.create_command_encoder(&Default::default());
+                if g.renderer.gi.enabled() {
+                    g.renderer.gi.iterate(&mut enc, 4);
+                }
                 g.renderer.render(&g.gpu, &mut enc, &g.scene, &g.batches.iter().collect::<Vec<_>>(), &cam, &g.targets, &view);
                 g.gpu.queue.submit([enc.finish()]);
                 g.gpu.queue.present(frame);

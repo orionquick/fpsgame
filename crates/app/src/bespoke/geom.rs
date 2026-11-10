@@ -148,6 +148,28 @@ impl Geo {
         }
     }
 
+    /// A quad whose texture coordinates are shifted by `uv` (metres) and turned a quarter `turns` times, so
+    /// neighbouring slabs of one material show different parts of the texture.
+    pub fn quad_uv(&mut self, k: Key, o: Vec3, r: Vec3, u: Vec3, uv: [f32; 2], turns: u32) {
+        let n = r.cross(u).normalize();
+        let (rn, un) = (r.normalize(), u.normalize());
+        let (tr, tu) = match turns % 4 {
+            0 => (rn, un),
+            1 => (un, -rn),
+            2 => (-rn, -un),
+            _ => (-un, rn),
+        };
+        let (wn, wt) = (self.wdir(n), self.wdir(tr));
+        let verts: Vec<TexVertex> = [o, o + r, o + r + u, o + u]
+            .iter()
+            .map(|&p| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv: [p.dot(tr) + uv[0], -p.dot(tu) + uv[1]], tan: [wt.x, wt.y, wt.z, 1.0] })
+            .collect();
+        let g = self.groups.entry(k).or_default();
+        let base = g.0.len() as u32;
+        g.0.extend(verts);
+        g.1.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
     /// Rectangle from corner `o` spanning `r` (rightwards) and `u` (upwards); faces r x u.
     pub fn quad(&mut self, k: Key, o: Vec3, r: Vec3, u: Vec3) {
         if r.length_squared() < 1e-8 || u.length_squared() < 1e-8 {

@@ -99,12 +99,17 @@ pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool,
             Use::Office | Use::Meeting => k(m::CARPET, if r.kind == Use::Meeting { [0.95, 1.0, 1.1] } else { [1.1, 1.1, 1.12] }),
             Use::Corridor | Use::Lobby => k(m::CORRIDOR_FLOOR, [1.0, 1.0, 1.0]),
             Use::Restroom => k(m::TILE_FLOOR, [1.0, 1.0, 1.0]),
-            Use::Hall => k("pht_interior_tiles", [0.84, 0.94, 1.14]).tile(3.8).rough(0.16),
+            Use::Hall => {
+                stone_slabs(g, r.r, y, seed ^ n as u64);
+                Key::new(Mat::Plain(0), [0.0; 3])
+            }
             Use::Storage | Use::Riser => k(m::CONCRETE, [0.7, 0.7, 0.7]),
             Use::Stair | Use::Elevator => continue,
         };
         let rr = r.r;
-        g.quad(floor, Vec3::new(rr.x0, y, rr.z1), Vec3::X * rr.w(), Vec3::NEG_Z * rr.d());
+        if r.kind != Use::Hall {
+            g.quad(floor, Vec3::new(rr.x0, y, rr.z1), Vec3::X * rr.w(), Vec3::NEG_Z * rr.d());
+        }
         // ceiling (faces down); a loft only closes the rooms inside the core
         let closed = matches!(r.kind, Use::Restroom | Use::Riser | Use::Storage);
         if loft && !closed {
@@ -217,6 +222,35 @@ pub fn lift_doors(g: &mut Geo, e: Rect, y: f32) {
     g.cuboid(frame, Vec3::new(x - 0.02, y, zc + 0.5), Vec3::new(x + 0.02, y + 2.1, zc + 0.62));
     // the doors are closed: block the opening
     g.block_aabb(Vec3::new(x - 0.02, y, zc - 0.6), Vec3::new(x + 0.2, y + 2.2, zc + 0.6));
+}
+
+/// Honed concrete slabs on the building grid (the factory hall's floor): ~1.5 m stones with hairline light joints.
+/// Each slab is its own quad inset over a pale grout plane, with its own patch of the texture, quarter-turn and
+/// slight tint so the floor reads as laid stone rather than one printed sheet.
+fn stone_slabs(g: &mut Geo, r: plan::Rect, y: f32, seed: u64) {
+    const SLAB: f32 = 1.52;
+    const JOINT: f32 = 0.0025;
+    let grout = Key::new(Mat::Plain(200), [0.8, 0.79, 0.74]).inside();
+    g.quad(grout, Vec3::new(r.x0, y - 0.002, r.z1), Vec3::X * r.w(), Vec3::NEG_Z * r.d());
+    // the texture averages ~0.13 (dark, warm); honed light concrete is ~0.35-0.4
+    let tints = [[2.5, 2.8, 3.25], [2.65, 2.95, 3.4], [2.35, 2.65, 3.1], [2.55, 2.85, 3.2]];
+    let nx = (r.w() / SLAB).ceil() as i32;
+    let nz = (r.d() / SLAB).ceil() as i32;
+    for i in 0..nx {
+        for j in 0..nz {
+            let x0 = r.x0 + i as f32 * SLAB;
+            let z0 = r.z0 + j as f32 * SLAB;
+            let x1 = (x0 + SLAB).min(r.x1);
+            let z1 = (z0 + SLAB).min(r.z1);
+            let h = (i as u64) << 20 | j as u64;
+            let t = tints[(rnd(seed, h) * 4.0) as usize % 4];
+            let key = Key::new(Mat::Surface("pht_brushed_concrete"), t).inside().tile(2.0).rough(0.6);
+            let (a, b) = (x0 + if i > 0 { JOINT } else { 0.0 }, z0 + if j > 0 { JOINT } else { 0.0 });
+            let (c, d) = (x1 - if x1 < r.x1 { JOINT } else { 0.0 }, z1 - if z1 < r.z1 { JOINT } else { 0.0 });
+            let uv = [rnd(seed, h ^ 0xa1) * 7.0, rnd(seed, h ^ 0xb2) * 7.0];
+            g.quad_uv(key, Vec3::new(a, y, d), Vec3::X * (c - a), Vec3::NEG_Z * (d - b), uv, (rnd(seed, h ^ 0xc3) * 4.0) as u32);
+        }
+    }
 }
 
 fn rnd(seed: u64, i: u64) -> f32 {

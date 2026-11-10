@@ -14,6 +14,8 @@ struct Globals {
     probe_min: vec4f,    // w: probe enabled
     probe_max: vec4f,    // w: max mip
     probe_pos: vec4f,    // w: radiance decode scale
+    gi_min: vec4f,       // GI volume origin, w: cell size
+    gi_dim: vec4f,       // GI volume cells, w: enabled
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -30,6 +32,43 @@ struct PointLight {
 @group(0) @binding(4) var<uniform> lights: array<PointLight, 128>;
 @group(0) @binding(5) var probe_tex: texture_cube<f32>;
 @group(0) @binding(6) var probe_samp: sampler;
+@group(0) @binding(7) var gi_tex: texture_3d<f32>;
+@group(0) @binding(8) var gi_sky: texture_3d<f32>;
+
+// Indirect diffuse light from the flood-fill GI volume: the light arriving at a surface with normal n, from the
+// six travel directions (each stacked along z in the volume), sampled just off the surface so a floor reads the
+// air above it. a: weight (fades out over the volume's last cells).
+fn gi_sample(world: vec3f, n: vec3f) -> vec4f {
+    if (g.gi_dim.w < 0.5) {
+        return vec4f(0.0);
+    }
+    let cell = g.gi_min.w;
+    let p = (world + n * cell * 0.6 - g.gi_min.xyz) / cell;
+    let edge = min(p, g.gi_dim.xyz - p);
+    let w = clamp((min(min(edge.x, edge.y), edge.z) - 1.0) / 3.0, 0.0, 1.0);
+    if (w <= 0.0) {
+        return vec4f(0.0);
+    }
+    // light travelling along +x hits surfaces facing -x, etc.
+    let wts = array<f32, 6>(max(-n.x, 0.0), max(n.x, 0.0), max(-n.y, 0.0), max(n.y, 0.0), max(-n.z, 0.0), max(n.z, 0.0));
+    let nz = g.gi_dim.z;
+    // four taps a cell apart across the surface soften the voxel structure
+    let t1 = normalize(select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(n.x) > 0.7) - n * dot(n, select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(n.x) > 0.7)));
+    let t2 = cross(n, t1);
+    let taps = array<vec3f, 4>(t1 + t2, t1 - t2, -t1 + t2, -t1 - t2);
+    var e = vec3f(0.0);
+    for (var d = 0; d < 6; d++) {
+        if (wts[d] > 0.0) {
+            for (var k = 0; k < 4; k++) {
+                let q = p + taps[k] * 0.6;
+                let uvw = vec3f(q.x / g.gi_dim.x, q.y / g.gi_dim.y, (clamp(q.z, 0.5, nz - 0.5) + f32(d) * nz) / (6.0 * nz));
+                e += (textureSampleLevel(gi_tex, probe_samp, uvw, 0.0).rgb + textureSampleLevel(gi_sky, probe_samp, uvw, 0.0).rgb) * wts[d] * 0.25;
+            }
+        }
+    }
+    // weights of an axis-aligned normal sum to 1; diagonal normals gather from two or three directions
+    return vec4f(e / (wts[0] + wts[1] + wts[2] + wts[3] + wts[4] + wts[5]), w);
+}
 
 // How much a point is inside the probe box (fades over the last half metre).
 fn probe_weight(world: vec3f) -> f32 {

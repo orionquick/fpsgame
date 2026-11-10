@@ -1,6 +1,7 @@
 mod bespoke;
 mod buildings;
 mod dressing;
+mod gi;
 mod library;
 mod mcp;
 mod play;
@@ -88,6 +89,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cx.set_focus(cx.city.play_rect());
             review::compare(&cx, &root().join("data/raw"), &out_dir())?;
             println!("wrote {}", out_dir().join("compare.png").display());
+        }
+        Some("sbs") => {
+            // fps sbs OUT.png H img1 img2 ...: reference photos and renders side by side at one height.
+            let out = args.get(1).ok_or("usage: fps sbs OUT.png H img...")?;
+            let h: u32 = args.get(2).and_then(|s| s.parse().ok()).ok_or("missing height")?;
+            let ims: Vec<image::RgbImage> = args[3..]
+                .iter()
+                .map(|p| {
+                    let im = image::open(p).map(|i| i.to_rgb8())?;
+                    let w = (im.width() as f32 * h as f32 / im.height() as f32).round() as u32;
+                    Ok(image::imageops::resize(&im, w, h, image::imageops::FilterType::Lanczos3))
+                })
+                .collect::<Result<_, image::ImageError>>()?;
+            let total = ims.iter().map(|i| i.width() + 6).sum::<u32>() - 6;
+            let mut c = image::RgbImage::from_pixel(total, h, image::Rgb([20, 20, 20]));
+            let mut x = 0;
+            for im in &ims {
+                image::imageops::replace(&mut c, im, x as i64, 0);
+                x += im.width() + 6;
+            }
+            c.save(out)?;
+            println!("wrote {out}");
         }
         Some("gallery") => {
             let group = args.get(1).cloned().ok_or("missing asset group")?;

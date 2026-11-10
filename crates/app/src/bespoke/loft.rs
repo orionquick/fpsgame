@@ -29,15 +29,15 @@ fn ins(k: Key) -> Key {
 }
 /// Old-growth heavy timber, darkened with age; grain stretched to suit big members.
 fn timber() -> Key {
-    ins(Key::new(Mat::Surface(TREATED), [0.42, 0.28, 0.19]).tile(0.9).rough(0.55))
+    ins(Key::new(Mat::Surface(TREATED), [0.42, 0.28, 0.19]).tile(0.9).rough(0.85))
 }
 /// Rough-sawn columns, darker and oilier than the beams (as in the photos).
 fn column_timber() -> Key {
     ins(Key::new(Mat::Surface(TREATED), [0.24, 0.16, 0.115]).tile(1.1).rough(0.5))
 }
-/// Plank deck seen from below: honey boards.
+/// Plank deck seen from below: dark aged boards (as in the photos).
 fn deck() -> Key {
-    ins(Key::new(Mat::Surface("pht_wood_planks"), [0.95, 0.78, 0.58]).tile(1.5).rough(0.7))
+    ins(Key::new(Mat::Surface("pht_wood_planks"), [0.62, 0.46, 0.33]).tile(1.5).rough(1.0))
 }
 const OAK: &str = "rd5oqpp0";
 const DECK_PLANKS: &str = "ul4vcieaw";
@@ -92,7 +92,7 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights
     // plank deck underside (faces down) and its top edge is the floor above
     // boards run along x (across the joists): texture V along x, face down
     let (pa, pb, pc, pd) = (Vec3::new(x0, deck_b, z0), Vec3::new(x1, deck_b, z0), Vec3::new(x1, deck_b, z1), Vec3::new(x0, deck_b, z1));
-    g.poly(deck(), &[pa, pd, pc, pb], Vec3::NEG_Z, Vec3::X);
+    g.poly(deck(), &[pa, pb, pc, pd], Vec3::NEG_Z, Vec3::X);
     // girders along x on the pier lines
     for &z in &s.girders {
         g.timber(timber(), Vec3::new(x0, girder_b, z - 0.16), Vec3::new(x1, deck_b, z + 0.16));

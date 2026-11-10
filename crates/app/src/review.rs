@@ -21,6 +21,9 @@ pub struct Ctx {
     pub lights: Vec<render::PointLight>,
     /// Reflection probes (capture point, box min, box max); the one holding the camera is baked per shot.
     pub probes: Vec<[glam::Vec3; 3]>,
+    /// Bespoke building surfaces for the GI voxelizer.
+    pub gi_tris: Vec<crate::gi::Tri>,
+    pub gi_city: Vec<crate::gi::Prism>,
     focus: Option<[f64; 4]>,
 }
 
@@ -38,9 +41,12 @@ impl Ctx {
             city_batches.extend(crate::library::prefab_batches(&gpu, &renderer, l, &tree_pl));
             city_batches.extend(crate::bespoke::all_batches(&gpu, &renderer, l, &city));
         }
-        let lights = crate::bespoke::all_lights(&city);
+        // FPS_LAMPS_OFF (and undecorated mode): daytime with the interior lamps off (as in the empty-hall photos)
+        let lights = if std::env::var("FPS_LAMPS_OFF").is_ok() || crate::bespoke::undecorated() { vec![] } else { crate::bespoke::all_lights(&city) };
         let probes = crate::bespoke::all_probes(&city);
-        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], lights, probes, focus: None }
+        let gi_city = crate::gi::prisms(&city);
+        let gi_tris = lib.as_ref().map_or(vec![], |l| crate::gi::tris(l, &city));
+        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], lights, probes, gi_tris, gi_city, focus: None }
     }
     /// Re-uploads the city with this editor scene's objects.
     pub fn set_scene(&mut self, s: &editor::Scene) {
@@ -104,13 +110,28 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
     let y = cx.city.terrain.at(x as f64, z as f64) as f32 + up;
     let cam = Camera::perspective(glam::Vec3::new(x, y, z), yaw, pitch, 70.0, w as f32 / h as f32);
     let batches = cx.batches();
+    // flood-fill GI around the camera (before the probe bake, so reflections see the bounced light too)
+    if std::env::var("FPS_NO_GI").is_err() && !cx.gi_tris.is_empty() {
+        let t0 = std::time::Instant::now();
+        let terrain = |x: f32, z: f32| cx.city.terrain.at(x as f64, z as f64) as f32;
+        let f = crate::gi::build(&cx.gi_tris, &cx.gi_city, terrain, &cx.lights, cx.renderer.sun_dir, cam.eye);
+        if std::env::var("FPS_GI_DEBUG").is_ok() {
+            f.dump(cam.eye.y + std::env::var("FPS_GI_SLICE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0), &crate::out_dir().join("gi_slice.png"));
+        }
+        cx.renderer.gi.upload(&cx.gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, true);
+        let steps = std::env::var("FPS_GI_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(2000);
+        cx.renderer.gi_iterate(&cx.gpu, steps);
+        eprintln!("gi: voxelized {} tris + {steps} steps in {:.2}s", cx.gi_tris.len(), t0.elapsed().as_secs_f32());
+    } else {
+        cx.renderer.gi.disable();
+    }
     // bake the reflection probe of the room the camera is in (lights set for the capture point first)
     match cx.probes.iter().find(|p| cam.eye.cmpge(p[1]).all() && cam.eye.cmple(p[2]).all()) {
         Some(p) if std::env::var("FPS_NO_PROBE").is_err() => {
             cx.renderer.set_exposure(1.0);
             cx.renderer.set_lights(&cx.gpu, &cx.lights, p[0]);
             cx.renderer.bake_probe(&cx.gpu, &cx.scene, &batches, p[0], p[1], p[2]);
-            cx.renderer.set_exposure(std::env::var("FPS_EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.2));
+            cx.renderer.set_exposure(std::env::var("FPS_EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(if cx.renderer.gi.enabled() { 4.5 } else { 2.2 }));
         }
         _ => {
             cx.renderer.clear_probe();

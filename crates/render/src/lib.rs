@@ -5,6 +5,7 @@ use wgpu::util::DeviceExt;
 
 pub use wgpu as wgpu_reexport;
 
+pub mod gi;
 pub mod textured;
 pub use textured::{compress_material, read_compressed, write_compressed, Batch, CompressedTex, CompressedTex3, Instance, Material, TexVertex};
 
@@ -98,6 +99,9 @@ struct Globals {
     probe_min: [f32; 4],
     probe_max: [f32; 4],
     probe_pos: [f32; 4],
+    /// GI volume: origin (w: cell size), dims (w: enabled).
+    gi_min: [f32; 4],
+    gi_dim: [f32; 4],
 }
 
 pub struct Camera {
@@ -133,6 +137,13 @@ pub fn look_dir(yaw_deg: f32, pitch_deg: f32) -> Vec3 {
 }
 
 /// Sun from azimuth (degrees clockwise from north) and elevation (degrees above the horizon).
+/// The sun: mid-afternoon from the west-southwest, low enough to stream deep into the old factory halls (as in
+/// the reference photos). FPS_SUN="azimuth,elevation" in degrees overrides it.
+pub fn default_sun() -> Vec3 {
+    let v: Vec<f32> = std::env::var("FPS_SUN").ok().map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
+    if v.len() == 2 { sun_from(v[0], v[1]) } else { sun_from(245.0, 32.0) }
+}
+
 pub fn sun_from(azimuth_deg: f32, elevation_deg: f32) -> Vec3 {
     let (a, e) = (azimuth_deg.to_radians(), elevation_deg.to_radians());
     Vec3::new(a.sin() * e.cos(), e.sin(), -a.cos() * e.cos()).normalize()
@@ -189,6 +200,8 @@ pub struct Renderer {
     /// Direction toward the sun (world space).
     pub sun_dir: Vec3,
     pub color_format: wgpu::TextureFormat,
+    /// Voxel flood-fill GI (indirect diffuse light).
+    pub gi: gi::Gi,
 }
 
 const VERTEX_ATTRS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
@@ -228,6 +241,18 @@ impl Renderer {
                 uniform(4, wgpu::ShaderStages::FRAGMENT),
                 wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::Cube, multisampled: false }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D3, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D3, multisampled: false },
+                    count: None,
+                },
             ],
         });
         let sbgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("shadow"), entries: &[uniform(0, wgpu::ShaderStages::VERTEX)] });
@@ -294,6 +319,7 @@ impl Renderer {
         });
         let probe_view = probe_tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
         let probe_samp = d.create_sampler(&wgpu::SamplerDescriptor { label: Some("probe"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, mipmap_filter: wgpu::MipmapFilterMode::Linear, ..Default::default() });
+        let gi = gi::Gi::new(d);
         let cmp = d.create_sampler(&wgpu::SamplerDescriptor { label: Some("shadow"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, compare: Some(wgpu::CompareFunction::LessEqual), ..Default::default() });
         let bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals"),
@@ -306,6 +332,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 4, resource: lights.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&probe_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&probe_samp) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&gi.view) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&gi.sky_view) },
             ],
         });
 
@@ -406,7 +434,7 @@ impl Renderer {
             None,
             Default::default(),
         );
-        Self { probe_tex, probe_down, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
+        Self { gi, probe_tex, probe_down, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
     }
 
     /// Renders a reflection probe at `pos` for the box `min`..`max` (world): six 90-degree faces, then a blurred mip
@@ -469,6 +497,13 @@ impl Renderer {
         gpu.queue.submit([enc.finish()]);
         self.encode.set(0.0);
         self.probe.set([[min.x, min.y, min.z, 1.0], [max.x, max.y, max.z, (PROBE_MIPS - 1) as f32], [pos.x, pos.y, pos.z, 1.0 / PROBE_ENCODE]]);
+    }
+
+    /// Runs `n` GI propagation steps now (shots: thousands at once; play: a few per frame).
+    pub fn gi_iterate(&self, gpu: &Gpu, n: u32) {
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        self.gi.iterate(&mut enc, n);
+        gpu.queue.submit([enc.finish()]);
     }
 
     /// Camera exposure (1 = outdoor daylight; interiors are exposed brighter, as a camera would).
@@ -553,6 +588,8 @@ impl Renderer {
             probe_min: self.probe.get()[0],
             probe_max: self.probe.get()[1],
             probe_pos: self.probe.get()[2],
+            gi_min: self.gi.params.get()[0],
+            gi_dim: self.gi.params.get()[1],
         };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&gl));
         gpu.queue.write_buffer(&self.far.uniform, 0, bytemuck::cast_slice(&lf.to_cols_array()));
