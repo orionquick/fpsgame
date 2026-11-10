@@ -44,6 +44,9 @@ struct Gfx {
 
 struct App {
     city: City,
+    editor_scene: Option<editor::Scene>,
+    /// Playable rectangle from the scene; the player can't leave it.
+    bounds: Option<[f32; 4]>,
     collision: Collision,
     gfx: Option<Gfx>,
     player: Player,
@@ -54,13 +57,17 @@ struct App {
     frames: u32,
 }
 
-pub fn run(city: City, spawn: (f32, f32), yaw: f32) -> Result<(), Box<dyn std::error::Error>> {
-    let collision = Collision::new(&city);
+pub fn run(city: City, scene: Option<editor::Scene>, spawn: (f32, f32), yaw: f32) -> Result<(), Box<dyn std::error::Error>> {
+    let collision = Collision::new(&city, scene.as_ref());
+    let (spawn, yaw) = scene.as_ref().and_then(|s| s.spawns.first()).map_or((spawn, yaw), |sp| ((sp.x as f32, sp.z as f32), sp.yaw as f32));
     let y = city.terrain.at(spawn.0 as f64, spawn.1 as f64) as f32;
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
+    let bounds = scene.as_ref().and_then(|s| s.bounds).map(|b| [b[0] as f32, b[1] as f32, b[2] as f32, b[3] as f32]);
     let mut app = App {
         city,
+        bounds,
+        editor_scene: scene,
         collision,
         gfx: None,
         player: Player { pos: Vec3::new(spawn.0, y, spawn.1), vy: 0.0, yaw, pitch: 0.0, grounded: true, fly: false },
@@ -100,6 +107,9 @@ impl App {
         let speed = if self.keys.contains(&KeyCode::ShiftLeft) { SPRINT } else { WALK };
         let mut xz = [p.pos.x + wish.x * speed * dt, p.pos.z + wish.z * speed * dt];
         self.collision.push_out(&mut xz, p.pos.y + STEP, HEIGHT - STEP, RADIUS);
+        if let Some(b) = self.bounds {
+            xz = [xz[0].clamp(b[0] + RADIUS, b[2] - RADIUS), xz[1].clamp(b[1] + RADIUS, b[3] - RADIUS)];
+        }
         p.pos.x = xz[0];
         p.pos.z = xz[1];
         if p.grounded && self.keys.contains(&KeyCode::Space) {
@@ -136,7 +146,8 @@ impl ApplicationHandler for App {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&gpu.device, &config);
         let renderer = Renderer::new(&gpu, config.format);
-        let scene = crate::world::scene(&gpu, &self.city);
+        let base = crate::world::Base::new(&self.city);
+        let scene = crate::world::scene(&gpu, &base, &self.city, self.editor_scene.as_ref());
         let targets = Targets::new(&gpu, config.format, config.width, config.height);
         self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets });
         self.last = Instant::now();

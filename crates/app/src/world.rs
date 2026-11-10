@@ -1,10 +1,56 @@
 use city::City;
 use render::{Gpu, Scene, Vertex};
 
-pub fn scene(gpu: &Gpu, c: &City) -> Scene {
-    let m = city::mesh::build(c);
-    let verts: Vec<Vertex> = (0..m.pos.len()).map(|i| Vertex { pos: m.pos[i], nrm: m.nrm[i], col: m.col[i] }).collect();
-    Scene::new(gpu, &verts, &m.idx)
+/// The static city mesh, built once; scene objects are appended per upload.
+pub struct Base {
+    pub verts: Vec<Vertex>,
+    pub idx: Vec<u32>,
+}
+
+impl Base {
+    pub fn new(c: &City) -> Self {
+        let m = city::mesh::build(c);
+        Self { verts: (0..m.pos.len()).map(|i| Vertex { pos: m.pos[i], nrm: m.nrm[i], col: m.col[i] }).collect(), idx: m.idx }
+    }
+}
+
+fn object_color(k: editor::Kind) -> [f32; 3] {
+    let c = editor::draw::kind_color(k);
+    let f = |v: u8| (v as f32 / 255.0).powf(2.2) * 0.8;
+    [f(c[0]), f(c[1]), f(c[2])]
+}
+
+/// Uploads the city plus the scene's objects as boxes standing on the terrain.
+pub fn scene(gpu: &Gpu, base: &Base, c: &City, s: Option<&editor::Scene>) -> Scene {
+    let mut verts = base.verts.clone();
+    let mut idx = base.idx.clone();
+    for o in s.map_or(&[][..], |s| &s.objects[..]) {
+        let y0 = o.corners().iter().map(|p| c.terrain.at(p[0], p[1])).fold(f64::INFINITY, f64::min) as f32 - 0.05;
+        let y1 = c.terrain.at(o.x, o.z) as f32 + o.size[1] as f32;
+        let corners = o.corners().map(|p| [p[0] as f32, p[1] as f32]);
+        let col = object_color(o.kind);
+        let mut quad = |p: [[f32; 3]; 4], n: [f32; 3]| {
+            let i0 = verts.len() as u32;
+            for q in p {
+                verts.push(Vertex { pos: q, nrm: n, col });
+            }
+            idx.extend([i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3]);
+        };
+        for i in 0..4 {
+            let (a, b) = (corners[i], corners[(i + 1) % 4]);
+            let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
+            let l = dx.hypot(dz).max(1e-6);
+            let ctr = [o.x as f32, o.z as f32];
+            let mid = [(a[0] + b[0]) * 0.5 - ctr[0], (a[1] + b[1]) * 0.5 - ctr[1]];
+            let mut n = [dz / l, 0.0, -dx / l];
+            if n[0] * mid[0] + n[2] * mid[1] < 0.0 {
+                n = [-n[0], 0.0, -n[2]];
+            }
+            quad([[a[0], y0, a[1]], [b[0], y0, b[1]], [b[0], y1, b[1]], [a[0], y1, a[1]]], n);
+        }
+        quad(corners.map(|p| [p[0], y1, p[1]]), [0.0, 1.0, 0.0]);
+    }
+    Scene::new(gpu, &verts, &idx)
 }
 
 /// Building footprints as vertical prisms, for player collision.
@@ -21,8 +67,15 @@ pub struct Collision {
 }
 
 impl Collision {
-    pub fn new(c: &City) -> Self {
+    pub fn new(c: &City, s: Option<&editor::Scene>) -> Self {
         let mut solids = vec![];
+        for o in s.map_or(&[][..], |s| &s.objects[..]) {
+            let ring: Vec<[f32; 2]> = o.corners().iter().map(|p| [p[0] as f32, p[1] as f32]).collect();
+            let min = ring.iter().fold([f32::MAX; 2], |a, p| [a[0].min(p[0]), a[1].min(p[1])]);
+            let max = ring.iter().fold([f32::MIN; 2], |a, p| [a[0].max(p[0]), a[1].max(p[1])]);
+            let g = c.terrain.at(o.x, o.z) as f32;
+            solids.push(Solid { ring, min, max, y0: g - 0.05, y1: g + o.size[1] as f32 });
+        }
         for b in &c.buildings {
             let (y0, y1) = city::mesh::building_span(b, &c.terrain);
             for ring in std::iter::once(&b.outer).chain(&b.holes) {
@@ -107,7 +160,7 @@ mod tests {
     #[test]
     fn walking_up_5th_ave_never_enters_a_building() {
         let c = city();
-        let col = Collision::new(&c);
+        let col = Collision::new(&c, None);
         // 5th Ave centreline from L St north to Market St
         let mut p = [-291.5f32, -60.0];
         for i in 0..2100 {
@@ -123,7 +176,7 @@ mod tests {
     #[test]
     fn walking_east_mid_block_stops_at_the_facade() {
         let c = city();
-        let col = Collision::new(&c);
+        let col = Collision::new(&c, None);
         // 5th Ave between Island Ave and Market St, walking east into the block
         let mut p = [-291.5f32, -430.0];
         for i in 0..400 {
@@ -138,10 +191,25 @@ mod tests {
     #[test]
     fn push_out_resolves_a_point_inside_a_footprint() {
         let c = city();
-        let col = Collision::new(&c);
+        let col = Collision::new(&c, None);
         let s = col.solids.iter().find(|s| s.max[0] - s.min[0] > 20.0 && s.max[1] - s.min[1] > 20.0 && point_in(&s.ring, [(s.min[0] + s.max[0]) * 0.5, (s.min[1] + s.max[1]) * 0.5])).unwrap();
         let mut p = [(s.min[0] + s.max[0]) * 0.5, (s.min[1] + s.max[1]) * 0.5];
         col.push_out(&mut p, s.y0 + 0.5, 1.3, 0.35);
         assert!(!point_in(&s.ring, p));
+    }
+}
+
+#[cfg(test)]
+mod arena_tests {
+    /// The committed demo arena must stay valid as the city data and validators change.
+    #[test]
+    fn demo_arena_has_no_issues() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let c = city::City::load(&root.join("data/city/downtown_sd.json")).unwrap();
+        let w = editor::World::new(c);
+        let s = editor::Store::new(&root.join("data/scenes"), "arena").load(&w).unwrap();
+        let r = editor::analyze(&w, &s).report;
+        assert!(r.issues.is_empty(), "{:?}", r.issues);
+        assert!(r.reachable_pct > 99.0 && r.sight_over_150m_pct < 1.0 && r.cover_pct >= 50.0);
     }
 }

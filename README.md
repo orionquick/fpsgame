@@ -17,8 +17,8 @@ cargo run --release -- import   # fetch OSM + USGS data (cached in data/raw/, ~1
 cargo run -- compare    # top-down render next to the NAIP aerial, same grid -> out/compare.png
 cargo run -- ortho      # top-down render only -> out/ortho.png
 cargo run -- shot --x -291.5 --z -60 --yaw 0 --pitch 6     # eye-height shot up 5th Ave -> out/shot.png
-cargo run -- play       # walk it: click for mouse look, WASD, Shift sprint, Space jump, F fly, Esc
-cargo test --workspace  # collision tests along 5th Ave, UTM conversion, LiDAR/footprint alignment
+cargo run -- play --scene arena   # walk the demo arena: click for mouse look, WASD, Shift sprint, Space jump, F fly, Esc
+cargo test --workspace  # editor ops, demo arena validity, collision, UTM conversion, LiDAR/footprint alignment
 ```
 
 `compare` is the review image for the AI editor loop. Our render and the aerial photo share a 100 m labelled grid and the yellow play-area outline at 0.5 m per pixel, so differences can be pointed at by coordinate.
@@ -29,7 +29,45 @@ cargo test --workspace  # collision tests along 5th Ave, UTM conversion, LiDAR/f
 |---|---|
 | `crates/city` | Import (Overpass/OSM, USGS 3DEP LiDAR and elevation, NAIP aerial), the city model, and mesh generation: terrain, streets, sidewalks, rail, parks, extruded buildings, trees |
 | `crates/render` | wgpu renderer: sun shadow map, forward pass, MSAA. Draws to a window or off-screen to PNG |
-| `crates/app` | The `fps` binary: import / ortho / compare / shot / play, player collision |
+| `crates/editor` | Map editor core: scenes and their op log, gameplay validation, review overlays |
+| `crates/app` | The `fps` binary: import / ortho / compare / shot / play, editor commands, the MCP server, player collision |
+
+## Map editor (the AI loop)
+
+A **scene** is gameplay content layered on the generated city: blockout objects, team spawns and a playable rectangle. Every edit is an **op**. The op log `data/scenes/NAME.ops.jsonl` is the source of truth (each line records who made it), and `NAME.json` is the replayed snapshot for readable diffs. Batches are atomic: if one op fails, nothing is written.
+
+```bash
+cargo run --release -- ops arena '[{"op":"line","kind":"barrier","from":[-125,-150],"to":[-110,-150]}]'
+cargo run --release -- undo arena 1
+cargo run --release -- validate arena   # JSON report
+cargo run --release -- review arena     # out/arena_review.png
+cargo run --release -- streets arena    # street names with centreline positions
+```
+
+- **Ops:** `place`, `line` (a row end to end, e.g. a barricade), `scatter` (seeded, avoids buildings and other objects), `move`, `delete`, `delete_rect`, `spawn`, `clear_spawns`, `bounds`.
+- **Kinds:** barrier, car, bus, container, dumpster, crate, fence, box. These are blockout boxes until real assets arrive. Objects taller than 1.1 m block movement (the player's jump plus step clears anything lower), at least 1.6 m block sight, and at least 0.8 m count as cover.
+- **Validation** runs on a 1 m grid over the bounds:
+  - walkable area, reachability from spawns, and disconnected regions
+  - cover within 3 m
+  - the longest view from each spot, and the longest sightlines with their endpoints
+  - spawn checks: spawns inside geometry, enemy spawns in view of each other, and walking distance to the centre for fairness
+  - objects inside buildings, overlapping each other, or out of bounds
+- **Review image:** on the left, the top-down render with object IDs, spawns and the longest sightlines; on the right, a heatmap of the longest view from each spot (green under 40 m, red over 150 m) with unreachable space in magenta.
+
+**For Claude:** `.mcp.json` registers the `fps-editor` MCP server (`fps mcp`). Build first with `cargo build --release`, then restart Claude Code in this folder. It exposes these tools:
+
+- `scene_status`, `streets`, `list_objects`
+- `apply_ops`, `undo`
+- `validate`, `render_review`, `render_shot`
+
+Edit results come back with a validation summary, and renders come back as images.
+
+**The demo scene `arena`** was built through this loop. It covers the two blocks north of the ballpark between J St and K St, from 7th Ave (team A) to North 10th Ave (team B):
+
+- container and bus chicanes on J St and along the ballpark promenade
+- cover in the plaza, plus parked cars, barriers and crates
+
+Starting from the raw city, the views beyond 150 m went from 34% of spots to under 1%, cover from 23% to 51%, and the longest sightline from 361 m to 167 m (a plaza diagonal). Everything is reachable, the spawns are fair (217 m vs 191 m to the centre), and the validator reports no issues. A test keeps it that way.
 
 ## How the 3D comes from LiDAR
 
@@ -57,7 +95,8 @@ Current import: 316 OSM buildings measured, 121 upper tiers, 132 structures OSM 
 - **The ballpark** is LiDAR tiers. It still needs a hand-built landmark model.
 - **Street detail:** no curbs, lane markings or crosswalks, bridges sit at ground level, and street widths are heuristics (OSM lane counts with a 16 m downtown minimum).
 - **Rendering:** placeholder flat-shaded materials. Ruinbound's post chain (TSR, exposure, bloom, tonemap) and PBR Megascans materials come in M1/M2.
-- **Collision:** buildings are vertical prisms, roofs are walkable and trees don't collide. Rapier comes with real meshes.
+- **Collision:** buildings and objects are vertical prisms, roofs are walkable and trees don't collide. Rapier comes with real meshes.
+- **Editor:** no in-game editor UI yet (CLI and MCP only), no choke-point or flank metrics yet, and objects are boxes.
 
 ## License
 

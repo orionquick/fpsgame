@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fps-editor": {
+      "command": "./target/release/fps",
+      "args": ["mcp", "--scene", "arena"]
+    }
+  }
+}

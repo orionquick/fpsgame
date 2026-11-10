@@ -9,6 +9,7 @@ pub const GRID_M: f64 = 100.0;
 pub struct Ctx {
     pub gpu: Gpu,
     pub renderer: Renderer,
+    pub base: crate::world::Base,
     pub scene: render::Scene,
     pub city: City,
 }
@@ -17,9 +18,26 @@ impl Ctx {
     pub fn new(city: City) -> Self {
         let gpu = Gpu::headless();
         let renderer = Renderer::new(&gpu, wgpu_format());
-        let scene = crate::world::scene(&gpu, &city);
-        Self { gpu, renderer, scene, city }
+        let base = crate::world::Base::new(&city);
+        let scene = crate::world::scene(&gpu, &base, &city, None);
+        Self { gpu, renderer, base, scene, city }
     }
+    /// Re-uploads the city with this editor scene's objects.
+    pub fn set_scene(&mut self, s: &editor::Scene) {
+        self.scene = crate::world::scene(&self.gpu, &self.base, &self.city, Some(s));
+    }
+}
+
+/// Top-down render of `rect` at `mpp` metres per pixel.
+pub fn ortho_rect(cx: &Ctx, rect: [f64; 4], mpp: f64) -> RgbaImage {
+    let (w, h) = (((rect[2] - rect[0]) / mpp).round() as u32, ((rect[3] - rect[1]) / mpp).round() as u32);
+    let cam = Camera::ortho([rect[0] as f32, rect[1] as f32, rect[2] as f32, rect[3] as f32], cx.scene.max.y);
+    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cam, w, h)
+}
+
+/// The editor review image for a scene: map with ids/spawns/sightlines next to the analysis heatmap.
+pub fn scene_review(cx: &Ctx, a: &editor::Analysis, s: &editor::Scene, mpp: f64) -> RgbaImage {
+    editor::draw::review(&ortho_rect(cx, a.rect, mpp), a, s)
 }
 
 fn wgpu_format() -> render::wgpu_reexport::TextureFormat {
