@@ -127,6 +127,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             proctex::decal(std::path::Path::new(svg), id, wm, hm, px, under.map(|(s, t)| (s.as_str(), t)))?;
         }
         Some("proctex") => proctex::all()?,
+        Some("svgtex") => {
+            // fps svgtex SVG ID W_M H_M PX: a colour SVG as an opaque surface (TV pictures, posters)
+            let f = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok()).ok_or("usage: fps svgtex SVG ID W_M H_M PX");
+            proctex::svg_surface(std::path::Path::new(args.get(1).ok_or("missing svg")?), args.get(2).ok_or("missing id")?, f(3)?, f(4)?, f(5)? as u32)?;
+        }
         Some("sbs") => {
             // fps sbs OUT.png H img1 img2 ...: reference photos and renders side by side at one height.
             let out = args.get(1).ok_or("usage: fps sbs OUT.png H img...")?;

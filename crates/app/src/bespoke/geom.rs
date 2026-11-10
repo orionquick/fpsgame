@@ -16,6 +16,8 @@ pub enum Mat {
     Glass,
     /// Emissive panel (ceiling lights).
     Light,
+    /// Emissive picture by catalog id (TV screens), stretched once over the quad (see `Geo::decal`).
+    Screen(&'static str),
 }
 
 /// Material plus tint and lighting context: one draw batch per distinct key.

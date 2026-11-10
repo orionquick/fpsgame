@@ -190,6 +190,22 @@ pub fn all() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Rasterises a colour SVG (a TV picture, a poster) into an opaque surface.
+pub fn svg_surface(svg: &std::path::Path, id: &str, wm: f32, hm: f32, px: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let tree = resvg::usvg::Tree::from_data(&std::fs::read(svg)?, &resvg::usvg::Options::default())?;
+    let size = tree.size();
+    let (w, h) = (px, ((px as f32) * size.height() / size.width()).round() as u32);
+    let mut pix = resvg::tiny_skia::Pixmap::new(w, h).ok_or("bad size")?;
+    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(w as f32 / size.width(), h as f32 / size.height()), &mut pix.as_mut());
+    let img = image::RgbImage::from_fn(w, h, |x, y| {
+        let p = pix.pixel(x, y).map(|p| p.demultiply()).unwrap();
+        image::Rgb([p.red(), p.green(), p.blue()])
+    });
+    write_surface("screens", id, &[("BaseColor", png_rgb(&img))], (wm, hm), &svg.display().to_string())?;
+    println!("wrote {id} ({w}x{h}) from {}", svg.display());
+    Ok(())
+}
+
 /// Rasterises a stencil SVG (drawn in black) into a decal surface. With `under` = (surface id, tile metres) the
 /// decal carries that surface's own maps (colour darkened as stain, normal, roughness, AO) tiled at its scale, so
 /// the stencil lights, shines and reflects like the floor it is stained into; otherwise flat ink.

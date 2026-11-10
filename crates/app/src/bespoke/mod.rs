@@ -246,7 +246,7 @@ fn stone_slabs(g: &mut Geo, r: plan::Rect, y: f32, seed: u64) {
             let z1 = (z0 + SLAB).min(r.z1);
             let h = (i as u64) << 20 | j as u64;
             let t = tints[(rnd(seed, h) * 4.0) as usize % 4];
-            let key = Key::new(Mat::Surface("pht_brushed_concrete"), t).inside().tile(2.0).rough(0.8);
+            let key = Key::new(Mat::Surface("pht_brushed_concrete"), t).inside().tile(2.0).rough(0.5);
             let (a, b) = (x0 + if i > 0 { JOINT } else { 0.0 }, z0 + if j > 0 { JOINT } else { 0.0 });
             let (c, d) = (x1 - if x1 < r.x1 { JOINT } else { 0.0 }, z1 - if z1 < r.z1 { JOINT } else { 0.0 });
             let uv = [rnd(seed, h ^ 0xa1) * 7.0, rnd(seed, h ^ 0xb2) * 7.0];
@@ -295,7 +295,10 @@ pub fn all_batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, c
 pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, g: &Geo) -> Vec<Batch> {
     let mut out = vec![];
     let mut plain: HashMap<u8, Arc<Material>> = HashMap::new();
-    let ids: Vec<String> = g.groups.keys().filter_map(|k| if let Mat::Surface(id) = k.mat { Some(id.to_string()) } else { None }).collect();
+    let ids: Vec<String> = g.groups.keys().filter_map(|k| match k.mat {
+        Mat::Surface(id) | Mat::Screen(id) => Some(id.to_string()),
+        _ => None,
+    }).collect();
     lib.preload(gpu, r, &ids);
     for (key, (v, idx)) in &g.groups {
         let tint = key.tint();
@@ -310,6 +313,7 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, g: &G
             }
             Mat::Plain(rough) => (plain.entry(rough).or_insert_with(|| Arc::new(Material::plain(gpu, r, rough))).clone(), Instance::new(glam::Mat4::IDENTITY, tint, 1.0).with_params(indoor), false),
             Mat::Glass => (lib.glass(gpu, r), Instance::new(glam::Mat4::IDENTITY, tint, 1.0), true),
+            Mat::Screen(id) => (lib.material(gpu, r, id), Instance::new(glam::Mat4::IDENTITY, tint, 1.0 / if key.tile_cm > 0 { key.tile_cm as f32 / 100.0 } else { 1.0 }).with_params([4.0, 1.0, 0.0, 0.0]), false),
             Mat::Light => (plain.entry(255).or_insert_with(|| Arc::new(Material::plain(gpu, r, 255))).clone(), Instance::new(glam::Mat4::IDENTITY, tint, 1.0).with_params([4.0, 1.2, 0.0, 0.0]), false),
         };
         if let Some(b) = Batch::new(gpu, v, idx, &[inst], mat) {

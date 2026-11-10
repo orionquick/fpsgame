@@ -51,7 +51,7 @@ fn walnut() -> Key {
 }
 /// Medium-brown stained oak for the back-bar surround (as in the photo).
 fn oak() -> Key {
-    ins(Key::new(Mat::Surface("pht_black_walnut_veneer_01"), [0.38, 0.3, 0.21]).tile(1.4).rough(0.6))
+    ins(Key::new(Mat::Surface("pht_black_walnut_veneer_01"), [0.34, 0.28, 0.22]).tile(1.4).rough(0.6))
 }
 fn concrete_top() -> Key {
     ins(Key::new(Mat::Surface(super::m::CONCRETE), [0.62, 0.62, 0.6]).rough(0.7))
@@ -111,7 +111,7 @@ fn bar_wall(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     let body = ins(Key::new(Mat::Plain(200), [0.8, 0.79, 0.76]));
     g.cuboid(body, Vec3::new(x, y, wz0), Vec3::new(x + 0.22, y + WALL_H, z1));
     g.block_aabb(Vec3::new(x, y, wz0), Vec3::new(x + 0.22, y + WALL_H, z1));
-    let tile = ins(Key::new(Mat::Surface("pt_subway_tile"), [1.0, 1.0, 1.0]));
+    let tile = ins(Key::new(Mat::Surface("pt_subway_tile"), [0.8, 0.78, 0.74]));
     g.quad(tile, Vec3::new(x - 0.004, y, z1), Vec3::NEG_Z * (z1 - wz0), Vec3::Y * WALL_H);
     // charcoal cap and end trims
     g.cuboid(charcoal(), Vec3::new(x - 0.03, y + WALL_H, wz0 - 0.03), Vec3::new(x + 0.25, y + WALL_H + 0.06, z1 + 0.03));
@@ -149,17 +149,21 @@ fn bar_wall(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     g.timber(wf, Vec3::new(x - d, fy0, fz1 - 0.2), Vec3::new(x, fy1, fz1));
     g.timber(wf, Vec3::new(x - d - 0.04, shelf - 0.05, fz0), Vec3::new(x, shelf + 0.04, fz1));
     // posts either side of the centre bay, and a plinth rail along the counter
-    for zc in [centre - 1.62, centre + 1.62] {
-        g.timber(wf, Vec3::new(x - d, fy0, zc - 0.07), Vec3::new(x, shelf, zc + 0.07));
+    // proportions measured off the photo (frame ~9.3 m): open shelves 0.65 m at the ends, cabinets 1.8 m,
+    // a 3.75 m centre bay between posts
+    for zc in [centre - 1.88, centre + 1.88] {
+        g.timber(wf, Vec3::new(x - d, fy0, zc - 0.06), Vec3::new(x, shelf, zc + 0.06));
     }
     g.timber(wf, Vec3::new(x - d, fy0, fz0), Vec3::new(x, fy0 + 0.08, fz1));
     // charcoal cabinets with paned glass doors in the side bays
-    for (ca, cb) in [(fz0 + 0.9, centre - 1.69), (centre + 1.69, fz1 - 0.9)] {
+    for (ca, cb) in [(fz0 + 0.87, centre - 1.94), (centre + 1.94, fz1 - 0.87)] {
         cabinet(g, f, x, ca, cb, fy0 + 0.08, shelf - 0.05);
     }
     // open shelves with cans at the outer ends of the lower bays
-    for (sa, sb) in [(fz0 + 0.2, fz0 + 0.86), (fz1 - 0.86, fz1 - 0.2)] {
+    for (sa, sb) in [(fz0 + 0.2, fz0 + 0.83), (fz1 - 0.83, fz1 - 0.2)] {
         g.timber(wf, Vec3::new(x - d, fy0, sb), Vec3::new(x, shelf, sb + 0.04));
+        // wooden backing behind the open shelves
+        g.timber(wf, Vec3::new(x - 0.03, fy0, sa), Vec3::new(x - 0.005, shelf, sb));
         for k in 1..3 {
             let sy = fy0 + 0.08 + (shelf - fy0 - 0.13) * k as f32 / 3.0;
             g.timber(wf, Vec3::new(x - d, sy, sa), Vec3::new(x, sy + 0.03, sb));
@@ -178,16 +182,19 @@ fn bar_wall(g: &mut Geo, f: &mut Furnisher, s: &Site) {
         }
     }
     // two TVs side by side in the centre bay, one in each upper corner
-    for (zc, yc) in [(centre - 0.78, y + 1.6), (centre + 0.78, y + 1.6), (fz0 + 0.95, y + 2.82), (fz1 - 0.95, y + 2.82)] {
-        tv(g, f, Vec3::new(x - 0.02, yc, zc), v(-1.0, 0.0));
+    // big screens, as in the photo: two ~1.57 m side by side in the centre bay, ~1.7 m in each upper corner
+    for (zc, yc, scale) in [(centre - 0.87, y + 1.58, 1.76), (centre + 0.87, y + 1.58, 1.76), (fz0 + 1.25, y + 2.72, 1.95), (fz1 - 1.25, y + 2.72, 1.95)] {
+        // mounted forward, inside the depth of the surround
+        tv_scaled(g, f, Vec3::new(x - d + 0.06, yc, zc), v(-1.0, 0.0), scale);
     }
-    marquee(g, "TAP ROOM", x - 0.04, centre, shelf + 0.17, 0.1);
+    marquee(g, "TAP ROOM", x - 0.04, centre, shelf + 0.17, 0.095);
     // neon box above the surround (generic lettering), dome cameras on the tile
-    neon_box(g, x, centre + 0.6, y + 3.62);
-    for zc in [fz0 + 0.5, centre - 2.6, centre + 2.0, fz1 - 0.4] {
-        let p = Vec3::new(x - 0.07, y + 3.62, zc);
-        g.tube(ins(Key::new(Mat::Plain(90), [0.75, 0.75, 0.74])), p, p - Vec3::new(0.0, 0.04, 0.0), 0.06, 12);
-        g.tube(black(), p - Vec3::new(0.0, 0.04, 0.0), p - Vec3::new(0.0, 0.1, 0.0), 0.045, 12);
+    // neon box resting on the frame top, a little right of centre; dome cameras on brackets on the tile above
+    neon_box(g, x - 0.05, centre + 0.5, fy1 - 0.1);
+    for zc in [fz0 + 0.25, centre - 2.7, centre + 2.6, fz1 - 0.3] {
+        let p = Vec3::new(x - 0.12, y + 3.75, zc);
+        g.cuboid(ins(Key::new(Mat::Plain(90), [0.7, 0.7, 0.69])), Vec3::new(x - 0.2, y + 3.78, zc - 0.07), Vec3::new(x, y + 3.82, zc + 0.07));
+        frustum(g, ins(Key::new(Mat::Plain(40), [0.08, 0.08, 0.085])), p, p - Vec3::new(0.0, 0.1, 0.0), 0.075, 0.03, 14);
     }
 
     // tap towers on the back counter
@@ -196,7 +203,7 @@ fn bar_wall(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     }
     // bar lights: warm wash on the tile and the counter
     for zc in [z0 + 1.5, centre - 2.5, centre, centre + 2.5, z1 - 1.5] {
-        g.downlight(Vec3::new(x - 0.8, y + 2.9, zc), 4.0, [0.9, 0.62, 0.32]);
+        g.downlight(Vec3::new(x - 0.8, y + 2.9, zc), 4.0, [0.5, 0.36, 0.2]);
     }
 }
 
@@ -241,7 +248,7 @@ fn cabinet(g: &mut Geo, _f: &mut Furnisher, x: f32, z0: f32, z1: f32, y0: f32, y
 
 /// A neon sign box over the bar: a deep red cabinet with white-hot red tube lettering ("COLD BEER", generic).
 fn neon_box(g: &mut Geo, x: f32, zc: f32, y0: f32) {
-    let (w, h) = (2.3, 0.5);
+    let (w, h) = (1.95, 0.6);
     let red = ins(Key::new(Mat::Plain(80), [0.3, 0.02, 0.02]));
     g.cuboid(red, Vec3::new(x - 0.14, y0, zc - w / 2.0), Vec3::new(x, y0 + h, zc + w / 2.0));
     // the lit red face (one-sided, facing the room) and white-hot tube lettering on it
@@ -285,28 +292,25 @@ fn bottle(g: &mut Geo, p: Vec3, kind: usize) {
     disc(g, glass, p + Vec3::Y * (h * 0.66), 0.036, 10);
 }
 
-/// A wall TV centred at `c` facing `face`, with a lit screen (a ball game: green field, brown infield).
+/// A wall TV centred at `c` facing `face`, showing the ball-game picture.
 fn tv(g: &mut Geo, f: &mut Furnisher, c: Vec3, face: Vec2) {
+    tv_scaled(g, f, c, face, 1.25)
+}
+
+/// `tv` at a given scale of the TV model (1.0 = 1.06 x 0.65 m).
+fn tv_scaled(g: &mut Geo, f: &mut Furnisher, c: Vec3, face: Vec2, scale: f32) {
     let n = face.normalize();
-    put(f, g, "sf_ce05a5d98b", v(c.x, c.z), c.y - 0.4, n, 1.0, [1.0; 3], false);
-    let t = v(-n.y, n.x);
-    let (hw, hh) = (0.6, 0.34);
-    let p = Vec3::new(c.x + n.x * 0.075, c.y - 0.4 + 0.07, c.z + n.y * 0.075);
-    let tr = Vec3::new(t.x, 0.0, t.y);
-    // a ball game on screen: grass, the stands behind, a player in white, the score bar
-    let field = Key::new(Mat::Light, [0.09, 0.2, 0.07]);
-    let stands = Key::new(Mat::Light, [0.07, 0.065, 0.06]);
-    let jersey = Key::new(Mat::Light, [0.32, 0.31, 0.29]);
-    let cap = Key::new(Mat::Light, [0.06, 0.04, 0.025]);
-    let bar = Key::new(Mat::Light, [0.22, 0.2, 0.18]);
-    // (emissive panels are one-sided: wound to face the room)
+    let k = scale / 1.25; // the catalog already scales the model 1.25x
+    let (hw, hh) = (0.48 * scale, 0.272 * scale);
+    let bottom = c.y - 0.325 * scale;
+    put(f, g, "sf_ce05a5d98b", v(c.x, c.z), bottom, n, k, [1.0; 3], false);
     let nn = Vec3::new(n.x, 0.0, n.y);
-    let at = |s: f32, h: f32, lift: f32| p + tr * (hw - s) + Vec3::Y * h + nn * lift;
-    g.quad(field, at(0.0, 0.0, 0.0), -tr * (2.0 * hw), Vec3::Y * (2.0 * hh));
-    g.quad(stands, at(0.0, hh * 1.25, 0.002), -tr * (2.0 * hw), Vec3::Y * (hh * 0.75));
-    g.quad(jersey, at(hw * 0.75, hh * 0.25, 0.003), -tr * (hw * 0.5), Vec3::Y * (hh * 0.95));
-    g.quad(cap, at(hw * 0.86, hh * 1.2, 0.004), -tr * (hw * 0.28), Vec3::Y * (hh * 0.2));
-    g.quad(bar, at(0.04, 0.03, 0.004), -tr * (2.0 * hw - 0.08), Vec3::Y * 0.06);
+    // the screen: the picture stretched once over the panel (emissive, wound to face the room)
+    let r = Vec3::Y.cross(nn).normalize() * (2.0 * hw);
+    let o = Vec3::new(c.x, c.y - hh, c.z) + nn * (0.061 * scale) - r * 0.5;
+    // screen brightness for an interior exposure (~8x)
+    let screen = Key::new(Mat::Screen("scr_ballgame"), [0.32, 0.32, 0.32]).tile(1.0);
+    g.decal(screen, o, r, Vec3::Y * (2.0 * hh), 1.0);
 }
 
 /// Marquee letters on the sign: cream metal letter bodies with a warm bulb at every pixel of a 5x7 font, the
@@ -338,11 +342,11 @@ fn marquee(g: &mut Geo, text: &str, x: f32, zc: f32, y0: f32, px: f32) {
                 let zz = z_start + (i as f32 * 6.0 + c as f32 + 0.5) * px;
                 let yy = y0 + (6 - r) as f32 * px + px * 0.5;
                 g.cuboid(body, Vec3::new(x - 0.1, yy - px * 0.5, zz - px * 0.5), Vec3::new(x, yy + px * 0.5, zz + px * 0.5));
-                g.cuboid(Key::new(Mat::Light, [3.4, 2.5, 1.35]), Vec3::new(x - 0.15, yy - 0.024, zz - 0.024), Vec3::new(x - 0.1, yy + 0.024, zz + 0.024));
+                g.cuboid(Key::new(Mat::Light, [1.1, 0.8, 0.44]), Vec3::new(x - 0.15, yy - 0.024, zz - 0.024), Vec3::new(x - 0.1, yy + 0.024, zz + 0.024));
             }
         }
     }
-    g.downlight(Vec3::new(x - 0.4, y0 + 3.5 * px, zc), 3.0, [0.8, 0.55, 0.28]);
+    g.downlight(Vec3::new(x - 0.4, y0 + 3.5 * px, zc), 3.0, [0.22, 0.15, 0.08]);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -428,8 +432,8 @@ fn rope_lights(g: &mut Geo, s: &Site) {
             let b = lo - Vec3::Y * (0.08 + 0.25 * r(4));
             g.tube(rope, lo, b, 0.01, 5);
             g.tube(socket, b, b - Vec3::Y * 0.06, 0.02, 8);
-            g.tube(Key::new(Mat::Light, [3.0, 2.2, 1.2]), b - Vec3::Y * 0.06, b - Vec3::Y * 0.17, 0.028, 8);
-            g.downlight(b - Vec3::Y * 0.12, 2.4, [0.4, 0.28, 0.14]);
+            g.tube(Key::new(Mat::Light, [1.0, 0.72, 0.4]), b - Vec3::Y * 0.06, b - Vec3::Y * 0.17, 0.028, 8);
+            g.downlight(b - Vec3::Y * 0.12, 2.0, [0.12, 0.085, 0.045]);
         }
     }
 }
@@ -476,9 +480,15 @@ fn lounge(g: &mut Geo, f: &mut Furnisher, s: &Site) {
         }
     }
     // a TV on a ceiling mount by the column, angled to the lounge (as in the photo)
-    tv(g, f, Vec3::new(cx + 3.4, y + 3.0, RUG.3 + 0.6), dir(200.0));
-    let mount = Vec3::new(cx + 3.4 + 0.1, y + 3.1, RUG.3 + 0.6);
-    g.tube(black(), mount, Vec3::new(mount.x, s.deck_b, mount.z), 0.025, 8);
+    // a TV high on the column by the wingbacks on a black arm bracket, turned to the lounge (as in the photo)
+    if let (Some(&colx), Some(&colz)) = (s.cols.iter().filter(|&&c| c > cx).min_by(|a, b| a.total_cmp(b)), s.girders.iter().filter(|&&z| z > RUG.3).min_by(|a, b| a.total_cmp(b))) {
+        let face = dir(196.0);
+        let arm0 = Vec3::new(colx - 0.21, y + 3.35, colz);
+        let fc = arm0 + Vec3::new(face.x, 0.0, face.y) * 0.32;
+        g.cuboid(black(), Vec3::new(colx - 0.23, y + 3.2, colz - 0.08), Vec3::new(colx - 0.2, y + 3.5, colz + 0.08));
+        g.tube(black(), arm0, fc, 0.025, 8);
+        tv(g, f, Vec3::new(fc.x, y + 3.35, fc.z), face);
+    }
     // black can speakers hung on rods
     // black pendant speakers (truncated cones, wide end down) on cables
     for p in [v(cx - 2.0, cz - 2.9), v(cx + 2.2, RUG.3 + 1.0), v(cx - 2.6, RUG.3 + 1.8), v(cx + 2.6, cz - 1.2), v(cx - 0.4, RUG.1 - 3.2), v(cx + 0.4, RUG.3 + 3.4)] {
@@ -740,12 +750,12 @@ fn chandelier(g: &mut Geo, c: Vec2, ceiling: f32, floor: f32, scale: f32) {
             // a clear glass cylinder catching the light, a bright bulb standing in it
             // clear glass: only its rim catches the eye; the bulb stands bright inside it
             g.tube(brass(), q + Vec3::Y * 0.185, q + Vec3::Y * 0.2, 0.039, 10);
-            g.tube(Key::new(Mat::Light, [3.2, 2.3, 1.25]), q + Vec3::Y * 0.04, q + Vec3::Y * 0.16, 0.018, 8);
+            g.tube(Key::new(Mat::Light, [1.7, 1.22, 0.66]), q + Vec3::Y * 0.04, q + Vec3::Y * 0.16, 0.018, 8);
         }
         // the ring's light: a few warm points round it
         for k in 0..if ri == 0 { 4 } else { 2 } {
             let a = k as f32 / if ri == 0 { 4.0 } else { 2.0 } * std::f32::consts::TAU + 0.3;
-            g.downlight(Vec3::new(c.x + a.cos() * r * 0.6, ry - 0.45, c.y + a.sin() * r * 0.6), 7.0, [0.55, 0.42, 0.27]);
+            g.downlight(Vec3::new(c.x + a.cos() * r * 0.6, ry - 0.45, c.y + a.sin() * r * 0.6), 7.0, [0.4, 0.3, 0.19]);
         }
     }
 }
@@ -794,7 +804,7 @@ fn track_lights(g: &mut Geo, s: &Site) {
 /// with a copy either side of it.
 fn rug(g: &mut Geo, s: &Site) {
     // the stain carries the floor's concrete maps: same tint and finish as the slabs (super::stone_slabs)
-    let k = ins(Key::new(Mat::Surface("dcl_cement_rug"), [3.05, 3.3, 3.25]).tile(7.2).rough(0.8));
+    let k = ins(Key::new(Mat::Surface("dcl_cement_rug"), [3.05, 3.3, 3.25]).tile(7.2).rough(0.5));
     let (cx, cz) = ((RUG.0 + RUG.2) * 0.5, (RUG.1 + RUG.3) * 0.5);
     for i in -1..=1 {
         // clear concrete between the rugs

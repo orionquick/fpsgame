@@ -116,7 +116,7 @@ fn key_albedo(lib: &crate::library::Library, key: &Key, cache: &mut HashMap<Stri
     let a = match key.mat {
         Mat::Surface(id) => surface_albedo(lib, id, cache) * tint,
         Mat::Plain(_) => tint,
-        Mat::Glass | Mat::Light => return None,
+        Mat::Glass | Mat::Light | Mat::Screen(_) => return None,
     };
     Some(a.clamp(Vec3::splat(0.02), Vec3::splat(0.9)))
 }
