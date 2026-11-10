@@ -331,9 +331,18 @@ fn fs_glass(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let f = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
     let rd = reflect(-v, nv);
     let l = normalize(g.sun_dir.xyz);
-    let refl = sky_dir(rd, false) * mix(0.32, 1.0, smoothstep(0.02, 0.45, rd.y)) + g.sun_col.rgb * pow(max(dot(rd, l), 0.0), 900.0) * 6.0;
+    var refl = sky_dir(rd, false) * mix(0.32, 1.0, smoothstep(0.02, 0.45, rd.y)) + g.sun_col.rgb * pow(max(dot(rd, l), 0.0), 900.0) * 6.0;
     // tint absorbs a little; dust adds a faint lit film
-    let film = i.tint * 0.025 * (ambient(nv) + g.sun_col.rgb * max(dot(nv, l), 0.0) * sun_shadow(i.world, nv));
+    var amb = ambient(nv);
+    // seen from inside a room, glass mirrors the room (the probe) and is lit by its bounce light, not the open sky
+    let eye_in = g.probe_min.w > 0.5 && all(g.eye.xyz >= g.probe_min.xyz) && all(g.eye.xyz <= g.probe_max.xyz);
+    if (eye_in) {
+        let pw = probe_weight(i.world);
+        refl = mix(refl, probe_sample(i.world, rd, 1.0), pw);
+        let gi = gi_sample(i.world, nv);
+        amb = mix(amb, gi.rgb, gi.a);
+    }
+    let film = i.tint * 0.025 * (amb + g.sun_col.rgb * max(dot(nv, l), 0.0) * sun_shadow(i.world, nv));
     let a = clamp(0.30 + f * 0.7, 0.0, 1.0);
     let c = refl * mix(0.45, 1.0, f) + film;
     return vec4f(tonemap(haze(c, i.world)) * a, a);

@@ -29,6 +29,9 @@ const BAR_Z: (f32, f32) = (8.6, 20.2);
 /// The tiled wall runs on north past the bar (as in the photo), leaving a passage at the north end.
 const WALL_Z0: f32 = 3.6;
 const WALL_H: f32 = 4.2;
+/// The big duct runs along the bar over the counter; the rope lights hang between it and the back bar.
+const DUCT_X: f32 = BAR_WALL - 1.1;
+const ROPE_X: f32 = BAR_WALL - 0.47;
 /// Bar stools as in the photo: round cognac leather seat with a low curved back, dark legs and footring.
 const STOOL: &str = "sf_8cff98e6d1";
 /// Brown faux leather seat, the dark legs darkened with it.
@@ -56,7 +59,6 @@ fn oak() -> Key {
 fn concrete_top() -> Key {
     ins(Key::new(Mat::Surface(super::m::CONCRETE), [0.62, 0.62, 0.6]).rough(0.7))
 }
-#[allow(dead_code)]
 fn glass() -> Key {
     Key::new(Mat::Glass, [0.7, 0.74, 0.72])
 }
@@ -411,7 +413,7 @@ fn rope_lights(g: &mut Geo, s: &Site) {
     // dropping from the low points of some
     let rope = ins(Key::new(Mat::Plain(230), [0.6, 0.48, 0.33]));
     let socket = ins(Key::new(Mat::Plain(90), [0.05, 0.045, 0.04]));
-    let x = BAR_WALL - 0.75;
+    let x = ROPE_X;
     let top = s.deck_b - 0.55;
     let centre = (BAR_Z.0 + BAR_Z.1) * 0.5;
     let n = 22;
@@ -421,9 +423,9 @@ fn rope_lights(g: &mut Geo, s: &Site) {
         let zb = za + 0.9 + 0.8 * r(1);
         let low = s.y + 2.55 + 0.7 * r(2);
         let sag = top - low;
-        let xo = x + (r(3) - 0.5) * 0.35;
+        let xo = x + (r(3) - 0.5) * 0.12;
         let seg = 18;
-        let pt = |t: f32| Vec3::new(xo + (t - 0.5) * 0.1, top - sag * 4.0 * t * (1.0 - t), za + (zb - za) * t);
+        let pt = |t: f32| Vec3::new(xo + (t - 0.5) * 0.04, top - sag * 4.0 * t * (1.0 - t), za + (zb - za) * t);
         for k in 0..seg {
             g.tube(rope, pt(k as f32 / seg as f32), pt((k + 1) as f32 / seg as f32), 0.019, 7);
         }
@@ -657,10 +659,11 @@ fn frustum(g: &mut Geo, k: Key, a: Vec3, b: Vec3, ra: f32, rb: f32, n: usize) {
 fn drum_table(g: &mut Geo, c: Vec2, y: f32, r: f32, h: f32) {
     let p = |dy: f32| Vec3::new(c.x, y + dy, c.y);
     g.tube(brass(), p(0.0), p(0.1), r * 0.82, 32);
-    // matte black drum, a honed black stone top
+    // matte black drum
     g.tube(ins(Key::new(Mat::Plain(235), [0.03, 0.03, 0.032])), p(0.1), p(h - 0.03), r, 36);
-    g.tube(ins(Key::new(Mat::Plain(150), [0.028, 0.028, 0.03])), p(h - 0.03), p(h), r + 0.01, 36);
-    disc(g, ins(Key::new(Mat::Plain(150), [0.028, 0.028, 0.03])), p(h), r + 0.01, 36);
+    // polished black stone top
+    g.tube(ins(Key::new(Mat::Plain(30), [0.025, 0.025, 0.027])), p(h - 0.03), p(h), r + 0.01, 36);
+    disc(g, ins(Key::new(Mat::Plain(18), [0.022, 0.022, 0.024])), p(h), r + 0.01, 36);
     g.block_aabb(Vec3::new(c.x - r, y, c.y - r), Vec3::new(c.x + r, y + h, c.y + r));
 }
 
@@ -703,7 +706,9 @@ fn cow_drum(g: &mut Geo, c: Vec2, y: f32, r: f32) {
 // ---------------------------------------------------------------------------------------------------------------
 // overhead
 
-/// Two-tier ring chandeliers: brass rings carrying rows of glass cylinders, each round a warm candle bulb.
+/// Two-tier ring chandeliers, as in the photo: each tier a steel ring with a cross through it, a central steel
+/// stem through both tiers, and Edison bulbs in clear glass cylinders all round each ring - a row standing on top
+/// and a row hanging underneath.
 fn chandeliers(g: &mut Geo, s: &Site) {
     let (cx, cz) = ((RUG.0 + RUG.2) * 0.5, (RUG.1 + RUG.3) * 0.5);
     for (p, scale) in [(v(cx - 1.2, cz - 0.8), 1.0), (v(cx + 1.0, RUG.3 + 2.4), 0.85), (v(cx + 2.6, RUG.1 - 2.0), 0.8)] {
@@ -711,51 +716,63 @@ fn chandeliers(g: &mut Geo, s: &Site) {
     }
 }
 
+fn steel() -> Key {
+    // dark gunmetal steel, as in the photo
+    ins(Key::new(Mat::Plain(80), [0.11, 0.11, 0.115]))
+}
+
 fn chandelier(g: &mut Geo, c: Vec2, ceiling: f32, floor: f32, scale: f32) {
-    let n_for = |r: f32| (std::f32::consts::TAU * r / 0.15) as usize;
-    // hung on long rods from the high deck: rings at about 3.5 m and 2.9 m above the floor
-    let rings = [(1.2 * scale, floor + 3.45, n_for(1.2 * scale)), (0.78 * scale, floor + 2.85, n_for(0.78 * scale))];
-    let rod = ins(Key::new(Mat::Plain(60), [0.5, 0.36, 0.17]));
-    // suspension: four rods from a ceiling canopy to the upper ring, a centre stem to the lower ring
-    let top = Vec3::new(c.x, rings[0].1 + 0.75, c.y);
-    g.tube(brass(), top, Vec3::new(c.x, ceiling, c.y), 0.012, 6);
-    g.tube(brass(), Vec3::new(c.x, ceiling - 0.04, c.y), Vec3::new(c.x, ceiling, c.y), 0.09, 16);
-    for i in 0..4 {
-        let a = i as f32 * std::f32::consts::FRAC_PI_2 + 0.4;
-        let p = Vec3::new(c.x + a.cos() * rings[0].0, rings[0].1, c.y + a.sin() * rings[0].0);
-        g.tube(rod, top, p, 0.008, 5);
+    // tiers: (ring radius, height); the lower ring smaller, as in the photo
+    let rings = [(1.2 * scale, floor + 3.5), (0.85 * scale, floor + 2.85)];
+    let st = steel();
+    let at = |r: f32, a: f32, y: f32| Vec3::new(c.x + a.cos() * r, y, c.y + a.sin() * r);
+    // canopy, the central stem down through both tiers, a finial below
+    g.tube(st, Vec3::new(c.x, ceiling - 0.05, c.y), Vec3::new(c.x, ceiling, c.y), 0.09, 16);
+    g.tube(st, Vec3::new(c.x, ceiling, c.y), Vec3::new(c.x, rings[1].1 - 0.12, c.y), 0.016, 8);
+    g.tube(st, Vec3::new(c.x, rings[1].1 - 0.12, c.y), Vec3::new(c.x, rings[1].1 - 0.2, c.y), 0.03, 10);
+    // four thin rods from the stem down to the top ring
+    let hub = Vec3::new(c.x, rings[0].1 + 0.6, c.y);
+    for k in 0..4 {
+        g.tube(st, hub, at(rings[0].0, k as f32 * std::f32::consts::FRAC_PI_2 + 0.785, rings[0].1), 0.006, 5);
     }
-    g.tube(rod, Vec3::new(c.x, rings[0].1, c.y), Vec3::new(c.x, rings[1].1, c.y), 0.01, 6);
-    for (ri, &(r, ry, n)) in rings.iter().enumerate() {
-        // the ring: a polygon of brass tube, spokes to the centre
-        let pts: Vec<Vec3> = (0..n).map(|i| {
-            let a = i as f32 / n as f32 * std::f32::consts::TAU;
-            Vec3::new(c.x + a.cos() * r, ry, c.y + a.sin() * r)
-        }).collect();
+    let edison = Key::new(Mat::Light, [0.9, 0.46, 0.15]);
+    for &(r, ry) in &rings {
+        // the ring and the cross through it
+        let n_seg = 48;
+        for i in 0..n_seg {
+            let (a0, a1) = (i as f32 / n_seg as f32 * std::f32::consts::TAU, (i + 1) as f32 / n_seg as f32 * std::f32::consts::TAU);
+            g.tube(st, at(r, a0, ry), at(r, a1, ry), 0.026, 8);
+        }
+        for k in 0..2 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_2 + 0.785;
+            g.tube(st, at(r, a, ry), at(r, a + std::f32::consts::PI, ry), 0.016, 6);
+        }
+        // the lower tier hangs from the upper cross on four vertical rods
+        if ry < rings[0].1 {
+            for k in 0..4 {
+                let a = k as f32 * std::f32::consts::FRAC_PI_2 + 0.785;
+                g.tube(st, at(r, a, ry), at(r, a, rings[0].1), 0.01, 6);
+            }
+        }
+        // Edison bulbs in clear glass cylinders: one standing on top of the ring, one hanging below, all round
+        let n = (std::f32::consts::TAU * r / 0.18) as usize;
         for i in 0..n {
-            g.tube(brass(), pts[i], pts[(i + 1) % n], 0.016, 6);
-            // the upper band the cylinders hang from
-            g.tube(brass(), pts[i] + Vec3::Y * 0.21, pts[(i + 1) % n] + Vec3::Y * 0.21, 0.01, 5);
+            let q = at(r, (i as f32 + 0.5) / n as f32 * std::f32::consts::TAU, ry);
+            for up in [1.0f32, -1.0] {
+                let y = Vec3::Y * up;
+                let base = q + y * 0.018;
+                g.tube(st, base, base + y * 0.025, 0.028, 8);
+                // the clear glass lit gold by the Edison bulb inside it (a glowing cup, as the photo reads), with a
+                // brighter filament band at its heart
+                let cup = Key::new(Mat::Light, [0.13, 0.075, 0.03]);
+                g.tube(cup, base + y * 0.025, base + y * 0.155, 0.05, 12);
+                disc(g, cup, base + y * 0.155, 0.05, 12);
+                g.tube(edison, base + y * 0.07, base + y * 0.11, 0.0505, 12);
+            }
         }
-        for i in (0..n).step_by(n / 6) {
-            g.tube(rod, Vec3::new(c.x, ry, c.y), pts[i], 0.007, 5);
-        }
-        // glass cylinders standing on the ring, a bulb in each
-        for (i, p) in pts.iter().enumerate() {
-            let a = (i as f32 + 0.5) / n as f32 * std::f32::consts::TAU;
-            let q = Vec3::new(c.x + a.cos() * r, ry, c.y + a.sin() * r);
-            let _ = p;
-            g.tube(brass(), q, q + Vec3::Y * 0.02, 0.03, 8);
-            // frosted glass lit from inside: the whole cylinder glows warm
-            // a clear glass cylinder catching the light, a bright bulb standing in it
-            // clear glass: only its rim catches the eye; the bulb stands bright inside it
-            g.tube(brass(), q + Vec3::Y * 0.185, q + Vec3::Y * 0.2, 0.039, 10);
-            g.tube(Key::new(Mat::Light, [1.7, 1.22, 0.66]), q + Vec3::Y * 0.04, q + Vec3::Y * 0.16, 0.018, 8);
-        }
-        // the ring's light: a few warm points round it
-        for k in 0..if ri == 0 { 4 } else { 2 } {
-            let a = k as f32 / if ri == 0 { 4.0 } else { 2.0 } * std::f32::consts::TAU + 0.3;
-            g.downlight(Vec3::new(c.x + a.cos() * r * 0.6, ry - 0.45, c.y + a.sin() * r * 0.6), 7.0, [0.4, 0.3, 0.19]);
+        for k in 0..4 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_2 + 0.3;
+            g.downlight(at(r * 0.6, a, ry - 0.45), 7.0, [0.36, 0.25, 0.13]);
         }
     }
 }
@@ -766,9 +783,10 @@ fn ducts(g: &mut Geo, s: &Site) {
     let y = s.deck_b - 0.5 - 0.62;
     let runs = [
         // the big one, hung low just over the bar wall's cap (as in the photo)
-        (Vec3::new(BAR_WALL - 0.25, s.y + WALL_H + 0.62, 1.5), Vec3::new(BAR_WALL - 0.25, s.y + WALL_H + 0.62, 28.0), 0.5),
-        (Vec3::new(1.5, y + 0.05, RUG.3 + 4.2), Vec3::new(BAR_WALL - 1.3, y + 0.05, RUG.3 + 4.2), 0.36),
-        (Vec3::new(1.5, y + 0.05, RUG.1 - 4.6), Vec3::new(BAR_WALL - 1.3, y + 0.05, RUG.1 - 4.6), 0.32),
+        // (over the counter, in front of the rope lights, which hang behind it on the bar side)
+        (Vec3::new(DUCT_X, s.y + WALL_H + 0.5, 1.5), Vec3::new(DUCT_X, s.y + WALL_H + 0.5, 28.0), 0.38),
+        (Vec3::new(1.5, y + 0.05, RUG.3 + 4.2), Vec3::new(DUCT_X - 0.4, y + 0.05, RUG.3 + 4.2), 0.3),
+        (Vec3::new(1.5, y + 0.05, RUG.1 - 4.6), Vec3::new(DUCT_X - 0.4, y + 0.05, RUG.1 - 4.6), 0.27),
     ];
     for (a, b, r) in runs {
         g.tube(rose, a, b, r, 28);
