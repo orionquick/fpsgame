@@ -594,12 +594,12 @@ pub fn cafe(g: &mut Geo, f: &mut Furnisher, area: Rect, bar: Rect, y: f32, clear
     let half_len = if axis == Vec2::Y { area.d() } else { area.w() } / 2.0 - 1.4;
     let half_wid = if axis == Vec2::Y { area.w() } else { area.d() } / 2.0;
     for s in [-1.0f32, 1.0] {
-        for row in 0..2 {
-            let off = 2.1 + row as f32 * 1.9;
+        for row in 0..3 {
+            let off = 2.0 + row as f32 * 1.75;
             if off > half_wid - 0.9 {
                 continue;
             }
-            let n = (half_len * 2.0 / 2.3).floor() as i32;
+            let n = (half_len * 2.0 / 2.0).floor() as i32;
             for i in 0..n {
                 let a = -half_len + (i as f32 + 0.5 + if row == 1 { 0.5 } else { 0.0 }) * (half_len * 2.0 / n as f32);
                 if a > half_len {
@@ -610,7 +610,7 @@ pub fn cafe(g: &mut Geo, f: &mut Furnisher, area: Rect, bar: Rect, y: f32, clear
                 f.put(g, TABLE, p, y, turn, true);
                 // darker oiled tops, as in the comparison photos
                 if let Some(t) = f.out.last_mut() {
-                    t.tint = [0.55, 0.45, 0.4];
+                    t.tint = [0.36, 0.29, 0.26];
                 }
                 table_clutter(g, f, p, y + 0.75, 0.3);
                 let seats = 2 + (f.rand() * 2.2) as i32;
@@ -689,5 +689,85 @@ fn table_clutter(g: &mut Geo, f: &mut Furnisher, p: Vec2, top: f32, spread: f32)
         let off = Vec2::from_angle(f.rand() * 6.28) * (f.rand() * spread);
         let turn = Vec2::from_angle(f.rand() * 6.28);
         f.put(g, id, p + off, top, turn, false);
+    }
+}
+
+/// Channel-tufted leather banquette along a wall from `a` to `b` (seat facing `face`), with two-top bistro tables
+/// and Tolix chairs opposite, a pendant over each table.
+pub fn banquette(g: &mut Geo, f: &mut Furnisher, a: Vec2, b: Vec2, face: Vec2, y: f32, clear: f32) {
+    let d = b - a;
+    let l = d.length();
+    let dir = d / l;
+    let face = face.normalize();
+    let leather = ins(Key::new(Mat::Surface("pht_fabric_leather_02"), [1.0, 0.68, 0.48]).tile(0.5));
+    let wood = ins(Key::new(Mat::Surface("pht_black_walnut_veneer_01"), [0.55, 0.45, 0.38]).tile(1.0));
+    let v3 = |p: Vec2, h: f32| Vec3::new(p.x, h, p.y);
+    // plinth, seat cushion, then vertical channels for the back
+    g.beam(wood, a + face * 0.3, b + face * 0.3, 0.3, y, y + 0.32);
+    g.beam(leather, a + face * 0.31, b + face * 0.31, 0.29, y + 0.32, y + 0.46);
+    // upholstered back panel with plump vertical channels in front of it
+    g.beam(leather, a + face * 0.06, b + face * 0.06, 0.05, y + 0.46, y + 1.14);
+    let n = (l / 0.2).floor() as i32;
+    for i in 0..n {
+        let u = (i as f32 + 0.5) * l / n as f32;
+        let p = a + dir * u + face * 0.16;
+        g.tube(leather, v3(p, y + 0.5), v3(p - face * 0.05, y + 1.1), 0.1, 12);
+    }
+    g.beam(wood, a + face * 0.02, b + face * 0.02, 0.06, y + 1.14, y + 1.2);
+    g.block_box(v3(a, 0.0), Vec3::new(dir.x, 0.0, dir.y) * l, Vec3::new(face.x, 0.0, face.y) * 0.62, y, y + 0.5);
+    // two-tops along it
+    let k = (l / 1.6).floor() as i32;
+    for i in 0..k {
+        let u = (i as f32 + 0.5) * l / k as f32;
+        let t = a + dir * u + face * (0.62 + 0.45);
+        let turn = Vec2::from_angle(f.rand() * 6.28);
+        f.put(g, "sf_5b9c3706a6", t, y, turn, true);
+        if let Some(p) = f.out.last_mut() {
+            p.scale = [0.75; 3];
+            p.tint = [0.36, 0.29, 0.26];
+        }
+        table_clutter(g, f, t, y + 0.56, 0.18);
+        if f.rand() < 0.85 {
+            let pull = 0.45 + f.rand() * 0.3;
+            let chair_face = (-face).rotate(Vec2::from_angle((f.rand() - 0.5) * 0.9));
+            let id = ["sf_0720ffc9b2", "sf_3fdcc5bc70"][(f.rand() * 2.0) as usize % 2];
+            f.put(g, id, t + face * pull, y, -chair_face, false);
+        }
+        let h = f.bounds("sf_2ba27702aa").map_or(1.25, |(a, b)| b[1] - a[1]);
+        f.put(g, "sf_2ba27702aa", t, y + clear - h, Vec2::Y, false);
+        g.light(Vec3::new(t.x, y + clear - h - 0.05, t.y), 4.0, [2.2, 1.45, 0.8]);
+    }
+}
+
+/// A timber window counter on black brackets along an opening (from `a` to `b`, the room on `face`), with stools.
+pub fn window_counter(g: &mut Geo, f: &mut Furnisher, a: Vec2, b: Vec2, face: Vec2, y: f32) {
+    let d = b - a;
+    let l = d.length();
+    let dir = d / l;
+    let face = face.normalize();
+    let top = ins(Key::new(Mat::Surface("pht_oak_veneer_01"), [0.7, 0.55, 0.42]).tile(1.8));
+    g.beam(top, a + face * 0.25, b + face * 0.25, 0.22, y + 1.02, y + 1.07);
+    let n = (l / 1.2).ceil() as i32;
+    for i in 0..=n {
+        let p = a + dir * (i as f32 * l / n as f32).clamp(0.05, l - 0.05) + face * 0.12;
+        g.beam(black(), p, p + face * 0.3, 0.02, y + 0.95, y + 1.02);
+        g.beam(black(), p, p + face * 0.04, 0.02, y, y + 1.02);
+    }
+    g.block_box(Vec3::new(a.x, 0.0, a.y), Vec3::new(dir.x, 0.0, dir.y) * l, Vec3::new(face.x, 0.0, face.y) * 0.47, y, y + 1.07);
+    let m = (l / 0.65).floor() as i32;
+    for i in 0..m {
+        if f.rand() < 0.15 {
+            continue;
+        }
+        let u = (i as f32 + 0.5) * l / m as f32;
+        let p = a + dir * u + face * (0.75 + f.rand() * 0.2);
+        let turn = Vec2::from_angle(f.rand() * 6.28);
+        f.put(g, "sf_7e438f3903", p, y, turn, false);
+        if f.rand() < 0.4 {
+            let c = a + dir * u + face * 0.25;
+            let turn = Vec2::from_angle(f.rand() * 6.28);
+            let id = ["sf_c87d04d609", "sf_294c5f6a0d", "sf_a651092825"][(f.rand() * 3.0) as usize % 3];
+            f.put(g, id, c, y + 1.07, turn, false);
+        }
     }
 }

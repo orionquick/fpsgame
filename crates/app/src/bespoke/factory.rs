@@ -316,7 +316,15 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         let mut pads = vec![];
         if k == 0 {
             // ground floor: cafe by the garage doors, bar in front of the core, lounge at the north entry
-            let cafe = Rect::new(T + 0.9, T + 5.0, spec.cols[1] - 0.6, d - T - 1.0);
+            let cafe = Rect::new(T + 1.7, T + 5.0, spec.cols[1] - 0.6, d - T - 1.0);
+            // counters with stools behind the glazed garage doors on the park side (storefronts keep their doors clear)
+            for (i, &(u0, u1)) in faces[0].bays.iter().enumerate() {
+                if matches!(faces[0].ground[i], Some(Ground::Garage)) {
+                    loft::window_counter(&mut g, &mut fur, v(T + 0.05, u0 + 0.2), v(T + 0.05, u1 - 0.2), v(1.0, 0.0), y);
+                }
+            }
+            // a channel-tufted banquette along the party wall north of the cafe, two-tops in front
+            loft::banquette(&mut g, &mut fur, v(10.0, T), v(core.r.x0 - 3.0, T), v(0.0, 1.0), y, clear);
             let bar = Rect::new(core.r.x0 - 1.0, core.r.z1 + 0.6, w - T, d - T - 0.6);
             loft::cafe(&mut g, &mut fur, cafe, bar, y, clear);
             // a poster wall on the timber-clad core facing the room
