@@ -5,8 +5,32 @@ pub struct Mesh {
     pub pos: Vec<[f32; 3]>,
     pub nrm: Vec<[f32; 3]>,
     pub col: Vec<[f32; 3]>,
+    /// World-space UVs in metres: ground/roofs (x, z); walls (distance along the wall, -height).
+    pub uv: Vec<[f32; 2]>,
+    pub tan: Vec<[f32; 4]>,
     pub idx: Vec<u32>,
 }
+
+/// Which material a piece of city geometry gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Slot {
+    Ground,
+    Road,
+    Service,
+    Path,
+    Plaza,
+    Parking,
+    Rail,
+    Grass,
+    Pitch,
+    /// Facade style index (see `FACADE_STYLES`).
+    Wall(u8),
+    Roof,
+    Tree,
+}
+
+/// Facade styles: low-rise (Gaslamp brick, stucco, plaster) then high-rise (concrete, metal panel, white, terrazzo).
+pub const FACADE_STYLES: [&str; 9] = ["brick", "black brick", "stucco", "plaster", "brick", "concrete", "metal panels", "white", "terrazzo"];
 
 impl Mesh {
     fn base(&self) -> u32 {
@@ -16,6 +40,17 @@ impl Mesh {
         self.pos.push([p[0] as f32, p[1] as f32, p[2] as f32]);
         self.nrm.push(n);
         self.col.push(c);
+        let (x, y, z) = (p[0] as f32, p[1] as f32, p[2] as f32);
+        if n[1].abs() > 0.6 {
+            self.uv.push([x, z]);
+            self.tan.push([1.0, 0.0, 0.0, 1.0]);
+        } else {
+            // tangent = right-hand direction along the wall seen from outside; bitangent then points up (glTF convention)
+            let l = (n[0] * n[0] + n[2] * n[2]).sqrt().max(1e-6);
+            let t = [n[2] / l, 0.0, -n[0] / l];
+            self.uv.push([x * t[0] + z * t[2], -y]);
+            self.tan.push([t[0], 0.0, t[2], 1.0]);
+        }
     }
     fn quad(&mut self, a: [f64; 3], b: [f64; 3], cc: [f64; 3], d: [f64; 3], n: [f32; 3], col: [f32; 3]) {
         let i = self.base();
@@ -276,4 +311,79 @@ pub fn build(c: &City) -> Mesh {
         tree(&mut m, t[0], t[1], ter.at(t[0], t[1]), hash(&i.to_string()), c.tree_h.get(i).copied());
     }
     m
+}
+
+/// Static city geometry split by material slot, with world-space UVs. Textured slots carry a near-white tint.
+pub fn build_slots(c: &City) -> Vec<(Slot, Mesh)> {
+    let mut ms: std::collections::BTreeMap<Slot, Mesh> = Default::default();
+    let white = [1.0f32, 1.0, 1.0];
+    let ter = &c.terrain;
+
+    // ground: terrain grid, sidewalk concrete
+    let r = c.import_rect();
+    let step = 4.0;
+    let (gw, gh) = (((r[2] - r[0]) / step).ceil() as usize, ((r[3] - r[1]) / step).ceil() as usize);
+    let ground = white;
+    let m = ms.entry(Slot::Ground).or_default();
+    let i0 = m.base();
+    for j in 0..=gh {
+        for i in 0..=gw {
+            let (x, z) = (r[0] + i as f64 * (r[2] - r[0]) / gw as f64, r[1] + j as f64 * (r[3] - r[1]) / gh as f64);
+            let (hx, hz) = (ter.at(x + 1.0, z) - ter.at(x - 1.0, z), ter.at(x, z + 1.0) - ter.at(x, z - 1.0));
+            let n = [-hx as f32 * 0.5, 1.0, -hz as f32 * 0.5];
+            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            m.v([x, ter.at(x, z), z], [n[0] / l, n[1] / l, n[2] / l], ground);
+        }
+    }
+    let row = gw as u32 + 1;
+    for j in 0..gh as u32 {
+        for i in 0..gw as u32 {
+            let a = i0 + j * row + i;
+            m.idx.extend([a, a + row, a + 1, a + 1, a + row, a + row + 1]);
+        }
+    }
+
+    for a in &c.areas {
+        let (slot, col, lift) = match a.kind {
+            AreaKind::Grass => (Slot::Grass, srgb(96, 132, 70), 0.04),
+            AreaKind::Pitch => (Slot::Pitch, srgb(70, 128, 60), 0.05),
+            AreaKind::Parking => (Slot::Parking, white, 0.03),
+            AreaKind::Plaza => (Slot::Plaza, white, 0.02),
+        };
+        polygon(ms.entry(slot).or_default(), &a.outer, &[], &|x, z| ter.at(x, z) + lift, col);
+    }
+
+    let mut lines: Vec<&Line> = c.lines.iter().collect();
+    let order = |k: LineKind| match k { LineKind::Path => 0, LineKind::Service => 1, LineKind::Rail => 2, LineKind::Road => 3 };
+    lines.sort_by_key(|l| order(l.kind));
+    for l in lines {
+        let (slot, lift) = match l.kind {
+            LineKind::Road => (Slot::Road, 0.10),
+            LineKind::Service => (Slot::Service, 0.08),
+            LineKind::Path => (Slot::Path, 0.06),
+            LineKind::Rail => (Slot::Rail, 0.12),
+        };
+        ribbon(ms.entry(slot).or_default(), &l.pts, l.width, lift, ter, white);
+    }
+
+    for b in &c.buildings {
+        let (y0, y1) = building_span(b, ter);
+        // tiers share their building's style
+        let h = hash(b.part_of.as_deref().unwrap_or(&b.osm));
+        let tall = y1 - y0 > 45.0;
+        let style = if tall { 5 + (h % 4) as u8 } else { (h % 5) as u8 };
+        let k = 0.85 + ((h >> 12) % 16) as f32 / 100.0;
+        let (wall, roof) = ([k, k, k], [k, k, k]);
+        let wm = ms.entry(Slot::Wall(style)).or_default();
+        walls(wm, &b.outer, y0, y1, true, wall);
+        for hole in &b.holes {
+            walls(wm, hole, y0, y1, false, wall);
+        }
+        polygon(ms.entry(Slot::Roof).or_default(), &b.outer, &b.holes, &|_, _| y1, roof);
+    }
+
+    for (i, t) in c.trees.iter().enumerate() {
+        tree(ms.entry(Slot::Tree).or_default(), t[0], t[1], ter.at(t[0], t[1]), hash(&i.to_string()), c.tree_h.get(i).copied());
+    }
+    ms.into_iter().collect()
 }

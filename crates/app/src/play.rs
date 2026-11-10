@@ -40,6 +40,7 @@ struct Gfx {
     renderer: Renderer,
     scene: Scene,
     targets: Targets,
+    batches: Vec<render::Batch>,
 }
 
 struct App {
@@ -146,10 +147,31 @@ impl ApplicationHandler for App {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&gpu.device, &config);
         let renderer = Renderer::new(&gpu, config.format);
-        let base = crate::world::Base::new(&self.city);
+        let mut lib = crate::library::Library::open(&crate::root());
+        let tree_pl = lib.as_ref().map_or(vec![], |l| crate::dressing::trees(l, &self.city, self.editor_scene.as_ref().and_then(|s| s.bounds).unwrap_or_else(|| self.city.play_rect())));
+        let base = crate::world::Base::new(&self.city, !tree_pl.is_empty());
         let scene = crate::world::scene(&gpu, &base, &self.city, self.editor_scene.as_ref());
+        let mut batches = vec![];
+        if let Some(lib) = lib.as_mut() {
+            batches = crate::world::city_batches(&gpu, &renderer, lib, &base);
+            let mut pl = tree_pl;
+            pl.extend(crate::buildings::build(lib, &self.city, self.editor_scene.as_ref().and_then(|s| s.bounds).unwrap_or_else(|| self.city.play_rect())).0);
+            batches.extend(crate::library::prefab_batches(&gpu, &renderer, lib, &pl));
+            if let Some(s) = self.editor_scene.as_ref() {
+                let mut pl = crate::world::object_placements(lib, &self.city, s);
+                let area = s.bounds.unwrap_or_else(|| self.city.play_rect());
+                pl.extend(crate::dressing::dress(lib, &self.city, area));
+                for (id, v, i) in crate::dressing::markings(lib, &self.city, area) {
+                    let mat = lib.material(&gpu, &renderer, &id);
+                    let yellow = lib.catalog.get(&id).is_some_and(|a| a.title.contains("Yellow"));
+                    let tint = if yellow { [1.15, 1.05, 0.55] } else { [1.0, 1.0, 1.0] };
+                    batches.extend(render::Batch::new(&gpu, &v, &i, &[render::Instance::new(glam::Mat4::IDENTITY, tint, 1.0)], mat));
+                }
+                    batches.extend(crate::library::prefab_batches(&gpu, &renderer, lib, &pl));
+            }
+        }
         let targets = Targets::new(&gpu, config.format, config.width, config.height);
-        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets });
+        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches });
         self.last = Instant::now();
     }
 
@@ -200,7 +222,7 @@ impl ApplicationHandler for App {
                 let p = &self.player;
                 let cam = Camera::perspective(p.pos + Vec3::Y * EYE, p.yaw, p.pitch, 70.0, g.config.width as f32 / g.config.height as f32);
                 let mut enc = g.gpu.device.create_command_encoder(&Default::default());
-                g.renderer.render(&g.gpu, &mut enc, &g.scene, &cam, &g.targets.msaa, &view, &g.targets.depth);
+                g.renderer.render(&g.gpu, &mut enc, &g.scene, &g.batches.iter().collect::<Vec<_>>(), &cam, &g.targets.msaa, &view, &g.targets.depth);
                 g.gpu.queue.submit([enc.finish()]);
                 g.gpu.queue.present(frame);
                 self.frames += 1;

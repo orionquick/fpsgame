@@ -1,3 +1,6 @@
+mod buildings;
+mod dressing;
+mod library;
 mod mcp;
 mod play;
 mod review;
@@ -6,7 +9,7 @@ mod world;
 
 use std::path::PathBuf;
 
-fn root() -> PathBuf {
+pub fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
 }
 
@@ -53,7 +56,8 @@ map editor (scenes live in data/scenes/NAME.ops.jsonl, the op log; NAME.json is 
   fps validate NAME                      full gameplay report as JSON
   fps review NAME                        review image -> out/NAME_review.png
   fps streets NAME                       named streets in the scene bounds, with centreline positions
-  fps mcp [--scene NAME]                 MCP server on stdio (see .mcp.json)";
+  fps mcp [--scene NAME]                 MCP server on stdio (see .mcp.json)
+  fps assets                             compile data/megascans_inbox -> data/assets (meshes + catalog)";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -70,14 +74,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("wrote {}", city_path().display());
         }
         Some("ortho") => {
-            let cx = review::Ctx::new(city::City::load(&city_path())?);
+            let mut cx = review::Ctx::new(city::City::load(&city_path())?);
+            cx.set_focus(cx.city.play_rect());
             let img = review::ortho(&cx, arg(&args, "--mpp", 0.5));
             let p = out_dir().join("ortho.png");
             img.save(&p)?;
             println!("wrote {} ({}x{})", p.display(), img.width(), img.height());
         }
         Some("compare") => {
-            let cx = review::Ctx::new(city::City::load(&city_path())?);
+            let mut cx = review::Ctx::new(city::City::load(&city_path())?);
+            cx.set_focus(cx.city.play_rect());
             review::compare(&cx, &root().join("data/raw"), &out_dir())?;
             println!("wrote {}", out_dir().join("compare.png").display());
         }
@@ -128,6 +134,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ed = editor()?;
             let s = ed.load(&name()?)?;
             println!("{}", serde_json::to_string_pretty(&ed.streets(ed.world.bounds(&s)))?);
+        }
+        Some("assets") => {
+            let t = std::time::Instant::now();
+            let (cat, errors) = assets::compile(&root().join("data/megascans_inbox"), &root().join("data/assets")).map_err(|e| e.to_string())?;
+            let models = cat.assets.iter().filter(|a| a.kind == assets::AssetKind::Model).count();
+            let parts: usize = cat.assets.iter().map(|a| a.parts.len()).sum();
+            println!("compiled {} assets ({} models with {} parts, {} surfaces) in {:.1}s; {} errors", cat.assets.len(), models, parts, cat.assets.len() - models, t.elapsed().as_secs_f32(), errors.len());
+            for e in errors.iter().take(10) {
+                println!("  {e}");
+            }
+        }
+        Some("buildstats") => {
+            let c = city::City::load(&city_path())?;
+            let lib = library::Library::open(&root()).ok_or("run `fps assets` first")?;
+            let focus = [-127.0, -263.0, 234.0, -127.0];
+            let (pl, st) = buildings::build(&lib, &c, focus);
+            println!("prefab buildings {}: {} pieces, {:.1}M triangles", st.buildings, st.pieces, st.tris as f64 / 1e6);
+            let mut by: std::collections::HashMap<(String, u8), (usize, f64)> = std::collections::HashMap::new();
+            for p in &pl {
+                let Some(a) = lib.catalog.get(&p.asset) else { continue };
+                let t = a.parts.get(p.part).map_or(0.0, |q| q.tris as f64 * [1.0, 0.25, 0.06][p.lod as usize]);
+                let e = by.entry((a.title.clone(), p.lod)).or_default();
+                e.0 += 1;
+                e.1 += t;
+            }
+            let mut v: Vec<_> = by.into_iter().collect();
+            v.sort_by(|a, b| b.1 .1.total_cmp(&a.1 .1));
+            for ((t, l), (n, tris)) in v.iter().take(14) {
+                println!("  {:45} lod{l} {n:7} pieces {:7.1}M", t, tris / 1e6);
+            }
         }
         Some("mcp") => {
             let ed = editor()?;

@@ -1,0 +1,43 @@
+// Shadow-map passes (one uniform per cascade). Textured casters are alpha-tested.
+struct ShadowU {
+    light_vp: mat4x4f,
+};
+
+@group(0) @binding(0) var<uniform> su: ShadowU;
+@group(1) @binding(0) var t_base: texture_2d<f32>;
+@group(1) @binding(3) var samp: sampler;
+
+@vertex
+fn vs_flat(@location(0) pos: vec3f) -> @builtin(position) vec4f {
+    return su.light_vp * vec4f(pos, 1.0);
+}
+
+struct TIn {
+    @location(0) pos: vec3f,
+    @location(2) uv: vec2f,
+    @location(4) m0: vec4f,
+    @location(5) m1: vec4f,
+    @location(6) m2: vec4f,
+    @location(7) m3: vec4f,
+    @location(8) tint: vec4f,
+};
+
+struct TOut {
+    @builtin(position) clip: vec4f,
+    @location(0) uv: vec2f,
+};
+
+@vertex
+fn vs_tex(v: TIn) -> TOut {
+    var o: TOut;
+    o.clip = su.light_vp * (mat4x4f(v.m0, v.m1, v.m2, v.m3) * vec4f(v.pos, 1.0));
+    o.uv = v.uv * v.tint.a;
+    return o;
+}
+
+@fragment
+fn fs_tex(i: TOut) {
+    if (textureSample(t_base, samp, i.uv).a < 0.5) {
+        discard;
+    }
+}

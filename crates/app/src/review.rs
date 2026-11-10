@@ -12,19 +12,59 @@ pub struct Ctx {
     pub base: crate::world::Base,
     pub scene: render::Scene,
     pub city: City,
+    pub lib: Option<crate::library::Library>,
+    pub city_batches: Vec<render::Batch>,
+    pub prefab_batches: Vec<render::Batch>,
+    /// Prefab buildings, rebuilt when the detail focus moves.
+    pub building_batches: Vec<render::Batch>,
+    focus: Option<[f64; 4]>,
 }
 
 impl Ctx {
     pub fn new(city: City) -> Self {
         let gpu = Gpu::headless();
         let renderer = Renderer::new(&gpu, wgpu_format());
-        let base = crate::world::Base::new(&city);
+        let mut lib = crate::library::Library::open(&crate::root());
+        let tree_pl = lib.as_ref().map_or(vec![], |l| crate::dressing::trees(l, &city, city.play_rect()));
+        let base = crate::world::Base::new(&city, !tree_pl.is_empty());
         let scene = crate::world::scene(&gpu, &base, &city, None);
-        Self { gpu, renderer, base, scene, city }
+        let mut city_batches = vec![];
+        if let Some(l) = lib.as_mut() {
+            city_batches = crate::world::city_batches(&gpu, &renderer, l, &base);
+            city_batches.extend(crate::library::prefab_batches(&gpu, &renderer, l, &tree_pl));
+        }
+        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], focus: None }
     }
     /// Re-uploads the city with this editor scene's objects.
     pub fn set_scene(&mut self, s: &editor::Scene) {
         self.scene = crate::world::scene(&self.gpu, &self.base, &self.city, Some(s));
+        if let Some(lib) = self.lib.as_mut() {
+            let mut pl = crate::world::object_placements(lib, &self.city, s);
+            let area = s.bounds.unwrap_or_else(|| self.city.play_rect());
+            pl.extend(crate::dressing::dress(lib, &self.city, area));
+            let marks = crate::dressing::markings(lib, &self.city, area);
+            self.prefab_batches = crate::library::prefab_batches(&self.gpu, &self.renderer, lib, &pl);
+            for (id, v, i) in marks {
+                let mat = lib.material(&self.gpu, &self.renderer, &id);
+                let yellow = lib.catalog.get(&id).is_some_and(|a| a.title.contains("Yellow"));
+                let tint = if yellow { [1.15, 1.05, 0.55] } else { [1.0, 1.0, 1.0] };
+                self.prefab_batches.extend(render::Batch::new(&self.gpu, &v, &i, &[render::Instance::new(glam::Mat4::IDENTITY, tint, 1.0)], mat));
+            }
+        }
+    }
+    /// Full prefab detail around `rect`; coarser away from it.
+    pub fn set_focus(&mut self, rect: [f64; 4]) {
+        if self.focus == Some(rect) {
+            return;
+        }
+        if let Some(lib) = self.lib.as_mut() {
+            let pl = crate::buildings::build(lib, &self.city, rect).0;
+            self.building_batches = crate::library::prefab_batches(&self.gpu, &self.renderer, lib, &pl);
+        }
+        self.focus = Some(rect);
+    }
+    pub fn batches(&self) -> Vec<&render::Batch> {
+        self.city_batches.iter().chain(&self.building_batches).chain(&self.prefab_batches).collect()
     }
 }
 
@@ -32,7 +72,7 @@ impl Ctx {
 pub fn ortho_rect(cx: &Ctx, rect: [f64; 4], mpp: f64) -> RgbaImage {
     let (w, h) = (((rect[2] - rect[0]) / mpp).round() as u32, ((rect[3] - rect[1]) / mpp).round() as u32);
     let cam = Camera::ortho([rect[0] as f32, rect[1] as f32, rect[2] as f32, rect[3] as f32], cx.scene.max.y);
-    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cam, w, h)
+    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cx.batches(), &cam, w, h)
 }
 
 /// The editor review image for a scene: map with ids/spawns/sightlines next to the analysis heatmap.
@@ -49,13 +89,14 @@ pub fn ortho(cx: &Ctx, mpp: f64) -> RgbaImage {
     let r = cx.city.import_rect();
     let (w, h) = (((r[2] - r[0]) / mpp).round() as u32, ((r[3] - r[1]) / mpp).round() as u32);
     let cam = Camera::ortho([r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32], cx.scene.max.y);
-    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cam, w, h)
+    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cx.batches(), &cam, w, h)
 }
 
 pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> RgbaImage {
-    let y = cx.city.terrain.at(x as f64, z as f64) as f32 + 1.7;
+    let up = std::env::var("FPS_CAM_UP").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.7);
+    let y = cx.city.terrain.at(x as f64, z as f64) as f32 + up;
     let cam = Camera::perspective(glam::Vec3::new(x, y, z), yaw, pitch, 70.0, w as f32 / h as f32);
-    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cam, w, h)
+    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cx.batches(), &cam, w, h)
 }
 
 /// Grid every 100 m with coordinate labels, plus the play-area outline. `rect` is what the image covers.

@@ -37,10 +37,14 @@ impl Editor {
     }
     pub fn review(&mut self, s: &Scene, a: &Analysis, mpp: f64) -> RgbaImage {
         self.cx.set_scene(s);
+        self.cx.set_focus(a.rect);
         review::scene_review(&self.cx, a, s, mpp)
     }
     pub fn shot(&mut self, s: &Scene, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> RgbaImage {
         self.cx.set_scene(s);
+        let d = render::look_dir(yaw, 0.0);
+        let (fx, fz) = (x as f64 + d.x as f64 * 30.0, z as f64 + d.z as f64 * 30.0);
+        self.cx.set_focus([fx - 45.0, fz - 45.0, fx + 45.0, fz + 45.0]);
         review::shot(&self.cx, x, z, yaw, pitch, w, h)
     }
 

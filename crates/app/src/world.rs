@@ -1,17 +1,86 @@
 use city::City;
 use render::{Gpu, Scene, Vertex};
 
-/// The static city mesh, built once; scene objects are appended per upload.
+/// The static city, built once: flat-shaded geometry (grass, pitch, trees) and textured surfaces per material slot.
 pub struct Base {
     pub verts: Vec<Vertex>,
     pub idx: Vec<u32>,
+    pub slots: Vec<(city::mesh::Slot, Vec<render::TexVertex>, Vec<u32>)>,
 }
 
 impl Base {
-    pub fn new(c: &City) -> Self {
-        let m = city::mesh::build(c);
-        Self { verts: (0..m.pos.len()).map(|i| Vertex { pos: m.pos[i], nrm: m.nrm[i], col: m.col[i] }).collect(), idx: m.idx }
+    /// `prefabs`: Megascans trees and prefab-built buildings replace the placeholder trees and the extruded
+    /// building volumes, so leave those out (the volumes stay as collision only).
+    pub fn new(c: &City, prefabs: bool) -> Self {
+        let (mut verts, mut idx, mut slots) = (vec![], vec![], vec![]);
+        for (slot, m) in city::mesh::build_slots(c) {
+            if prefabs && matches!(slot, city::mesh::Slot::Tree | city::mesh::Slot::Wall(_) | city::mesh::Slot::Roof) {
+                continue;
+            }
+            if crate::library::slot_surface(slot).is_some() {
+                let tv = (0..m.pos.len()).map(|i| render::TexVertex { pos: m.pos[i], nrm: m.nrm[i], uv: m.uv[i], tan: m.tan[i] }).collect();
+                slots.push((slot, tv, m.idx));
+            } else {
+                let b = verts.len() as u32;
+                verts.extend((0..m.pos.len()).map(|i| Vertex { pos: m.pos[i], nrm: m.nrm[i], col: m.col[i] }));
+                idx.extend(m.idx.iter().map(|i| i + b));
+            }
+        }
+        Self { verts, idx, slots }
     }
+}
+
+/// One textured batch per city material slot (Megascans surfaces at their real-world tile size).
+pub fn city_batches(gpu: &Gpu, r: &render::Renderer, lib: &mut crate::library::Library, base: &Base) -> Vec<render::Batch> {
+    let pick = |lib: &crate::library::Library, title: &str| -> Option<(String, f32)> {
+        let v: Vec<&assets::Asset> = lib.catalog.assets.iter().filter(|a| a.title == title && a.kind == assets::AssetKind::Surface).collect();
+        let a = v.iter().find(|a| a.tile_m.is_some_and(|t| (t[0] - t[1]).abs() < 1e-3)).or(v.first())?;
+        Some((a.id.clone(), a.tile_m.map_or(2.0, |t| t[0])))
+    };
+    let chosen: Vec<_> = base.slots.iter().map(|(slot, _, _)| crate::library::slot_surface(*slot).and_then(|(t, tint)| pick(lib, t).map(|p| (p, tint)))).collect();
+    let ids: Vec<String> = chosen.iter().flatten().map(|((id, _), _)| id.clone()).collect();
+    lib.preload(gpu, r, &ids);
+    let mut out = vec![];
+    for ((_, v, i), ch) in base.slots.iter().zip(chosen) {
+        let (mat, tile, tint) = match ch {
+            Some(((id, tile), tint)) => (lib.material(gpu, r, &id), tile, tint),
+            None => (lib.plain(gpu, r), 1.0, [0.7, 0.7, 0.7]),
+        };
+        out.extend(render::Batch::new(gpu, v, i, &[render::Instance::new(glam::Mat4::IDENTITY, tint, 1.0 / tile)], mat));
+    }
+    out
+}
+
+/// Megascans prefabs standing in for an editor object kind (variants picked per object), if there are any.
+pub fn kind_prefab(k: editor::Kind) -> Option<&'static [&'static str]> {
+    const CONTAINERS: &[&str] = &["Industrial Construction Container Shipping Metal Blue 01", "Industrial Construction Container Shipping Metal Red 01"];
+    Some(match k {
+        editor::Kind::Barrier => &["Concrete Barrier"],
+        editor::Kind::Crate => &["Wooden Crate"],
+        editor::Kind::Car => &["Urban Australian Desolation Vehicle Metal Rusty", "Industrial Junkyard Vehicle Chassis Burned 01", "Industrial Junkyard Vehicle Chassis Rusty 01"],
+        editor::Kind::Container | editor::Kind::Bus | editor::Kind::Dumpster => CONTAINERS,
+        _ => return None,
+    })
+}
+
+/// Prefab placements for scene objects whose kind has a Megascans model, scaled to the object's size.
+/// Models built lengthwise along Z are turned so their length follows the object's heading.
+pub fn object_placements(lib: &crate::library::Library, c: &City, s: &editor::Scene) -> Vec<crate::library::Placement> {
+    s.objects
+        .iter()
+        .filter_map(|o| {
+            let titles = kind_prefab(o.kind)?;
+            let title = titles[(o.id as usize * 2654435761usize >> 7) % titles.len()];
+            let a = lib.catalog.assets.iter().find(|a| a.title == title && !a.parts.is_empty())?;
+            let e = crate::library::extent(a);
+            let along_z = e[2] > e[0];
+            let (ex, ez) = if along_z { (e[2], e[0]) } else { (e[0], e[2]) };
+            let sc = |want: f64, have: f32| ((want / have.max(0.01) as f64) as f32).clamp(0.4, 2.6);
+            let (sx, sy, sz) = (sc(o.size[0], ex), sc(o.size[1], e[1]), sc(o.size[2], ez));
+            let scale = if along_z { [sz, sy, sx] } else { [sx, sy, sz] };
+            Some(crate::library::Placement { asset: a.id.clone(), part: crate::library::ALL_PARTS, x: o.x, z: o.z, y: c.terrain.at(o.x, o.z), rot: o.rot + if along_z { 90.0 } else { 0.0 }, scale, tint: [1.0, 1.0, 1.0], lod: 0 })
+        })
+        .collect()
 }
 
 fn object_color(k: editor::Kind) -> [f32; 3] {
@@ -20,11 +89,11 @@ fn object_color(k: editor::Kind) -> [f32; 3] {
     [f(c[0]), f(c[1]), f(c[2])]
 }
 
-/// Uploads the city plus the scene's objects as boxes standing on the terrain.
+/// Uploads the flat-shaded city plus scene objects that have no prefab, as boxes standing on the terrain.
 pub fn scene(gpu: &Gpu, base: &Base, c: &City, s: Option<&editor::Scene>) -> Scene {
     let mut verts = base.verts.clone();
     let mut idx = base.idx.clone();
-    for o in s.map_or(&[][..], |s| &s.objects[..]) {
+    for o in s.map_or(&[][..], |s| &s.objects[..]).iter().filter(|o| kind_prefab(o.kind).is_none()) {
         let y0 = o.corners().iter().map(|p| c.terrain.at(p[0], p[1])).fold(f64::INFINITY, f64::min) as f32 - 0.05;
         let y1 = c.terrain.at(o.x, o.z) as f32 + o.size[1] as f32;
         let corners = o.corners().map(|p| [p[0] as f32, p[1] as f32]);

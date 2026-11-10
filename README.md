@@ -80,6 +80,28 @@ USGS 3DEP survey **CA_SanDiegoCo_D24** (flown 9–21 November 2024, published Se
 
 Current import: 316 OSM buildings measured, 121 upper tiers, 132 structures OSM lacks, 2,279 trees. Only 5 buildings keep a guessed height.
 
+## Megascans prefab city
+
+Everything visible in the city is built from Quixel Megascans assets downloaded from Fab: about 720 models and surfaces, kept out of git in `data/megascans_inbox/` because Megascans can't be redistributed.
+
+- **Compiling the assets:** `cargo run --release -- assets` builds the catalog (`data/assets/catalog.json`) and the meshes (`data/assets/mesh/*.bin`).
+  - Every glTF is converted to metres, Y-up, with simplified detail levels (~25% and ~6% of the triangles) made with meshoptimizer.
+  - Textures load from the zips on demand.
+- **Buildings, assembled from prefabs** (`crates/app/src/buildings.rs`): the modular kits are placed along each real footprint, floor by floor, with glass behind every window opening.
+  - **Pieces:** storefront ground floors, window floors, balconies, per-floor corners, cornices, parapets and flat-roof tiles.
+  - **Styles by height:** townhouses, mid-rises, and towers built from the Urban Modular panels.
+  - **Fit:** piece widths and storey heights are scaled slightly so pieces fill each wall exactly.
+  - **Collision only:** the extruded LiDAR volumes are no longer drawn and remain only for collision.
+- **Streets:** cracked asphalt with Quixel decal road markings (double yellow, dashed lanes, crosswalks), plus continuous curbs.
+  - **Sidewalk furniture:** parking meters, hydrants, bins, bollards, benches, signs.
+  - **Palms:** at every LiDAR tree, built from Quixel palm trunks and fan-palm crowns.
+  - **Editor objects:** these render as Quixel models: rusted car wrecks, shipping containers, concrete barriers, crates.
+- **Rendering:**
+  - textured PBR with alpha cutout for foliage and decals
+  - a sky with sun disc, aerial haze
+  - two shadow cascades
+  - ACES tonemapping
+
 ## Data sources and attribution
 
 - **Streets, footprints, trees, parks:** © OpenStreetMap contributors, under the [ODbL](https://opendatacommons.org/licenses/odbl/). `data/city/downtown_sd.json` is a derived database, so it is distributed under the ODbL.
@@ -90,11 +112,11 @@ Current import: 316 OSM buildings measured, 121 upper tiers, 132 structures OSM 
 
 ## Known gaps (next up)
 
-- **Massing, not facades:** buildings are stacked prisms with flat roofs at the median measured height, so pitched roofs, rooftop equipment and overhangs are approximated.
+- **Kit look:** the modular kits are European, scanned in Gothenburg, so facades read as historic downtown rather than as San Diego's actual buildings, and the towers reuse the same kit families.
 - **Trees** are low-poly placeholders scaled to measured height, and a few detections may be awnings or clutter. They don't collide yet.
 - **The ballpark** is LiDAR tiers. It still needs a hand-built landmark model.
 - **Street detail:** no curbs, lane markings or crosswalks, bridges sit at ground level, and street widths are heuristics (OSM lane counts with a 16 m downtown minimum).
-- **Rendering:** placeholder flat-shaded materials. Ruinbound's post chain (TSR, exposure, bloom, tonemap) and PBR Megascans materials come in M1/M2.
+- **Rendering:** no TSR, bloom or ambient occlusion pass yet. Ruinbound's post chain comes later. Play mode is heavy with this many prefabs, and needs streaming and per-frame level of detail.
 - **Collision:** buildings and objects are vertical prisms, roofs are walkable and trees don't collide. Rapier comes with real meshes.
 - **Editor:** no in-game editor UI yet (CLI and MCP only), no choke-point or flank metrics yet, and objects are boxes.
 
