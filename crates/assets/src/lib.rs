@@ -284,6 +284,21 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> R
     Ok((parts, infos))
 }
 
+/// Upright exports whose metadata "height" is really the depth, so the Z-up rule would knock them over
+/// (checked by eye with `fps gallery`).
+const META_HEIGHT_IS_DEPTH: &[&str] = &[
+    "yfoobem", // Urban Office Equipment Cabinet Metal Medium 02
+    "yfpocj3", // Cabinet Wood Old 01
+    "yfinchh", // Chair Mixed Old 04
+    "yfjjfhh", // Chair Mixed Old 05
+    "yfrhfbf", // Chair Mixed Old 08
+    "yghlabs", // Lamp Metal Old
+    "vh1vcba", // Pinboard Cork Old 02
+    "ye4pcby", // Pinboard Felt Stained
+    "yf2fcdo", // Radiator Metal Weathered
+    "yf5eajt", // Shelf Wood Old 01
+];
+
 fn suffix_map(names: &[String], keys: &[&str]) -> Option<String> {
     names.iter().find(|n| { let l = n.to_lowercase(); keys.iter().any(|k| l.ends_with(&format!("{k}.jpg")) || l.ends_with(&format!("{k}.png")) || l.ends_with(&format!("{k}.exr"))) }).cloned()
 }
@@ -300,10 +315,10 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
         let (mut parts, mut infos) = extract_model(&mut zip, &g)?;
         // Some metre-scale exports are still Z-up: if the metadata height matches the Z extent, stand them up.
         let meta_h = meta["meta"].as_array().and_then(|m| m.iter().find(|x| x["key"] == "height")).and_then(|x| x["value"].as_str().map(String::from).or_else(|| x["value"].as_f64().map(|f| f.to_string()))).and_then(|s| s.trim_end_matches('m').trim().parse::<f32>().ok());
-        if let Some(h) = meta_h {
-            let ext = |i: usize| infos.iter().map(|p| p.max[i]).fold(f32::MIN, f32::max) - infos.iter().map(|p| p.min[i]).fold(f32::MAX, f32::min);
-            let (ey, ez) = (ext(1), ext(2));
-            if (ez - h).abs() < 0.05 * h.max(0.2) && (ey - h).abs() > 0.15 * h.max(0.2) {
+        let ext = |i: usize| infos.iter().map(|p| p.max[i]).fold(f32::MIN, f32::max) - infos.iter().map(|p| p.min[i]).fold(f32::MAX, f32::min);
+        let by_meta = meta_h.is_some_and(|h| (ext(2) - h).abs() < 0.05 * h.max(0.2) && (ext(1) - h).abs() > 0.15 * h.max(0.2));
+        if by_meta && !META_HEIGHT_IS_DEPTH.contains(&id.as_str()) {
+            {
                 for (mp, info) in parts.iter_mut().zip(infos.iter_mut()) {
                     // -90° about X: (x, y, z) -> (x, z, -y)
                     let r = |v: [f32; 3]| [v[0], v[2], -v[1]];

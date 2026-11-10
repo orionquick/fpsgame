@@ -1,6 +1,7 @@
 //! Hand-authored buildings, matched one at a time to street-level reference: real facade geometry
 //! (openings, reveals, sashes, trim) and a generated interior (offices, corridors, core, stairs, lift).
 pub mod factory;
+pub mod furnish;
 pub mod geom;
 pub mod plan;
 
@@ -31,6 +32,8 @@ pub mod m {
 pub struct Building {
     pub osm: &'static str,
     pub geo: Geo,
+    /// Megascans furniture (instanced, lit as interior).
+    pub furniture: Vec<crate::library::Placement>,
 }
 
 /// OSM ids built here instead of by the generic prefab assembler.
@@ -38,7 +41,8 @@ pub const OSM_IDS: &[&str] = &[factory::OSM];
 
 /// All bespoke buildings in the city (only the ones already matched to reference).
 pub fn all(c: &city::City) -> Vec<Building> {
-    factory::build(c).into_iter().collect()
+    let cat = assets::Catalog::load(&crate::root().join("data/assets")).unwrap_or_default();
+    factory::build(c, &cat).into_iter().collect()
 }
 
 pub const PARTITION_T: f32 = 0.12;
@@ -211,7 +215,16 @@ fn rnd(seed: u64, i: u64) -> f32 {
 
 /// GPU batches for a building: one per material key, drawn with an identity instance.
 pub fn all_batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, c: &city::City) -> Vec<Batch> {
-    all(c).iter().flat_map(|b| batches(gpu, r, lib, &b.geo)).collect()
+    let mut out = vec![];
+    for b in all(c) {
+        out.extend(batches(gpu, r, lib, &b.geo));
+        if std::env::var("FPS_NO_FURNITURE").is_err() {
+            let only: Option<Vec<String>> = std::env::var("FPS_FURN_ONLY").ok().map(|v| v.split(',').map(String::from).collect());
+            let fur: Vec<crate::library::Placement> = b.furniture.into_iter().filter(|p| only.as_ref().is_none_or(|o| o.contains(&p.asset))).collect();
+            out.extend(crate::library::prefab_batches(gpu, r, lib, &fur));
+        }
+    }
+    out
 }
 
 pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, g: &Geo) -> Vec<Batch> {
@@ -221,7 +234,7 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, g: &G
     lib.preload(gpu, r, &ids);
     for (key, (v, idx)) in &g.groups {
         let tint = key.tint();
-        let indoor = if key.indoor { [0.0, 0.22, 0.42, 0.0] } else { [0.0; 4] };
+        let indoor = if key.indoor { [0.0, crate::library::INDOOR_AMBIENT, crate::library::INDOOR_LAMP, 0.0] } else { [0.0; 4] };
         let (mat, inst, transparent) = match key.mat {
             Mat::Surface(id) => {
                 let tile = lib.catalog.get(id).and_then(|a| a.tile_m).map_or(2.0, |t| t[0].max(0.05));

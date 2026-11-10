@@ -73,6 +73,21 @@ impl Geo {
         Self { origin, ex, ez, groups: HashMap::new(), blocks: vec![] }
     }
 
+    /// World (x, z) of a local plan point.
+    pub fn world_xz(&self, p: Vec2) -> [f64; 2] {
+        let w = self.world(Vec3::new(p.x, 0.0, p.y));
+        [w.x as f64, w.z as f64]
+    }
+    /// World height of a local height.
+    pub fn world_y(&self, y: f32) -> f64 {
+        (self.origin.y + y) as f64
+    }
+    /// Heading (degrees clockwise from north) of a local plan direction.
+    pub fn heading(&self, d: Vec2) -> f64 {
+        let w = self.wdir(Vec3::new(d.x, 0.0, d.y));
+        (w.x as f64).atan2(-w.z as f64).to_degrees()
+    }
+
     fn world(&self, p: Vec3) -> Vec3 {
         self.origin + self.ex * p.x + Vec3::Y * p.y + self.ez * p.z
     }

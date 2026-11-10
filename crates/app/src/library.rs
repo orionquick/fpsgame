@@ -49,7 +49,8 @@ impl Library {
         let todo: Vec<Asset> = ids.iter().filter(|id| !self.materials.contains_key(*id)).filter_map(|id| self.catalog.get(id).cloned()).collect();
         let inbox = self.inbox.clone();
         let imgs: Vec<(String, Option<assets::MaterialImages>)> = std::thread::scope(|s| {
-            let hs: Vec<_> = todo.iter().map(|a| { let inbox = &inbox; s.spawn(move || (a.id.clone(), assets::load_material(inbox, a, TEX).ok())) }).collect();
+            // small indoor props don't need big textures (and GPU memory runs out fast with dozens of them)
+            let hs: Vec<_> = todo.iter().map(|a| { let inbox = &inbox; let size = if a.group == "interior" { TEX / 2 } else { TEX }; s.spawn(move || (a.id.clone(), assets::load_material(inbox, a, size).ok())) }).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (id, img) in imgs {
@@ -106,7 +107,13 @@ pub struct Placement {
     pub tint: [f32; 3],
     /// Mesh level: 0 full, 1 ~25%, 2 ~6% of the triangles.
     pub lod: u8,
+    /// Lit as an interior (dim sky light, lamp light).
+    pub indoor: bool,
 }
+
+/// Indoor lighting: sky light factor and lamp light strength.
+pub const INDOOR_AMBIENT: f32 = 0.22;
+pub const INDOOR_LAMP: f32 = 0.42;
 
 /// Pseudo-asset: a unit glazing quad (x -0.5..0.5, y 0..1, facing +Z), drawn with the glass material.
 pub const GLASS: &str = "__glass";
@@ -134,6 +141,7 @@ pub fn placement_matrix(a: &Asset, part: usize, p: &Placement) -> glam::Mat4 {
 /// Groups placements into one instanced batch per asset part.
 pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[Placement]) -> Vec<Batch> {
     let mut groups: HashMap<(String, usize, u8), Vec<Instance>> = HashMap::new();
+    let indoor = |p: &Placement| if p.indoor { [0.0, INDOOR_AMBIENT, INDOOR_LAMP, 0.0] } else { [0.0; 4] };
     let mut glass = vec![];
     for p in placements {
         if p.asset == GLASS {
@@ -148,7 +156,7 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
         let m = placement_matrix(&a, p.part, p);
         let parts: Vec<usize> = if p.part == ALL_PARTS { (0..a.parts.len()).collect() } else { vec![p.part.min(a.parts.len() - 1)] };
         for part in parts {
-            groups.entry((p.asset.clone(), part, p.lod.min(2))).or_default().push(Instance::new(m, p.tint, 1.0));
+            groups.entry((p.asset.clone(), part, p.lod.min(2))).or_default().push(Instance::new(m, p.tint, 1.0).with_params(indoor(p)));
         }
     }
     let mut out = vec![];

@@ -80,7 +80,7 @@ pub fn object_placements(lib: &crate::library::Library, c: &City, s: &editor::Sc
             let sc = |want: f64, have: f32| ((want / have.max(0.01) as f64) as f32).clamp(0.4, 2.6);
             let (sx, sy, sz) = (sc(o.size[0], ex), sc(o.size[1], e[1]), sc(o.size[2], ez));
             let scale = if along_z { [sz, sy, sx] } else { [sx, sy, sz] };
-            Some(crate::library::Placement { asset: a.id.clone(), part: crate::library::ALL_PARTS, x: o.x, z: o.z, y: c.terrain.at(o.x, o.z), rot: o.rot + if along_z { 90.0 } else { 0.0 }, scale, tint: [1.0, 1.0, 1.0], lod: 0 })
+            Some(crate::library::Placement { asset: a.id.clone(), part: crate::library::ALL_PARTS, x: o.x, z: o.z, y: c.terrain.at(o.x, o.z), rot: o.rot + if along_z { 90.0 } else { 0.0 }, scale, tint: [1.0, 1.0, 1.0], lod: 0, indoor: false })
         })
         .collect()
 }

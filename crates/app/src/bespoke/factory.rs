@@ -7,7 +7,7 @@
 //! - north: two windowed bays at the west end, the rest is a party wall; east: party wall.
 use super::geom::{Geo, Hole, Key, Mat};
 use super::plan::{self, Rect};
-use super::{interior, lift_doors, m, slab, stair, stair_hole, Building};
+use super::{furnish, interior, lift_doors, m, slab, stair, stair_hole, Building};
 use glam::{Vec2, Vec3};
 
 pub const OSM: &str = "way/376480375";
@@ -99,7 +99,7 @@ fn bays(len: f32, corner: f32, widths: &[f32]) -> Vec<(f32, f32)> {
         .collect()
 }
 
-pub fn build(c: &city::City) -> Option<Building> {
+pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     let b = c.buildings.iter().find(|b| b.osm == OSM)?;
     // footprint corners: NW, SW, SE, NE (lidar-trimmed OSM polygon has an extra point on the north edge)
     let pts: Vec<Vec2> = b.outer.iter().map(|p| Vec2::new(p[0] as f32, p[1] as f32)).collect();
@@ -246,13 +246,31 @@ pub fn build(c: &city::City) -> Option<Building> {
     let inner = Rect::new(T, T, w - T, d - T);
     let ground = plan::ground(&input);
     let core = ground.core.clone();
+    let win = furnish::Windows {
+        north: faces[3].bays.iter().map(|b| w - (b.0 + b.1) / 2.0).collect(),
+        south: faces[1].bays.iter().map(|b| (b.0 + b.1) / 2.0).collect(),
+        west: faces[0].bays.iter().map(|b| (b.0 + b.1) / 2.0).collect(),
+    };
+    let mut fur = furnish::Furnisher::new(cat, input.seed);
     slab(&mut g, inner, 0.0, 0.3, &[]);
-    interior(&mut g, &ground, 0.0, LEVELS[0].1 - 0.31, 1, true);
+    let gceil = LEVELS[0].1 - 0.31;
+    interior(&mut g, &ground, 0.0, gceil, 1, true);
+    // ground floor: a restaurant, the bar facing the dining room in front of the core
+    {
+        let mut dining = ground.clone();
+        for r in dining.rooms.iter_mut().filter(|r| r.r.x1 <= core.r.x0 + 0.01 && r.kind == plan::Use::Hall) {
+            r.r.x1 = core.r.x0 - 4.6;
+        }
+        furnish::floor(&mut fur, &mut g, &dining, 0.0, gceil, w, d, T, &win);
+        let bx = core.r.x0 - 3.2;
+        furnish::bar(&mut fur, &mut g, v(bx, core.r.z1 - 0.5), v(bx, d - T - 2.2), 0.0);
+    }
     for (k, &(y, _)) in LEVELS.iter().enumerate().skip(1) {
         let p = plan::office(&plan::Input { seed: input.seed + k as u64, ..input.clone() });
         slab(&mut g, inner, y, 0.3, &[stair_hole(core.stair), core.elevator]);
         let ceil = SILL + WIN_H[k - 1] + 0.12;
         interior(&mut g, &p, y, ceil, 10 + k as u64, false);
+        furnish::floor(&mut fur, &mut g, &p, y, ceil, w, d, T, &win);
     }
     for (k, &(y, h)) in LEVELS.iter().enumerate() {
         if k + 1 < LEVELS.len() {
@@ -281,7 +299,7 @@ pub fn build(c: &city::City) -> Option<Building> {
     for (x, z) in [(21.0, 5.0), (21.0, 24.0)] {
         g.solid(metal, Vec3::new(x, ROOF, z), Vec3::new(x + 2.4, ROOF + 1.4, z + 1.6));
     }
-    Some(Building { osm: OSM, geo: g })
+    Some(Building { osm: OSM, geo: g, furniture: fur.out })
 }
 
 /// Default facade brick (Megascans "Red Brick Wall") and tint matched to the reference's orange-red.

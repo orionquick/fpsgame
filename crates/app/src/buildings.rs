@@ -166,7 +166,7 @@ pub fn build(lib: &Library, c: &City, focus: [f64; 4]) -> (Vec<Placement>, Stats
 }
 
 fn place(out: &mut Vec<Placement>, pc: &Piece, x: f64, z: f64, y: f64, rot: f64, sx: f32, sy: f32) {
-    out.push(Placement { asset: pc.id.clone(), part: pc.part, x, z, y, rot, scale: [sx, sy, 1.0], tint: [1.0, 1.0, 1.0], lod: 0 });
+    out.push(Placement { asset: pc.id.clone(), part: pc.part, x, z, y, rot, scale: [sx, sy, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -288,7 +288,7 @@ fn build_one(b: &Building, sty: &Style, start: f64, height: f64, on_ground: bool
                 let free = !filled.iter().any(|f| (x - f[0]).abs() < (half + f[2]) - 0.01 && (z - f[1]).abs() < (half + f[2]) - 0.01);
                 if inside && free {
                     filled.push([x, z, half]);
-                    out.push(Placement { asset: rt.id.clone(), part: rt.part, x, z, y: start + height - 0.1, rot: 0.0, scale: [s, 1.0, s], tint: [0.62, 0.64, 0.64], lod: 0 });
+                    out.push(Placement { asset: rt.id.clone(), part: rt.part, x, z, y: start + height - 0.1, rot: 0.0, scale: [s, 1.0, s], tint: [0.62, 0.64, 0.64], lod: 0, indoor: false });
                 }
                 z += size as f64;
             }
@@ -306,5 +306,5 @@ fn glaze(out: &mut Vec<Placement>, p: [f64; 2], nx: f64, nz: f64, rot: f64, y: f
     // mostly dark panes; some with blinds, some showing a warm interior
     let r = hash((p[0] * 7.3 + y * 1.7) as i64 as u64, (p[1] * 3.1) as i64 as u64) % 100;
     let tint = if r < 60 { [0.03, 0.035, 0.04] } else if r < 82 { [0.055, 0.06, 0.065] } else if r < 93 { [0.11, 0.105, 0.095] } else { [0.17, 0.12, 0.07] };
-    out.push(Placement { asset: GLASS.into(), part: 0, x: p[0] - nx * back, z: p[1] - nz * back, y: y + 0.05, rot, scale: [w as f32 * 0.98, (h - 0.1) as f32, 1.0], tint, lod: 0 });
+    out.push(Placement { asset: GLASS.into(), part: 0, x: p[0] - nx * back, z: p[1] - nz * back, y: y + 0.05, rot, scale: [w as f32 * 0.98, (h - 0.1) as f32, 1.0], tint, lod: 0, indoor: false });
 }

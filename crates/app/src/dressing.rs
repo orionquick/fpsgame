@@ -81,7 +81,7 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
                     if h % 100 < 45 && point_in(&a.outer, p) && !in_building(p) {
                         let s = shrubs[((h >> 20) % shrubs.len() as u64) as usize];
                         let sc = 0.8 + ((h >> 30) % 60) as f32 / 100.0;
-                        out.push(Placement { asset: s.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: ((h >> 40) % 360) as f64, scale: [sc, sc, sc], tint: [1.0, 1.0, 1.0], lod: 0 });
+                        out.push(Placement { asset: s.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: ((h >> 40) % 360) as f64, scale: [sc, sc, sc], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
                     }
                     z += step;
                 }
@@ -120,7 +120,7 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
                     if !in_rect(p, area) || on_other_road(p, r.line, 0.3) || in_building(p) {
                         continue;
                     }
-                    out.push(Placement { asset: cb.id.clone(), part: straight, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading + turn, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0 });
+                    out.push(Placement { asset: cb.id.clone(), part: straight, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading + turn, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
                 }
             }
             let slots = (len / 6.0).floor() as usize;
@@ -135,7 +135,7 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
                 for (title, pct) in furniture {
                     if roll < pct {
                         if let Some(a) = pick(title, h >> 8) {
-                            out.push(Placement { asset: a.id.clone(), part: 0, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0 });
+                            out.push(Placement { asset: a.id.clone(), part: 0, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
                         }
                         break;
                     }
@@ -179,9 +179,9 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         let sy = (trunk_h / seg) as f32;
         let sw = 0.62f32;
         for k in 0..n {
-            out.push(Placement { asset: t.id.clone(), part: 0, x: p[0], z: p[1], y: y0 + k as f64 * seg * sy as f64, rot: ((hs >> (k * 3)) % 360) as f64, scale: [sw, sy, sw], tint: [1.0, 1.0, 1.0], lod: 0 });
+            out.push(Placement { asset: t.id.clone(), part: 0, x: p[0], z: p[1], y: y0 + k as f64 * seg * sy as f64, rot: ((hs >> (k * 3)) % 360) as f64, scale: [sw, sy, sw], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
         }
-        out.push(Placement { asset: crown.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: y0 + trunk_h - crown_h * 0.25, rot: (hs % 360) as f64, scale: [cs, cs, cs], tint: [1.0, 1.0, 1.0], lod: 0 });
+        out.push(Placement { asset: crown.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: y0 + trunk_h - crown_h * 0.25, rot: (hs % 360) as f64, scale: [cs, cs, cs], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
     }
     out
 }

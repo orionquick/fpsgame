@@ -200,3 +200,50 @@ fn label(img: &mut RgbaImage, x: i64, y: i64, v: i64) {
         }
     }
 }
+
+/// Contact sheet of every model in an asset group, laid out on a platform above the city, with index labels.
+/// For vetting downloads: orientation, scale, materials. Returns the image and the (index, id, title) legend.
+pub fn gallery(cx: &mut Ctx, group: &str, w: u32, h: u32) -> (RgbaImage, Vec<(usize, String, String)>) {
+    let Some(lib) = cx.lib.as_mut() else { return (RgbaImage::new(1, 1), vec![]) };
+    let assets: Vec<(String, String)> = lib.catalog.assets.iter().filter(|a| a.group == group && matches!(a.kind, assets::AssetKind::Model)).map(|a| (a.id.clone(), a.title.clone())).collect();
+    let (cols, cell, y0) = (8usize, 2.6f64, 500.0f64);
+    let rows = assets.len().div_ceil(cols).max(1);
+    let pos = |i: usize| ((i % cols) as f64 * cell, (i / cols) as f64 * cell);
+    let pl: Vec<crate::library::Placement> = assets
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| {
+            let (x, z) = pos(i);
+            crate::library::Placement { asset: id.clone(), part: crate::library::ALL_PARTS, x, z, y: y0, rot: 0.0, scale: [1.0; 3], tint: [1.0; 3], lod: 0, indoor: false }
+        })
+        .collect();
+    let mut batches = crate::library::prefab_batches(&cx.gpu, &cx.renderer, lib, &pl);
+    // grey platform with a 1 m grid line pattern via the plain material
+    let (gw, gd) = (cols as f32 * cell as f32, rows as f32 * cell as f32);
+    let q = |x: f32, z: f32| render::TexVertex { pos: [x - cell as f32 / 2.0, y0 as f32 - 0.01, z - cell as f32 / 2.0], nrm: [0.0, 1.0, 0.0], uv: [x, z], tan: [1.0, 0.0, 0.0, 1.0] };
+    let plain = std::sync::Arc::new(render::Material::plain(&cx.gpu, &cx.renderer, 200));
+    batches.extend(render::Batch::new(&cx.gpu, &[q(0.0, 0.0), q(gw, 0.0), q(gw, gd), q(0.0, gd)], &[0, 2, 1, 0, 3, 2], &[render::Instance::new(glam::Mat4::IDENTITY, [0.5, 0.5, 0.5], 1.0)], plain));
+    let centre = glam::Vec3::new(gw / 2.0 - cell as f32 / 2.0, y0 as f32, gd / 2.0);
+    let eye = centre + glam::Vec3::new(0.0, gd * 0.55 + 3.0, gd * 0.75 + 4.0);
+    let d = (centre - eye).normalize();
+    let pitch = d.y.asin().to_degrees();
+    let cam = Camera::perspective(eye, 0.0, pitch, 50.0, w as f32 / h as f32);
+    let refs: Vec<&render::Batch> = batches.iter().collect();
+    let mut img = render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &refs, &cam, w, h);
+    let mut legend = vec![];
+    for (i, (id, title)) in assets.iter().enumerate() {
+        let (x, z) = pos(i);
+        let top = lib_height(cx, id);
+        let p = cam.view_proj * glam::Vec4::new(x as f32, y0 as f32 + top + 0.15, z as f32, 1.0);
+        if p.w > 0.0 {
+            let (sx, sy) = ((p.x / p.w * 0.5 + 0.5) * w as f32, (0.5 - p.y / p.w * 0.5) * h as f32);
+            editor::draw::text(&mut img, sx as i64 - 6, sy as i64, &i.to_string(), 2);
+        }
+        legend.push((i, id.clone(), title.clone()));
+    }
+    (img, legend)
+}
+
+fn lib_height(cx: &Ctx, id: &str) -> f32 {
+    cx.lib.as_ref().and_then(|l| l.catalog.get(id)).map_or(0.5, |a| crate::library::extent(a)[1])
+}
