@@ -59,22 +59,48 @@ impl Library {
             })
             .collect();
         let inbox = self.inbox.clone();
-        let imgs: Vec<(String, Option<assets::MaterialImages>)> = std::thread::scope(|s| {
-            // small indoor props don't need big textures (and GPU memory runs out fast with dozens of them)
+        let cache_dir = self.out.join("texcache");
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let bc = gpu.bc;
+        // with block compression everything loads at full size; without it, small props drop to half size
+        enum Loaded {
+            Bc(render::CompressedTex3),
+            Rgba(assets::MaterialImages),
+            Missing,
+        }
+        let loaded: Vec<(String, Loaded)> = std::thread::scope(|s| {
             let hs: Vec<_> = todo
                 .iter()
                 .map(|(key, a, n)| {
-                    let inbox = &inbox;
-                    let size = if a.group == "interior" || a.group == "polyhaven" { TEX / 2 } else { TEX };
-                    s.spawn(move || (key.clone(), assets::load_material_n(inbox, a, *n, size).ok()))
+                    let (inbox, cache_dir) = (&inbox, &cache_dir);
+                    let small = matches!(a.group.as_str(), "interior" | "polyhaven" | "sketchfab");
+                    let size = if bc || !small { TEX } else { TEX / 2 };
+                    s.spawn(move || {
+                        let file = cache_dir.join(format!("{}_{size}.bct", key.replace('#', "_")));
+                        if bc {
+                            if let Some(t) = std::fs::read(&file).ok().and_then(|b| render::read_compressed(&b)) {
+                                return (key.clone(), Loaded::Bc(t));
+                            }
+                        }
+                        match assets::load_material_n(inbox, a, *n, size) {
+                            Ok(i) if bc => {
+                                let t = render::compress_material(&i.base, &i.orm, &i.normal);
+                                let _ = std::fs::write(&file, render::write_compressed(&t));
+                                (key.clone(), Loaded::Bc(t))
+                            }
+                            Ok(i) => (key.clone(), Loaded::Rgba(i)),
+                            Err(_) => (key.clone(), Loaded::Missing),
+                        }
+                    })
                 })
                 .collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
-        for (id, img) in imgs {
-            let m = match img {
-                Some(i) => Arc::new(Material::new(gpu, r, &i.base, &i.orm, &i.normal)),
-                None => self.plain(gpu, r),
+        for (id, l) in loaded {
+            let m = match l {
+                Loaded::Bc(t) => Arc::new(Material::from_compressed(gpu, r, &t)),
+                Loaded::Rgba(i) => Arc::new(Material::new(gpu, r, &i.base, &i.orm, &i.normal)),
+                Loaded::Missing => self.plain(gpu, r),
             };
             self.materials.insert(id, m);
         }
@@ -131,7 +157,7 @@ pub struct Placement {
 
 /// Indoor lighting: sky light factor and lamp light strength.
 pub const INDOOR_AMBIENT: f32 = 0.22;
-pub const INDOOR_LAMP: f32 = 0.42;
+pub const INDOOR_LAMP: f32 = 0.22;
 
 /// Pseudo-asset: a unit glazing quad (x -0.5..0.5, y 0..1, facing +Z), drawn with the glass material.
 pub const GLASS: &str = "__glass";

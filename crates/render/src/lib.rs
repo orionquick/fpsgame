@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 pub use wgpu as wgpu_reexport;
 
 pub mod textured;
-pub use textured::{Batch, Instance, Material, TexVertex};
+pub use textured::{compress_material, read_compressed, write_compressed, Batch, CompressedTex, CompressedTex3, Instance, Material, TexVertex};
 
 pub const MSAA: u32 = 4;
 pub const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -21,6 +21,8 @@ pub struct Gpu {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// BC block compression available (textures upload compressed).
+    pub bc: bool,
 }
 
 impl Gpu {
@@ -32,13 +34,15 @@ impl Gpu {
             apply_limit_buckets: false,
         }))
         .expect("no GPU adapter");
+        let bc = adapter.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("device"),
             required_limits: adapter.limits(),
+            required_features: if bc { wgpu::Features::TEXTURE_COMPRESSION_BC } else { wgpu::Features::empty() },
             ..Default::default()
         }))
         .expect("no GPU device");
-        Self { instance, adapter, device, queue }
+        Self { instance, adapter, device, queue, bc }
     }
     pub fn headless() -> Self {
         Self::new(wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()), None)
@@ -130,6 +134,18 @@ pub fn sun_from(azimuth_deg: f32, elevation_deg: f32) -> Vec3 {
     Vec3::new(a.sin() * e.cos(), e.sin(), -a.cos() * e.cos()).normalize()
 }
 
+/// Local light (lamps): position, range, colour (linear, pre-multiplied by intensity).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PointLight {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub color: [f32; 3],
+    pub _pad: f32,
+}
+
+pub const MAX_LIGHTS: usize = 128;
+
 struct Cascade {
     view: wgpu::TextureView,
     uniform: wgpu::Buffer,
@@ -147,6 +163,8 @@ pub struct Renderer {
     composite_pipeline: wgpu::RenderPipeline,
     pub(crate) post_bgl: wgpu::BindGroupLayout,
     globals: wgpu::Buffer,
+    lights: wgpu::Buffer,
+    n_lights: std::cell::Cell<u32>,
     bind: wgpu::BindGroup,
     far: Cascade,
     near: Cascade,
@@ -191,6 +209,7 @@ impl Renderer {
                 depth_tex(1),
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None },
                 depth_tex(3),
+                uniform(4, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let sbgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("shadow"), entries: &[uniform(0, wgpu::ShaderStages::VERTEX)] });
@@ -244,6 +263,7 @@ impl Renderer {
         let far = cascade(SHADOW_FAR_RES, "shadow far");
         let near = cascade(SHADOW_NEAR_RES, "shadow near");
         let globals = d.create_buffer(&wgpu::BufferDescriptor { label: Some("globals"), size: std::mem::size_of::<Globals>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let lights = d.create_buffer(&wgpu::BufferDescriptor { label: Some("lights"), size: (MAX_LIGHTS * std::mem::size_of::<PointLight>()) as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let cmp = d.create_sampler(&wgpu::SamplerDescriptor { label: Some("shadow"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, compare: Some(wgpu::CompareFunction::LessEqual), ..Default::default() });
         let bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals"),
@@ -253,6 +273,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&far.view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&cmp) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&near.view) },
+                wgpu::BindGroupEntry { binding: 4, resource: lights.as_entire_binding() },
             ],
         });
 
@@ -336,7 +357,17 @@ impl Renderer {
             None,
             Default::default(),
         );
-        Self { ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
+        Self { lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
+    }
+
+    /// Sets the local lights for the next renders; keeps the `MAX_LIGHTS` nearest to `eye`.
+    pub fn set_lights(&self, gpu: &Gpu, lights: &[PointLight], eye: Vec3) {
+        let mut v: Vec<PointLight> = lights.to_vec();
+        v.sort_by(|a, b| Vec3::from(a.pos).distance_squared(eye).total_cmp(&Vec3::from(b.pos).distance_squared(eye)));
+        v.truncate(MAX_LIGHTS);
+        self.n_lights.set(v.len() as u32);
+        v.resize(MAX_LIGHTS, PointLight::default());
+        gpu.queue.write_buffer(&self.lights, 0, bytemuck::cast_slice(&v));
     }
 
     fn light_far(&self, scene: &Scene) -> Mat4 {
@@ -397,7 +428,7 @@ impl Renderer {
             sky_horizon: v4(0.62, 0.74, 0.90, 0.0),
             ground_col: v4(0.42, 0.37, 0.30, 0.0),
             eye: [cam.eye.x, cam.eye.y, cam.eye.z, cam.fog],
-            misc: v4(1.15, 0.0, 0.0, 0.0),
+            misc: v4(1.15, self.n_lights.get() as f32, 0.0, 0.0),
         };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&gl));
         gpu.queue.write_buffer(&self.far.uniform, 0, bytemuck::cast_slice(&lf.to_cols_array()));

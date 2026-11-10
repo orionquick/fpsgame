@@ -18,6 +18,36 @@ struct Globals {
 @group(0) @binding(2) var shadow_samp: sampler_comparison;
 @group(0) @binding(3) var shadow_near: texture_depth_2d;
 
+struct PointLight {
+    pos: vec3f,
+    radius: f32,
+    color: vec3f,
+    pad: f32,
+};
+@group(0) @binding(4) var<uniform> lights: array<PointLight, 128>;
+
+// Diffuse + a little specular from the local lights (no shadows; ranges are kept short).
+fn local_lights(world: vec3f, n: vec3f, v: vec3f, base: vec3f, rough: f32) -> vec3f {
+    var c = vec3f(0.0);
+    let count = u32(g.misc.y);
+    for (var i = 0u; i < count; i++) {
+        let lt = lights[i];
+        let d = lt.pos - world;
+        let dist = length(d);
+        if (dist > lt.radius) {
+            continue;
+        }
+        let l = d / max(dist, 1e-3);
+        let ndl = max(dot(n, l), 0.0);
+        let x = dist / lt.radius;
+        let fall = (1.0 - x * x) * (1.0 - x * x) / (1.0 + dist * dist);
+        let h = normalize(l + v);
+        let spec = pow(max(dot(n, h), 0.0), mix(64.0, 4.0, rough)) * (1.0 - rough) * 0.5;
+        c += lt.color * fall * (base * ndl + vec3f(spec) * ndl);
+    }
+    return c;
+}
+
 const PI: f32 = 3.14159265;
 
 // Sky radiance along a direction; `disc` adds the sun disc.

@@ -162,6 +162,7 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64) {
                 if !s.in_core(p, 0.8) {
                     g.cuboid(black(), Vec3::new(x, lamp_y, z - 0.04), Vec3::new(x + 1.4, lamp_y + 0.06, z + 0.04));
                     g.quad(glow, Vec3::new(x + 0.02, lamp_y - 0.002, z - 0.03), Vec3::X * 1.36, Vec3::Z * 0.06);
+                    g.light(Vec3::new(x + 0.7, lamp_y - 0.15, z), 4.5, [1.1, 1.02, 0.9]);
                     for cx in [x + 0.15, x + 1.25] {
                         g.cuboid(black(), Vec3::new(cx - 0.004, lamp_y + 0.06, z - 0.004), Vec3::new(cx + 0.004, joist_b, z + 0.004));
                     }
@@ -551,4 +552,89 @@ pub fn kit_cluster(g: &mut Geo, f: &mut Furnisher, c: Vec2, y: f32) -> Rect {
     f.put(g, &format!("{KIT}_21"), corner, y, Vec2::Y, true);
     let r = 2.7;
     Rect::new(c.x - r, c.y - r, c.x + r, c.y + r)
+}
+
+/// The ground-floor cafe, after industrial loft cafes: bistro tables with Tolix chairs, a reclaimed-wood communal
+/// table, bar-light pendants (real lamps), a pub counter with stools and a back bar against the party wall,
+/// espresso machines and bottles, a chalkboard by the door. `area`: the seating floor; `bar_x`: the back-bar wall.
+pub fn cafe(g: &mut Geo, f: &mut Furnisher, area: Rect, bar: Rect, y: f32, clear: f32) {
+    const CHAIRS: [&str; 2] = ["sf_0720ffc9b2", "sf_3fdcc5bc70"];
+    const TABLE: &str = "sf_5b9c3706a6";
+    const PENDANT: &str = "sf_2ba27702aa";
+    let hang = |g: &mut Geo, f: &mut Furnisher, p: Vec2| {
+        let h = f.bounds(PENDANT).map_or(1.25, |(a, b)| b[1] - a[1]);
+        let top = y + clear;
+        f.put(g, PENDANT, p, top - h, Vec2::Y, false);
+        g.light(Vec3::new(p.x, top - h - 0.05, p.y), 4.0, [2.0, 1.4, 0.8]);
+    };
+    // communal table down the middle
+    let c = area.centre();
+    let axis = if area.d() > area.w() { Vec2::Y } else { Vec2::X };
+    let across = Vec2::new(-axis.y, axis.x);
+    let tl = 4.2;
+    conference_table(g, c, axis, tl, 1.0, y);
+    for s in [-1.0f32, 1.0] {
+        for i in 0..5 {
+            let a = (i as f32 - 2.0) * 0.82 + (f.rand() - 0.5) * 0.12;
+            let pull = 0.6 + f.rand() * f.rand() * 0.45;
+            let face = (-across * s).rotate(Vec2::from_angle((f.rand() - 0.5) * 0.8));
+            let id = CHAIRS[(f.rand() * 2.0) as usize % 2];
+            f.put(g, id, c + axis * a + across * s * pull, y, face, false);
+        }
+    }
+    for k in [-0.33f32, 0.0, 0.33] {
+        hang(g, f, c + axis * tl * k);
+    }
+    // bistro tables for two to four in staggered rows either side
+    let half_len = if axis == Vec2::Y { area.d() } else { area.w() } / 2.0 - 1.4;
+    let half_wid = if axis == Vec2::Y { area.w() } else { area.d() } / 2.0;
+    for s in [-1.0f32, 1.0] {
+        for row in 0..2 {
+            let off = 2.1 + row as f32 * 1.9;
+            if off > half_wid - 0.9 {
+                continue;
+            }
+            let n = (half_len * 2.0 / 2.3).floor() as i32;
+            for i in 0..n {
+                let a = -half_len + (i as f32 + 0.5 + if row == 1 { 0.5 } else { 0.0 }) * (half_len * 2.0 / n as f32);
+                if a > half_len {
+                    continue;
+                }
+                let p = c + axis * (a + (f.rand() - 0.5) * 0.3) + across * s * (off + (f.rand() - 0.5) * 0.25);
+                let turn = Vec2::from_angle(f.rand() * 6.28);
+                f.put(g, TABLE, p, y, turn, true);
+                let seats = 2 + (f.rand() * 2.2) as i32;
+                let start = f.rand() * 6.28;
+                for k in 0..seats {
+                    if f.rand() < 0.12 {
+                        continue;
+                    }
+                    let ang = start + k as f32 * std::f32::consts::TAU / seats as f32 + (f.rand() - 0.5) * 0.4;
+                    let dir = Vec2::from_angle(ang);
+                    let pull = 0.5 + f.rand() * f.rand() * 0.4;
+                    let face = (-dir).rotate(Vec2::from_angle((f.rand() - 0.5) * 0.9));
+                    let id = CHAIRS[(f.rand() * 2.0) as usize % 2];
+                    f.put(g, id, p + dir * pull, y, face, false);
+                }
+                hang(g, f, p);
+            }
+        }
+    }
+    // the bar: back bar on the wall side of `bar`, pub counter in front, machines and bottles
+    let back_x = bar.x1 - 0.3;
+    let bc = Vec2::new(back_x, bar.centre().y);
+    f.put(g, "sf_a1961b9e5a", bc, y, Vec2::NEG_X, true);
+    let counter = Vec2::new(bar.x1 - 2.5, bar.centre().y);
+    f.put(g, "sf_e3fe539054", counter, y, Vec2::NEG_X, true);
+    f.put(g, "sf_bab05bc780", counter + Vec2::new(0.35, -0.9), y + 1.1, Vec2::NEG_X, false);
+    f.put(g, "sf_221f20f292", counter + Vec2::new(0.35, 0.6), y + 1.1, Vec2::NEG_X, false);
+    for (k, dz) in [-1.6f32, -0.4, 0.8].iter().enumerate() {
+        let h = if k % 2 == 0 { 1.25 } else { 1.65 };
+        f.put(g, "sf_334377879c", bc + Vec2::new(-0.15, *dz), y + h, Vec2::NEG_X, false);
+    }
+    for dz in [-1.2f32, 0.0, 1.2] {
+        hang(g, f, counter + Vec2::new(-0.3, dz));
+    }
+    // a chalkboard by the door
+    f.put(g, "sf_3f0da232c2", Vec2::new(area.x0 + 0.6, area.z1 - 0.8), y, Vec2::from_angle(0.3), false);
 }

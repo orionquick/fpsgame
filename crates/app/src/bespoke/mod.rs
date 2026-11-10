@@ -22,6 +22,8 @@ pub mod m {
     pub const CORRIDOR_FLOOR: &str = "ue2iai3fw";
     pub const TILE_FLOOR: &str = "vlxjaed";
     pub const CONCRETE: &str = "tezmdjno";
+    /// Poly Haven concrete_floor_02 (CC0)
+    pub const POLISHED_CONCRETE: &str = "pht_concrete_floor_02";
     pub const CAST_CONCRETE: &str = "thfkebpfw";
     pub const ACOUSTIC_CEILING: &str = "sl4qlkd";
     pub const CONCRETE_CEILING: &str = "ub4ndfao";
@@ -90,7 +92,7 @@ pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool)
             Use::Office | Use::Meeting => k(m::CARPET, if r.kind == Use::Meeting { [0.95, 1.0, 1.1] } else { [1.1, 1.1, 1.12] }),
             Use::Corridor | Use::Lobby => k(m::CORRIDOR_FLOOR, [1.0, 1.0, 1.0]),
             Use::Restroom => k(m::TILE_FLOOR, [1.0, 1.0, 1.0]),
-            Use::Hall => k(m::CONCRETE, [0.58, 0.57, 0.55]),
+            Use::Hall => k("pht_concrete_floor_worn_001", [1.35, 1.35, 1.35]),
             Use::Storage | Use::Riser => k(m::CONCRETE, [0.7, 0.7, 0.7]),
             Use::Stair | Use::Elevator => continue,
         };
@@ -219,6 +221,11 @@ fn rnd(seed: u64, i: u64) -> f32 {
 }
 
 /// GPU batches for a building: one per material key, drawn with an identity instance.
+/// Every bespoke building's lamps.
+pub fn all_lights(c: &city::City) -> Vec<render::PointLight> {
+    all(c).into_iter().flat_map(|b| b.geo.lights).collect()
+}
+
 pub fn all_batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, c: &city::City) -> Vec<Batch> {
     let mut out = vec![];
     for b in all(c) {

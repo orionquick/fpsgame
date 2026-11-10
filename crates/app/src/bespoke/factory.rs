@@ -139,7 +139,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     let sill_in = Key::new(Mat::Plain(160), [0.75, 0.74, 0.71]).inside();
     let steel = Key::new(Mat::Plain(120), [0.03, 0.035, 0.035]);
     let green = Key::new(Mat::Plain(100), [0.05, 0.13, 0.09]);
-    let alu = Key::new(Mat::Plain(80), [0.5, 0.51, 0.52]);
+    let alu = Key::new(Mat::Plain(90), [0.06, 0.065, 0.07]);
     let glass = Key::new(Mat::Glass, [0.55, 0.62, 0.6]);
 
     let v = Vec2::new;
@@ -317,13 +317,10 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         if k == 0 {
             // ground floor: cafe by the garage doors, bar in front of the core, lounge at the north entry
             let cafe = Rect::new(T + 0.9, T + 5.0, spec.cols[1] - 0.6, d - T - 1.0);
-            let mut p = ground.clone();
-            p.rooms = vec![plan::Room { r: cafe, kind: plan::Use::Hall }];
-            furnish::floor(&mut fur, &mut g, &p, y, clear, w, d, T, &win);
-            let bx = core.r.x0 - 3.2;
-            furnish::bar(&mut fur, &mut g, v(bx, core.r.z1 - 0.5), v(bx, d - T - 2.2), y);
+            let bar = Rect::new(core.r.x0 - 1.0, core.r.z1 + 0.6, w - T, d - T - 0.6);
+            loft::cafe(&mut g, &mut fur, cafe, bar, y, clear);
             reserved.push(cafe);
-            reserved.push(Rect::new(bx - 1.2, core.r.z1 - 1.0, core.r.x0, d - T));
+            reserved.push(bar);
             fur.put(&mut g, "ph_sofa_03", v(4.6, 1.1), y, v(0.0, 1.0), true);
             fur.put(&mut g, "ph_modern_coffee_table_02", v(4.5, 2.6), y, v(0.2, 1.0), true);
             fur.put(&mut g, "ph_modern_arm_chair_01", v(2.4, 3.4), y, v(0.8, -0.6), true);
@@ -368,6 +365,13 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
                 }
                 // the Office Props Pack cubicles where a full pinwheel fits, modelled benches elsewhere
                 let kit_r = Rect::new(c.x - 2.75, c.y - 2.75, c.x + 2.75, c.y + 2.75);
+                if k == 0 {
+                    // the ground floor is the cafe: leftover bays get lounge seating, not desks
+                    fur.put(&mut g, "sf_959bc21f62", c - v(0.0, 1.0), y, v(0.0, 1.0), true);
+                    fur.put(&mut g, "ph_modern_arm_chair_01", c + v(1.2, 0.8), y, v(-0.7, -0.6), true);
+                    fur.put(&mut g, "ph_coffee_table_round_01", c, y, v(0.0, 1.0), true);
+                    continue;
+                }
                 if xb - xa >= 5.6 && !reserved.iter().any(|q| q.x0 < kit_r.x1 && q.x1 > kit_r.x0 && q.z0 < kit_r.z1 && q.z1 > kit_r.z0) {
                     pads.push(loft::kit_cluster(&mut g, &mut fur, c, y));
                 } else {

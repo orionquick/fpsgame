@@ -9,4 +9,5 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 glam = "0.30"
 image = "0.25.10"
 pollster = "1.0.1"
+texpresso = { version = "2.0.2", features = ["rayon"] }
 wgpu = "30"

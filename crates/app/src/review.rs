@@ -17,6 +17,8 @@ pub struct Ctx {
     pub prefab_batches: Vec<render::Batch>,
     /// Prefab buildings, rebuilt when the detail focus moves.
     pub building_batches: Vec<render::Batch>,
+    /// Interior lamps (nearest ones are uploaded per render).
+    pub lights: Vec<render::PointLight>,
     focus: Option<[f64; 4]>,
 }
 
@@ -34,7 +36,8 @@ impl Ctx {
             city_batches.extend(crate::library::prefab_batches(&gpu, &renderer, l, &tree_pl));
             city_batches.extend(crate::bespoke::all_batches(&gpu, &renderer, l, &city));
         }
-        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], focus: None }
+        let lights = crate::bespoke::all_lights(&city);
+        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], lights, focus: None }
     }
     /// Re-uploads the city with this editor scene's objects.
     pub fn set_scene(&mut self, s: &editor::Scene) {
@@ -97,6 +100,7 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
     let up = std::env::var("FPS_CAM_UP").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.7);
     let y = cx.city.terrain.at(x as f64, z as f64) as f32 + up;
     let cam = Camera::perspective(glam::Vec3::new(x, y, z), yaw, pitch, 70.0, w as f32 / h as f32);
+    cx.renderer.set_lights(&cx.gpu, &cx.lights, cam.eye);
     render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &cx.batches(), &cam, w, h)
 }
 
@@ -209,7 +213,7 @@ pub fn gallery(cx: &mut Ctx, group: &str, w: u32, h: u32, fit: bool) -> (RgbaIma
         .catalog
         .assets
         .iter()
-        .filter(|a| (a.group == group || a.id.starts_with(group)) && matches!(a.kind, assets::AssetKind::Model))
+        .filter(|a| group.split(',').any(|g| a.group == g || a.id.starts_with(g)) && matches!(a.kind, assets::AssetKind::Model))
         .map(|a| {
             let e = crate::library::extent(a);
             (a.id.clone(), a.title.clone(), if fit { 2.2 / e[0].max(e[1]).max(e[2]).max(1e-3) } else { 1.0 })

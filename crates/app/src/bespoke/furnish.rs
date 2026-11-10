@@ -14,6 +14,8 @@ const GUEST_CHAIRS: &[&str] = &["yfinchh", "yfjjfhh"];
 const CABINETS: &[&str] = &["yf1fafl", "yfoobem", "yfpodb2", "yfpocj3"];
 const FLOOR_PLANTS: &[&str] = &["ph_potted_plant_01", "ph_potted_plant_02", "siumT", "wfypfebha"];
 const DESK_CLUTTER: &[&str] = &["yfkmajq", "yfnjcbs", "yghlfey", "yghlabs", "uchmfdyia", "rhDrj"];
+/// Models with over a million triangles: placed at their ~6% mesh level.
+const HEAVY: &[&str] = &["sf_5b9c3706a6"];
 const RADIATOR: &str = "yf2fcdo";
 const PINBOARD: &str = "ye4pcby";
 const COUCHES: &[&str] = &["yfwecht", "yfweceo"];
@@ -70,7 +72,9 @@ impl<'a> Furnisher<'a> {
         let [x, z] = g.world_xz(c);
         // the model's +Z turns to heading rot + 90, so to face `face` its X runs at heading(face) - 90
         let rot = g.heading(face) - 90.0 + FRONT;
-        self.out.push(Placement { asset: id.to_string(), part: ALL_PARTS, x, z, y: g.world_y(y), rot, scale: [1.0; 3], tint: [1.0; 3], lod: 0, indoor: self.indoor });
+        // very dense scans render from their simplified levels
+        let lod = if HEAVY.contains(&id) { 2 } else { 0 };
+        self.out.push(Placement { asset: id.to_string(), part: ALL_PARTS, x, z, y: g.world_y(y), rot, scale: [1.0; 3], tint: [1.0; 3], lod, indoor: self.indoor });
         if solid {
             let f = face.normalize();
             let r = Vec2::new(-f.y, f.x);
@@ -339,6 +343,7 @@ fn restaurant(f: &mut Furnisher, g: &mut Geo, r: &Rect, y: f32, ceil: f32) {
             // the bar light model includes its own cord: hang it from the joists
             let hang = y + ceil - ps[1];
             f.put(g, PENDANT, p, hang, Vec2::Y, false);
+            g.light(glam::Vec3::new(p.x, hang - 0.05, p.y), 4.5, [2.2, 1.55, 0.9]);
             let _ = &cord;
         }
     }

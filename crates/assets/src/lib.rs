@@ -376,6 +376,18 @@ const SCALE: &[(&str, f32)] = &[
     ("sf_383923d441", 0.135), // Coffee Maker
     ("sf_6881aa1e84", 0.15), // Street Lamp (bez_glaza)
     ("sf_f61aeec14f", 0.0085), // Trash Can (Lyskilde)
+    ("sf_3f0da232c2", 0.3),  // Chalkboard menu stand
+    ("sf_bab05bc780", 0.4),  // Commercial Coffee Machine
+    ("sf_334377879c", 0.025), // Glass Bottles
+    ("sf_f5e340ffca", 0.0025), // Metal Industrial Bar Stool (mm)
+    ("sf_5b9c3706a6", 0.47), // Modern Round Bistro Table
+    ("sf_ca9ed87062", 0.01), // Restaurant Building Corner Booth (cm)
+    ("sf_0720ffc9b2", 0.29), // Sheet Metal Frame Tolix Style Chairs
+    ("sf_3fdcc5bc70", 0.29), // Tolix Industrial Chairs
+    ("sf_1ea37815fb", 0.15), // The ultimate glass pack
+    ("sf_221f20f292", 0.5),  // Willoughsby Espresso Machine
+    ("sf_a1961b9e5a", 0.8),  // Wooden Back Bar Cabinet
+    ("sf_61275205fe", 0.2),  // Dining Set Scandinavian Style
 ];
 
 fn rescale(parts: &mut [MeshPart], infos: &mut [Part], k: f32) {

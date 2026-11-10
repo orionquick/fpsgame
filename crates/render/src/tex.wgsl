@@ -89,7 +89,9 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
         return vec4f(tonemap(haze(base * i.params.y, i.world)), 1.0);
     }
     var orm = textureSample(t_orm, samp, i.uv).rgb;
-    let tn = textureSample(t_nrm, samp, i.uv).xyz * 2.0 - 1.0;
+    // normal maps may be BC5 (RG only): rebuild Z
+    let txy = textureSample(t_nrm, samp, i.uv).xy * 2.0 - 1.0;
+    let tn = vec3f(txy, sqrt(max(1.0 - dot(txy, txy), 0.0)));
     // two-sided foliage: light the back face with the flipped normal
     let nv = select(-normalize(i.nrm), normalize(i.nrm), front);
     let tv = normalize(i.tan.xyz - nv * dot(nv, i.tan.xyz));
@@ -136,6 +138,7 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let kd = (1.0 - fv) * (1.0 - metal);
     let sun = g.sun_col.rgb * sun_shadow(i.world, nv) * ndl;
     var c = (kd * base + ggx(n, v, l, rough, f0) * PI) * sun;
+    c += kd * local_lights(i.world, n, v, base, rough) * ao;
     let indoor = i.params.x < 2.5 && i.params.y > 0.0;
     c += kd * base * ambient(n) * ao * select(1.0, i.params.y, indoor);
     if (indoor) {

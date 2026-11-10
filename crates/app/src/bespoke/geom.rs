@@ -69,15 +69,23 @@ pub struct Geo {
     ez: Vec3,
     pub groups: HashMap<Key, (Vec<TexVertex>, Vec<u32>)>,
     pub blocks: Vec<Block>,
+    /// Lamps that light the interior (world space).
+    pub lights: Vec<render::PointLight>,
 }
 
 impl Geo {
+    /// A lamp at local `p` with range `radius` and linear colour (intensity folded in).
+    pub fn light(&mut self, p: Vec3, radius: f32, color: [f32; 3]) {
+        let w = self.world(p);
+        self.lights.push(render::PointLight { pos: w.to_array(), radius, color, _pad: 0.0 });
+    }
+
     /// `origin` is the world position of local (0, 0, 0); `ex` the world direction of local +x (horizontal).
     pub fn new(origin: Vec3, ex: Vec3) -> Self {
         let ex = Vec3::new(ex.x, 0.0, ex.z).normalize();
         // local +z is +x turned 90 degrees, matching world x-east/z-south handedness
         let ez = Vec3::new(-ex.z, 0.0, ex.x);
-        Self { origin, ex, ez, groups: HashMap::new(), blocks: vec![] }
+        Self { origin, ex, ez, groups: HashMap::new(), blocks: vec![], lights: vec![] }
     }
 
     /// World (x, z) of a local plan point.

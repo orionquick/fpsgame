@@ -29,3 +29,18 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Sofa (Game Ready / 2K PBR)" by Meerschaum Digital, CC Attribution, https://sketchfab.com/3d-models/959bc21f62964c068e441622e8d1103a
 - "Lounge Chair" by Grapxly, CC Attribution, https://sketchfab.com/3d-models/ddab2f2c25e944fba590a8d51bbf8174
 - "Trash Can" by Lyskilde, CC Attribution, https://sketchfab.com/3d-models/f61aeec14ff441abb0f6add5485a2e90
+- "Restaurant furniture scene PBR materials" by chris_models, CC Attribution, https://sketchfab.com/3d-models/d8d1dc23785749e587e32b352ebff8d0
+- "Pub counter" by chris_models, CC Attribution, https://sketchfab.com/3d-models/e3fe5390541649a0bb4dee299e3b07e7
+- "Wooden Back Bar Cabinet - 4096px²" by Mark Peters, CC Attribution, https://sketchfab.com/3d-models/a1961b9e5a7043fb9a70b855e947e27f
+- "Sheet Metal Frame Tolix Style Chairs" by allenbranch, CC Attribution, https://sketchfab.com/3d-models/0720ffc9b273438586bf0af20f87cef0
+- "Tolix Industrial Chairs" by allenbranch, CC Attribution, https://sketchfab.com/3d-models/3fdcc5bc702d40f6bfee171e7046e32d
+- "Metal Industrial Bar Stool" by berilbasak, CC Attribution, https://sketchfab.com/3d-models/f5e340ffca03407c9f72f6675f83c51d
+- "Industrial Bar Stool" by Blizzy, CC Attribution, https://sketchfab.com/3d-models/7e438f3903c045869809892058b5b209
+- "Restaurant Building Corner Booth" by jimbogies, CC Attribution, https://sketchfab.com/3d-models/ca9ed87062694ff2a2521c44484f1a9a
+- "[Free] Dining Set Scandinavian Style" by AllQuad, CC Attribution, https://sketchfab.com/3d-models/61275205fe084208887d74876919aac6
+- "Modern Round Bistro Table – Wood & Metal" by Julian / MaxGamer12024, Free Standard, https://sketchfab.com/3d-models/5b9c3706a60b48bb90b16df4fc16c888
+- "Willoughsby Espresso Machine" by Kuba "Volant" Wójcik, CC Attribution, https://sketchfab.com/3d-models/221f20f292144abebf748f837931388c
+- "Commercial Coffee Machine" by M.Reslan, CC Attribution, https://sketchfab.com/3d-models/bab05bc7805d4b0dbc2cdcbb48441956
+- "Chalkboard menu stand" by sdonyxz, CC Attribution, https://sketchfab.com/3d-models/3f0da232c28d4825a5037f82a7ba6aee
+- "The ultimate glass pack (cups and bottles)" by Helindu, CC Attribution, https://sketchfab.com/3d-models/1ea37815fb0145e49487386d6924b341
+- "Glass Bottles" by FrodoUndead, CC Attribution, https://sketchfab.com/3d-models/334377879cb4475d9a4720a2f7c4cf55

@@ -41,6 +41,7 @@ struct Gfx {
     scene: Scene,
     targets: Targets,
     batches: Vec<render::Batch>,
+    lights: Vec<render::PointLight>,
 }
 
 struct App {
@@ -172,7 +173,8 @@ impl ApplicationHandler for App {
             }
         }
         let targets = Targets::new(&gpu, &renderer, config.width, config.height);
-        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches });
+        let lights = crate::bespoke::all_lights(&self.city);
+        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches, lights });
         self.last = Instant::now();
     }
 
@@ -222,6 +224,7 @@ impl ApplicationHandler for App {
                 let view = frame.texture.create_view(&Default::default());
                 let p = &self.player;
                 let cam = Camera::perspective(p.pos + Vec3::Y * EYE, p.yaw, p.pitch, 70.0, g.config.width as f32 / g.config.height as f32);
+                g.renderer.set_lights(&g.gpu, &g.lights, cam.eye);
                 let mut enc = g.gpu.device.create_command_encoder(&Default::default());
                 g.renderer.render(&g.gpu, &mut enc, &g.scene, &g.batches.iter().collect::<Vec<_>>(), &cam, &g.targets, &view);
                 g.gpu.queue.submit([enc.finish()]);
