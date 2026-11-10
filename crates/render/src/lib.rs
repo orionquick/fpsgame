@@ -139,6 +139,7 @@ pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     tex_pipeline: wgpu::RenderPipeline,
+    glass_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     tex_shadow_pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
@@ -278,6 +279,15 @@ impl Renderer {
             depth_state(true, wgpu::CompareFunction::Less, Default::default()),
             ms,
         );
+        let glass_color = [Some(wgpu::ColorTargetState { format: color_format, blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })];
+        let glass_pipeline = pipe(
+            "glass",
+            &tex_layout,
+            wgpu::VertexState { module: &tex_mod, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &tl },
+            Some(wgpu::FragmentState { module: &tex_mod, entry_point: Some("fs_glass"), compilation_options: Default::default(), targets: &glass_color }),
+            depth_state(false, wgpu::CompareFunction::Less, Default::default()),
+            ms,
+        );
         let shadow_pipeline = pipe(
             "shadow",
             &shadow_layout,
@@ -294,7 +304,7 @@ impl Renderer {
             depth_state(true, wgpu::CompareFunction::Less, shadow_bias),
             Default::default(),
         );
-        Self { pipeline, sky_pipeline, tex_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
+        Self { pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
     }
 
     fn light_far(&self, scene: &Scene) -> Mat4 {
@@ -330,7 +340,7 @@ impl Renderer {
         p.set_index_buffer(scene.ibuf.slice(..), wgpu::IndexFormat::Uint32);
         p.draw_indexed(0..scene.n_idx, 0, 0..1);
         p.set_pipeline(&self.tex_shadow_pipeline);
-        for b in batches {
+        for b in batches.iter().filter(|b| !b.transparent) {
             p.set_bind_group(1, &b.material.bind, &[]);
             p.set_vertex_buffer(0, b.vb.slice(..));
             p.set_vertex_buffer(1, b.inst.slice(..));
@@ -381,13 +391,15 @@ impl Renderer {
         p.set_vertex_buffer(0, scene.vbuf.slice(..));
         p.set_index_buffer(scene.ibuf.slice(..), wgpu::IndexFormat::Uint32);
         p.draw_indexed(0..scene.n_idx, 0, 0..1);
-        p.set_pipeline(&self.tex_pipeline);
-        for b in batches {
-            p.set_bind_group(1, &b.material.bind, &[]);
-            p.set_vertex_buffer(0, b.vb.slice(..));
-            p.set_vertex_buffer(1, b.inst.slice(..));
-            p.set_index_buffer(b.ib.slice(..), wgpu::IndexFormat::Uint32);
-            p.draw_indexed(0..b.n_idx, 0, 0..b.n_inst);
+        for (pipe, glass) in [(&self.tex_pipeline, false), (&self.glass_pipeline, true)] {
+            p.set_pipeline(pipe);
+            for b in batches.iter().filter(|b| b.transparent == glass) {
+                p.set_bind_group(1, &b.material.bind, &[]);
+                p.set_vertex_buffer(0, b.vb.slice(..));
+                p.set_vertex_buffer(1, b.inst.slice(..));
+                p.set_index_buffer(b.ib.slice(..), wgpu::IndexFormat::Uint32);
+                p.draw_indexed(0..b.n_idx, 0, 0..b.n_inst);
+            }
         }
     }
 }

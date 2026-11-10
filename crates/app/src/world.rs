@@ -148,12 +148,23 @@ impl Collision {
             solids.push(Solid { ring, min, max, y0: g - 0.05, y1: g + o.size[1] as f32 });
         }
         for b in &c.buildings {
+            if crate::bespoke::OSM_IDS.contains(&b.osm.as_str()) {
+                continue;
+            }
             let (y0, y1) = city::mesh::building_span(b, &c.terrain);
             for ring in std::iter::once(&b.outer).chain(&b.holes) {
                 let ring: Vec<[f32; 2]> = ring.iter().map(|p| [p[0] as f32, p[1] as f32]).collect();
                 let min = ring.iter().fold([f32::MAX; 2], |a, p| [a[0].min(p[0]), a[1].min(p[1])]);
                 let max = ring.iter().fold([f32::MIN; 2], |a, p| [a[0].max(p[0]), a[1].max(p[1])]);
                 solids.push(Solid { ring, min, max, y0: y0 as f32, y1: y1 as f32 });
+            }
+        }
+        // hand-built buildings collide wall by wall, floor by floor
+        for bb in crate::bespoke::all(c) {
+            for k in bb.geo.blocks {
+                let min = k.ring.iter().fold([f32::MAX; 2], |a, p| [a[0].min(p[0]), a[1].min(p[1])]);
+                let max = k.ring.iter().fold([f32::MIN; 2], |a, p| [a[0].max(p[0]), a[1].max(p[1])]);
+                solids.push(Solid { ring: k.ring, min, max, y0: k.y0, y1: k.y1 });
             }
         }
         Self { solids }
@@ -226,6 +237,25 @@ mod tests {
 
     fn inside_any(col: &Collision, p: [f32; 2], y: f32) -> bool {
         col.solids.iter().any(|s| y < s.y1 && y + 1.8 > s.y0 && point_in(&s.ring, p))
+    }
+
+    #[test]
+    fn factory_has_walkable_floors_and_solid_walls() {
+        let c = city();
+        let col = Collision::new(&c, None);
+        let b = crate::bespoke::all(&c).into_iter().next().expect("factory");
+        // the lowest slab top is the ground floor; the upper floors sit 4.6 and 8.5 m above it
+        let slab_tops: Vec<f32> = b.geo.blocks.iter().map(|k| k.y1).collect();
+        let ground = slab_tops.iter().copied().filter(|&y| y > 0.0).fold(f32::MAX, f32::min);
+        let p = [76.0f32, -170.0]; // inside, in the open office area
+        for lvl in [4.6f32, 8.5] {
+            let f = col.roof_under(p, ground + lvl + 0.1, 0.45).expect("floor under");
+            assert!((f - (ground + lvl)).abs() < 0.05, "floor at {f}, expected {}", ground + lvl);
+        }
+        // a player brushing the west front below the first-floor sills is held off the brick
+        let mut q = [65.6f32, -177.3];
+        col.push_out(&mut q, ground + 5.0, 0.4, 0.35);
+        assert!(q[0] < 65.5, "ended at {q:?}");
     }
 
     #[test]

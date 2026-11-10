@@ -20,14 +20,14 @@ def get(it):
     d = os.path.join(INBOX, group)
     os.makedirs(d, exist_ok=True)
     dest = os.path.join(d, os.path.basename(it["n"]))
-    if os.path.exists(dest) and os.path.getsize(dest) == it["s"]:
+    if os.path.exists(dest) and os.path.getsize(dest) == it.get("s", -1):
         return it["n"], "skip"
     try:
         with urllib.request.urlopen(url, timeout=600) as r, open(dest + ".part", "wb") as f:
             while chunk := r.read(1 << 20):
                 f.write(chunk)
         os.replace(dest + ".part", dest)
-        if os.path.getsize(dest) != it["s"]:
+        if it.get("s") and os.path.getsize(dest) != it["s"]:
             return it["n"], f"size mismatch {os.path.getsize(dest)} != {it['s']}"
         return it["n"], "ok"
     except Exception as e:
@@ -40,7 +40,7 @@ with open(os.path.join(INBOX, "manifest.jsonl"), "a") as m:
     for it, (n, st) in zip(batch["items"], results):
         if st in ("ok", "skip"):
             group = "".join(c if c.isalnum() else "_" for c in it["g"]).strip("_").lower()
-            m.write(json.dumps({"uid": it["u"], "title": it["t"], "group": it["g"], "name": n, "size": it["s"], "path": f"{group}/{n}"}) + "\n")
+            m.write(json.dumps({"uid": it["u"], "title": it["t"], "group": it["g"], "name": n, "size": it.get("s"), "path": f"{group}/{n}"}) + "\n")
 bad = [(n, st) for n, st in results if st not in ("ok", "skip")]
 print(f"{sum(st == 'ok' for _, st in results)} downloaded, {sum(st == 'skip' for _, st in results)} already present, {len(bad)} failed")
 for n, st in bad:

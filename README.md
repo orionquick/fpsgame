@@ -80,6 +80,26 @@ USGS 3DEP survey **CA_SanDiegoCo_D24** (flown 9–21 November 2024, published Se
 
 Current import: 316 OSM buildings measured, 121 upper tiers, 132 structures OSM lacks, 2,279 trees. Only 5 buildings keep a guessed height.
 
+## Hand-built buildings (one at a time)
+
+The generic kit-of-parts assembler is being replaced building by building, starting with the blocks around the
+ballpark. Each one is matched to street-level reference (looked at on screen only, nothing saved) and built in
+`crates/app/src/bespoke/`:
+
+- `geom.rs`: a mesh kit in a building-local frame: thick walls with real openings and reveals, boxes, sloped
+  parapet pieces, planar metre UVs, and per-wall collision prisms.
+- `plan.rs`: office floor plans from the window bays: perimeter offices (one per one or two bays), a corridor ring
+  and cross corridor, central rooms, a lift lobby, and a core (switchback stair, lift, riser, restrooms) against the
+  blind party wall.
+- `mod.rs`: interior emitter (partitions with doors and open leaves, floor finishes by room use, dropped ceilings
+  with light panels, slabs with stair and shaft holes, stairs, lift doors) and batching.
+- `factory.rs`: the first one, the three-storey red-brick former factory facing the outfield park (OSM
+  way/376480375): exact bay rhythm, multi-light steel sashes, glazed garage doors and storefronts, cast-stone pier
+  caps and sills, the raised parapet with its sign panel and plaques, roof monitor; enterable on every floor.
+
+The renderer draws glazing in a separate transparent pass (no shadow, so sun reaches interiors), emissive panels,
+and an indoor lighting mode (dimmer sky light plus lamp light).
+
 ## Megascans prefab city
 
 Everything visible in the city is built from Quixel Megascans assets downloaded from Fab: about 720 models and surfaces, kept out of git in `data/megascans_inbox/` because Megascans can't be redistributed.

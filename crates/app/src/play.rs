@@ -154,6 +154,7 @@ impl ApplicationHandler for App {
         let mut batches = vec![];
         if let Some(lib) = lib.as_mut() {
             batches = crate::world::city_batches(&gpu, &renderer, lib, &base);
+            batches.extend(crate::bespoke::all_batches(&gpu, &renderer, lib, &self.city));
             let mut pl = tree_pl;
             pl.extend(crate::buildings::build(lib, &self.city, self.editor_scene.as_ref().and_then(|s| s.bounds).unwrap_or_else(|| self.city.play_rect())).0);
             batches.extend(crate::library::prefab_batches(&gpu, &renderer, lib, &pl));

@@ -15,7 +15,8 @@ struct VIn {
     @location(7) m3: vec4f,
     // rgb: tint, a: uv scale (1 for models; 1/tile size for world-UV city surfaces)
     @location(8) tint: vec4f,
-    // x: mode (0 plain, 1 curtain-wall windows over world-UV walls), y: floor height, z: window width, w: seed
+    // x: mode (0 lit, 3 one-sided glazing, 4 emissive at strength y; legacy 1/2 procedural windows)
+    // lit: y = indoor ambient factor (0 = outdoor), z = indoor lamp light
     @location(9) params: vec4f,
 };
 
@@ -71,6 +72,9 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
         discard;
     }
     var base = texel.rgb * i.tint;
+    if (i.params.x > 3.5) {
+        return vec4f(tonemap(haze(base * i.params.y, i.world)), 1.0);
+    }
     var orm = textureSample(t_orm, samp, i.uv).rgb;
     let tn = textureSample(t_nrm, samp, i.uv).xyz * 2.0 - 1.0;
     // two-sided foliage: light the back face with the flipped normal
@@ -80,7 +84,7 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     var n = normalize(tv * tn.x + bv * tn.y + nv * tn.z);
 
     var glass = 0.0;
-    if (i.params.x > 0.5 && abs(nv.y) < 0.5) {
+    if (i.params.x > 0.5 && i.params.x < 2.5 && abs(nv.y) < 0.5) {
         // window grid in world metres (u along the wall, v = -height); the material shows on frames and spandrels.
         // mode 1: curtain wall (wide glazing); mode 2: punched windows in masonry
         let cell = vec2f(i.uvm.x / i.params.z, -i.uvm.y / i.params.y);
@@ -118,11 +122,33 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let kd = (1.0 - fv) * (1.0 - metal);
     let sun = g.sun_col.rgb * sun_shadow(i.world, nv) * ndl;
     var c = (kd * base + ggx(n, v, l, rough, f0) * PI) * sun;
-    c += kd * base * ambient(n) * ao;
+    let indoor = i.params.x < 2.5 && i.params.y > 0.0;
+    c += kd * base * ambient(n) * ao * select(1.0, i.params.y, indoor);
+    if (indoor) {
+        // ceiling lamps: soft light from above, some bounce onto walls and ceilings
+        c += kd * base * ao * i.params.z * vec3f(1.0, 0.94, 0.84) * (0.35 + 0.65 * max(n.y, 0.0));
+    }
     // environment reflection: the sky, strongest on glass and smooth surfaces
     // near-horizontal reflections see the buildings across the street, not sky
     let rd = reflect(-v, n);
     let refl = sky_dir(rd, false) * mix(0.32, 1.0, smoothstep(0.02, 0.45, rd.y));
     c += fv * refl * mix((1.0 - rough) * 0.5, 0.65, glass) * ao;
     return vec4f(tonemap(haze(c, i.world)), 1.0);
+}
+
+// Clear glazing: sky/sun reflection by Fresnel, slight green-grey tint, the interior shows through.
+@fragment
+fn fs_glass(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
+    let nv = select(-normalize(i.nrm), normalize(i.nrm), front);
+    let v = normalize(g.eye.xyz - i.world);
+    let ndv = clamp(dot(nv, v), 0.0, 1.0);
+    let f = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
+    let rd = reflect(-v, nv);
+    let l = normalize(g.sun_dir.xyz);
+    let refl = sky_dir(rd, false) * mix(0.32, 1.0, smoothstep(0.02, 0.45, rd.y)) + g.sun_col.rgb * pow(max(dot(rd, l), 0.0), 900.0) * 6.0;
+    // tint absorbs a little; dust adds a faint lit film
+    let film = i.tint * 0.025 * (ambient(nv) + g.sun_col.rgb * max(dot(nv, l), 0.0) * sun_shadow(i.world, nv));
+    let a = clamp(0.30 + f * 0.7, 0.0, 1.0);
+    let c = refl * mix(0.45, 1.0, f) + film;
+    return vec4f(tonemap(haze(c, i.world)) * a, a);
 }

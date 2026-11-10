@@ -32,6 +32,7 @@ impl Ctx {
         if let Some(l) = lib.as_mut() {
             city_batches = crate::world::city_batches(&gpu, &renderer, l, &base);
             city_batches.extend(crate::library::prefab_batches(&gpu, &renderer, l, &tree_pl));
+            city_batches.extend(crate::bespoke::all_batches(&gpu, &renderer, l, &city));
         }
         Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], focus: None }
     }

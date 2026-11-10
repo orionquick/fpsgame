@@ -17,7 +17,7 @@ pub struct Instance {
     pub model: [[f32; 4]; 4],
     /// rgb tint, a = uv scale.
     pub tint: [f32; 4],
-    /// x: mode (1 = curtain-wall windows), y: floor height, z: window width, w: seed.
+    /// x: mode (0 lit, 3 one-sided glazing, 4 emissive with strength y); for lit surfaces y: indoor ambient factor (0 = outdoor), z: indoor lamp light.
     pub params: [f32; 4],
 }
 
@@ -106,9 +106,15 @@ pub struct Batch {
     pub(crate) inst: wgpu::Buffer,
     pub(crate) n_inst: u32,
     pub(crate) material: std::sync::Arc<Material>,
+    /// Drawn after opaque geometry with blending, casts no shadow (glazing).
+    pub transparent: bool,
 }
 
 impl Batch {
+    pub fn transparent(mut self) -> Self {
+        self.transparent = true;
+        self
+    }
     pub fn new(gpu: &Gpu, verts: &[TexVertex], idx: &[u32], instances: &[Instance], material: std::sync::Arc<Material>) -> Option<Self> {
         if verts.is_empty() || idx.is_empty() || instances.is_empty() {
             return None;
@@ -121,6 +127,7 @@ impl Batch {
             inst: mk(bytemuck::cast_slice(instances), wgpu::BufferUsages::VERTEX),
             n_inst: instances.len() as u32,
             material,
+            transparent: false,
         })
     }
 }

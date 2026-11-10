@@ -1,3 +1,4 @@
+mod bespoke;
 mod buildings;
 mod dressing;
 mod library;
