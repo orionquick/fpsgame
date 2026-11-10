@@ -102,6 +102,9 @@ struct Globals {
     /// GI volume: origin (w: cell size), dims (w: enabled).
     gi_min: [f32; 4],
     gi_dim: [f32; 4],
+    /// Screen-space reflections: the previous frame's view-projection and eye (w: SSR on).
+    prev_vp: [[f32; 4]; 4],
+    prev_eye: [f32; 4],
 }
 
 pub struct Camera {
@@ -160,6 +163,8 @@ pub struct PointLight {
 }
 
 pub const MAX_LIGHTS: usize = 128;
+/// Screen-space reflection history: display colour + linear eye distance.
+const HIST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const PROBE_RES: u32 = 256;
 pub const PROBE_MIPS: u32 = 7;
 /// Radiance is stored scaled down by this in the 8-bit probe and scaled back up when sampled.
@@ -202,6 +207,7 @@ pub struct Renderer {
     pub color_format: wgpu::TextureFormat,
     /// Voxel flood-fill GI (indirect diffuse light).
     pub gi: gi::Gi,
+    hist_bgl: wgpu::BindGroupLayout,
 }
 
 const VERTEX_ATTRS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
@@ -339,7 +345,16 @@ impl Renderer {
 
         let layout = |label, groups: &[Option<&wgpu::BindGroupLayout>]| d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: groups, immediate_size: 0 });
         let main_layout = layout("main", &[Some(&bgl)]);
-        let tex_layout = layout("tex", &[Some(&bgl), Some(&mat_bgl)]);
+        let hist_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("history"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                count: None,
+            }],
+        });
+        let tex_layout = layout("tex", &[Some(&bgl), Some(&mat_bgl), Some(&hist_bgl)]);
         let shadow_layout = layout("shadow", &[Some(&sbgl)]);
         let tex_shadow_layout = layout("tex shadow", &[Some(&sbgl), Some(&mat_bgl)]);
         let prim = wgpu::PrimitiveState { cull_mode: None, ..Default::default() };
@@ -430,11 +445,16 @@ impl Renderer {
             "composite",
             &post_layout,
             full,
-            Some(wgpu::FragmentState { module: &post_mod, entry_point: Some("fs_composite"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+            Some(wgpu::FragmentState {
+                module: &post_mod,
+                entry_point: Some("fs_composite"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL }), Some(wgpu::ColorTargetState { format: HIST_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
             None,
             Default::default(),
         );
-        Self { gi, probe_tex, probe_down, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
+        Self { hist_bgl, gi, probe_tex, probe_down, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
     }
 
     /// Renders a reflection probe at `pos` for the box `min`..`max` (world): six 90-degree faces, then a blurred mip
@@ -590,6 +610,12 @@ impl Renderer {
             probe_pos: self.probe.get()[2],
             gi_min: self.gi.params.get()[0],
             gi_dim: self.gi.params.get()[1],
+            prev_vp: t.prev.get().0.to_cols_array_2d(),
+            prev_eye: {
+                let (_, e, valid) = t.prev.get();
+                let on = valid && self.encode.get() == 0.0 && std::env::var("FPS_NO_SSR").is_err();
+                [e.x, e.y, e.z, if on { 1.0 } else { 0.0 }]
+            },
         };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&gl));
         gpu.queue.write_buffer(&self.far.uniform, 0, bytemuck::cast_slice(&lf.to_cols_array()));
@@ -618,6 +644,7 @@ impl Renderer {
         p.draw_indexed(0..scene.n_idx, 0, 0..1);
         for (pipe, glass) in [(&self.tex_pipeline, false), (&self.glass_pipeline, true)] {
             p.set_pipeline(pipe);
+            p.set_bind_group(2, &t.hist_bind, &[]);
             for b in batches.iter().filter(|b| b.transparent == glass) {
                 p.set_bind_group(1, &b.material.bind, &[]);
                 p.set_vertex_buffer(0, b.vb.slice(..));
@@ -629,9 +656,12 @@ impl Renderer {
         drop(p);
         // ambient occlusion from the depth, then composite onto the output
         for (pipe, view, group) in [(&self.ao_pipeline, &t.ao, &t.post_ao), (&self.composite_pipeline, out, &t.post)] {
+            let att = |view| Some(wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } });
+            let composite = std::ptr::eq(pipe, &self.composite_pipeline);
+            let atts = [att(view), att(&t.hist_out)];
             let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("post"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+                color_attachments: if composite { &atts[..] } else { &atts[..1] },
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -642,6 +672,9 @@ impl Renderer {
             p.set_bind_group(1, group, &[]);
             p.draw(0..3, 0..1);
         }
+        // this frame's composite becomes the next frame's reflection history
+        enc.copy_texture_to_texture(t.hist_out_tex.as_image_copy(), t.hist_tex.as_image_copy(), wgpu::Extent3d { width: t.w, height: t.h, depth_or_array_layers: 1 });
+        t.prev.set((cam.view_proj, cam.eye, true));
     }
 }
 
@@ -655,6 +688,13 @@ pub struct Targets {
     post: wgpu::BindGroup,
     /// Same as `post` without the AO texture (the AO pass writes it).
     post_ao: wgpu::BindGroup,
+    /// Reflection history read by the main pass (last frame) and written by the composite (this frame).
+    hist_tex: wgpu::Texture,
+    hist_out_tex: wgpu::Texture,
+    hist_out: wgpu::TextureView,
+    hist_bind: wgpu::BindGroup,
+    /// Previous frame's view-projection and eye, and whether the history holds a frame yet.
+    prev: std::cell::Cell<(Mat4, Vec3, bool)>,
     pub w: u32,
     pub h: u32,
 }
@@ -707,7 +747,27 @@ impl Targets {
             .create_view(&Default::default());
         let post = bind(&ao);
         let post_ao = bind(&dummy);
-        Self { msaa, depth, scene, ao, post, post_ao, w, h }
+        let hist_mk = |label, usage| {
+            gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: HIST_FORMAT,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let hist_tex = hist_mk("history", wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+        let hist_out_tex = hist_mk("history out", wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+        let hist_out = hist_out_tex.create_view(&Default::default());
+        let hist_bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("history"),
+            layout: &r.hist_bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&hist_tex.create_view(&Default::default())) }],
+        });
+        Self { msaa, depth, scene, ao, post, post_ao, hist_tex, hist_out_tex, hist_out, hist_bind, prev: std::cell::Cell::new((Mat4::IDENTITY, Vec3::ZERO, false)), w, h }
     }
 }
 
@@ -730,6 +790,10 @@ pub fn render_image(gpu: &Gpu, r: &Renderer, scene: &Scene, batches: &[&Batch], 
     let scope_oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let scope_val = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut enc = gpu.device.create_command_encoder(&Default::default());
+    // a first pass fills the reflection history for the second
+    if std::env::var("FPS_NO_SSR").is_err() {
+        r.render(gpu, &mut enc, scene, batches, cam, &t, &out.create_view(&Default::default()));
+    }
     r.render(gpu, &mut enc, scene, batches, cam, &t, &out.create_view(&Default::default()));
     enc.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo { texture: &out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },

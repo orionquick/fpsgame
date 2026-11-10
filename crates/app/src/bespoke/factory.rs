@@ -5,7 +5,7 @@
 //!   a raised parapet over the middle bays with a framed sign panel and two diamond plaques; corbelled brick band.
 //! - south front (stadium side): six wide bays, flat parapet.
 //! - north: two windowed bays at the west end, the rest is a party wall; east: party wall.
-use super::geom::{Geo, Hole, Key, Mat};
+use super::geom::{wear, Geo, Hole, Key, Mat};
 use super::plan::{self, Rect};
 use super::{furnish, interior, lift_doors, loft, m, slab, stair, stair_hole, Building};
 use glam::{Vec2, Vec3};
@@ -138,8 +138,8 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     let stone = Key::new(Mat::Surface(m::CONCRETE), [0.86, 0.8, 0.72]);
     let plinth = Key::new(Mat::Surface(m::CONCRETE), [0.42, 0.38, 0.35]);
     let sill_in = Key::new(Mat::Plain(160), [0.75, 0.74, 0.71]).inside();
-    let steel = Key::new(Mat::Plain(120), [0.03, 0.035, 0.035]);
-    let green = Key::new(Mat::Plain(100), [0.05, 0.13, 0.09]);
+    let steel = Key::new(Mat::Plain(120), [0.03, 0.035, 0.035]).wear(wear::METAL);
+    let green = Key::new(Mat::Plain(100), [0.05, 0.13, 0.09]).wear(wear::METAL);
     let alu = Key::new(Mat::Plain(90), [0.06, 0.065, 0.07]);
     let glass = Key::new(Mat::Glass, [0.55, 0.62, 0.6]);
 

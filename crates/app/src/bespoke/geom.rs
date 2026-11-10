@@ -29,11 +29,24 @@ pub struct Key {
     pub tile_cm: u16,
     /// Roughness scale in hundredths (0 = as textured): lower = glossier (oiled timber, polished tile).
     pub gloss: u16,
+    /// Edge wear (see Wear).
+    pub wear: u8,
+}
+
+/// Edge wear kinds (the shader's weathered-edge effect).
+pub mod wear {
+    pub const NONE: u8 = 0;
+    /// Timber: corners rubbed lighter and raw.
+    pub const WOOD: u8 = 1;
+    /// Painted or blackened steel: bare metal on the edges.
+    pub const METAL: u8 = 2;
+    /// Brick, stone, concrete: chipped arrises.
+    pub const STONE: u8 = 3;
 }
 
 impl Key {
     pub fn new(mat: Mat, tint: [f32; 3]) -> Self {
-        Self { mat, tint: tint.map(|t| (t * 1000.0).round() as u16), indoor: false, tile_cm: 0, gloss: 0 }
+        Self { mat, tint: tint.map(|t| (t * 1000.0).round() as u16), indoor: false, tile_cm: 0, gloss: 0, wear: 0 }
     }
     pub fn inside(mut self) -> Self {
         self.indoor = true;
@@ -42,6 +55,10 @@ impl Key {
     /// Scale the texture's roughness (0.5 = twice as glossy).
     pub fn rough(mut self, k: f32) -> Self {
         self.gloss = (k * 100.0).round() as u16;
+        self
+    }
+    pub fn wear(mut self, kind: u8) -> Self {
+        self.wear = kind;
         self
     }
     /// Stretch the texture so one tile covers `m` metres.
@@ -133,11 +150,17 @@ impl Geo {
     pub fn poly(&mut self, k: Key, pts: &[Vec3], right: Vec3, up: Vec3) {
         let n = right.cross(up).normalize();
         let (wn, wt) = (self.wdir(n), self.wdir(right));
+        // face-local coordinates for edge wear
+        let (mut u0, mut v0, mut u1, mut v1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for p in pts {
+            (u0, v0, u1, v1) = (u0.min(p.dot(right)), v0.min(p.dot(up)), u1.max(p.dot(right)), v1.max(p.dot(up)));
+        }
         let verts: Vec<TexVertex> = pts
             .iter()
             .map(|&p| {
                 let w = self.world(p);
-                TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [p.dot(right), -p.dot(up)], tan: [wt.x, wt.y, wt.z, 1.0] }
+                let edge = [p.dot(right) - u0, p.dot(up) - v0, u1 - u0, v1 - v0];
+                TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [p.dot(right), -p.dot(up)], tan: [wt.x, wt.y, wt.z, 1.0], edge }
             })
             .collect();
         let g = self.groups.entry(k).or_default();
@@ -160,9 +183,10 @@ impl Geo {
             _ => (-un, rn),
         };
         let (wn, wt) = (self.wdir(n), self.wdir(tr));
-        let verts: Vec<TexVertex> = [o, o + r, o + r + u, o + u]
+        let (lr, lu) = (r.length(), u.length());
+        let verts: Vec<TexVertex> = [(o, 0.0, 0.0), (o + r, lr, 0.0), (o + r + u, lr, lu), (o + u, 0.0, lu)]
             .iter()
-            .map(|&p| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv: [p.dot(tr) + uv[0], -p.dot(tu) + uv[1]], tan: [wt.x, wt.y, wt.z, 1.0] })
+            .map(|&(p, eu, ev)| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv: [p.dot(tr) + uv[0], -p.dot(tu) + uv[1]], tan: [wt.x, wt.y, wt.z, 1.0], edge: [eu, ev, lr, lu] })
             .collect();
         let g = self.groups.entry(k).or_default();
         let base = g.0.len() as u32;
@@ -338,7 +362,7 @@ impl Geo {
             let wn = self.wdir(n);
             for (end, along) in [(a, 0.0), (b, l)] {
                 let w = self.world(end + n * r);
-                verts.push(TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [along, -(i as f32 / seg as f32) * circ], tan: [wt.x, wt.y, wt.z, 1.0] });
+                verts.push(TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [along, -(i as f32 / seg as f32) * circ], tan: [wt.x, wt.y, wt.z, 1.0], edge: [0.0; 4] });
             }
         }
         let g = self.groups.entry(k).or_default();

@@ -9,6 +9,9 @@ pub struct TexVertex {
     pub nrm: [f32; 3],
     pub uv: [f32; 2],
     pub tan: [f32; 4],
+    /// Edge wear: position on its flat face in metres (u, v) and the face's size (w, h); all zero for meshes
+    /// without face edges (the shader then finds edges from curvature).
+    pub edge: [f32; 4],
 }
 
 #[repr(C)]
@@ -31,7 +34,7 @@ impl Instance {
     }
 }
 
-pub(crate) const VERTEX_ATTRS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+pub(crate) const VERTEX_ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4, 10 => Float32x4];
 pub(crate) const INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4];
 
 pub(crate) fn layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {

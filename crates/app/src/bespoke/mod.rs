@@ -298,7 +298,9 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, g: &G
     for (key, (v, idx)) in &g.groups {
         let tint = key.tint();
         let gloss = key.gloss as f32 / 100.0;
-        let indoor = if key.indoor { [0.0, crate::library::INDOOR_AMBIENT, crate::library::INDOOR_LAMP, gloss] } else { [0.0, 0.0, 0.0, gloss] };
+        // params.x carries the edge-wear kind in tenths (still "lit" mode 0 to the shader)
+        let w = key.wear as f32 * 0.1;
+        let indoor = if key.indoor { [w, crate::library::INDOOR_AMBIENT, crate::library::INDOOR_LAMP, gloss] } else { [w, 0.0, 0.0, gloss] };
         let (mat, inst, transparent) = match key.mat {
             Mat::Surface(id) => {
                 let tile = if key.tile_cm > 0 { key.tile_cm as f32 / 100.0 } else { lib.catalog.get(id).and_then(|a| a.tile_m).map_or(2.0, |t| t[0].max(0.05)) };

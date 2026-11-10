@@ -3,19 +3,24 @@
 @group(1) @binding(1) var t_orm: texture_2d<f32>;
 @group(1) @binding(2) var t_nrm: texture_2d<f32>;
 @group(1) @binding(3) var samp: sampler;
+// screen-space reflection history: last frame's display colour, a = linear distance from its eye
+@group(2) @binding(0) var t_hist: texture_2d<f32>;
 
 struct VIn {
     @location(0) pos: vec3f,
     @location(1) nrm: vec3f,
     @location(2) uv: vec2f,
     @location(3) tan: vec4f,
+    // edge wear: position on the flat face (u, v) and its size (w, h), metres; zero: use curvature
+    @location(10) edge: vec4f,
     @location(4) m0: vec4f,
     @location(5) m1: vec4f,
     @location(6) m2: vec4f,
     @location(7) m3: vec4f,
     // rgb: tint, a: uv scale (1 for models; 1/tile size for world-UV city surfaces)
     @location(8) tint: vec4f,
-    // x: mode (0 lit, 3 one-sided glazing, 4 emissive at strength y; legacy 1/2 procedural windows)
+    // x: mode (0 lit, 3 one-sided glazing, 4 emissive at strength y; legacy 1/2 procedural windows);
+    //    lit surfaces carry the edge-wear kind in tenths (0.1 wood, 0.2 metal, 0.3 stone)
     // lit: y = indoor ambient factor (0 = outdoor), z = indoor lamp light
     @location(9) params: vec4f,
 };
@@ -29,6 +34,7 @@ struct VOut {
     @location(4) tint: vec3f,
     @location(5) uvm: vec2f,
     @location(6) params: vec4f,
+    @location(7) edge: vec4f,
 };
 
 @vertex
@@ -44,6 +50,7 @@ fn vs(v: VIn) -> VOut {
     o.uvm = v.uv;
     o.tint = v.tint.rgb;
     o.params = v.params;
+    o.edge = v.edge;
     return o;
 }
 
@@ -64,6 +71,31 @@ fn macro_var(w: vec3f, n: vec3f) -> f32 {
     return 0.55 * vnoise(p / 1.4) + 0.45 * vnoise(p / 7.0 + 13.1);
 }
 
+fn noise3(p: vec3f) -> f32 {
+    return (vnoise(p.xy) + vnoise(p.yz + 17.3) + vnoise(p.xz + 41.7)) / 3.0;
+}
+
+// Weathered edges (like a texturing tool's edge-wear generator): a mask from the distance to the face's edges
+// (or, for meshes without face data, from curvature), broken up by noise into chips and rubbed patches.
+// Returns the wear amount 0..1.
+fn edge_wear(i: VOut, nv: vec3f, kind: i32) -> f32 {
+    let width = select(select(0.06, 0.018, kind == 2), 0.04, kind == 3);
+    var m = 0.0;
+    if (i.edge.z > 0.0 && i.edge.w > 0.0) {
+        let d = min(min(i.edge.x, i.edge.z - i.edge.x), min(i.edge.y, i.edge.w - i.edge.y));
+        m = 1.0 - smoothstep(0.0, width, d);
+    } else {
+        // curvature: how fast the normal turns per metre on screen
+        let k = length(fwidth(nv)) / max(length(fwidth(i.world)), 1e-4);
+        m = smoothstep(4.0, 30.0, k);
+    }
+    let w = i.world;
+    let breakup = noise3(w * 7.0) * 0.5 + noise3(w * 31.0) * 0.3 + noise3(w * 110.0) * 0.2;
+    // broad patches where a corner has been handled or knocked more; elsewhere the edge is barely touched
+    let patches = smoothstep(0.3, 0.75, noise3(w * 0.9 + 3.1));
+    return smoothstep(0.5, 0.72, m * m * (0.3 + breakup) * (0.45 + patches * 0.9));
+}
+
 fn ggx(n: vec3f, v: vec3f, l: vec3f, rough: f32, f0: vec3f) -> vec3f {
     let h = normalize(v + l);
     let ndl = max(dot(n, l), 0.0);
@@ -75,6 +107,82 @@ fn ggx(n: vec3f, v: vec3f, l: vec3f, rough: f32, f0: vec3f) -> vec3f {
     let gs = (ndl / (ndl * (1.0 - k) + k)) * (ndv / (ndv * (1.0 - k) + k));
     let f = f0 + (1.0 - f0) * pow(1.0 - max(dot(h, v), 0.0), 5.0);
     return d * gs * f / (4.0 * ndl * ndv + 1e-4);
+}
+
+// Inverse of the display tonemap (per channel), back to scene radiance.
+fn untonemap(a: vec3f) -> vec3f {
+    let y = clamp(a, vec3f(0.0), vec3f(0.98));
+    let qa = 2.43 * y - 2.51;
+    let qb = 0.59 * y - 0.03;
+    let qc = 0.14 * y;
+    let x = (-qb - sqrt(max(qb * qb - 4.0 * qa * qc, vec3f(0.0)))) / (2.0 * qa);
+    return x / max(g.sun_dir.w, 1e-3);
+}
+
+fn hist_at(p: vec3f) -> vec4f {
+    // xy: history texel, z: distance of p from the history eye, w: 0 when off screen
+    let clip = g.prev_vp * vec4f(p, 1.0);
+    if (clip.w <= 0.01) {
+        return vec4f(0.0);
+    }
+    let ndc = clip.xy / clip.w;
+    let uv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (any(uv < vec2f(0.0)) || any(uv >= vec2f(1.0))) {
+        return vec4f(0.0);
+    }
+    return vec4f(uv, distance(p, g.prev_eye.xyz), 1.0);
+}
+
+// Screen-space reflection (after Ruinbound's ssrTrace): march the reflection ray with growing steps against the
+// history depth; a sample just behind the stored surface (within a thickness) is a hit, refined by bisection.
+// rgb: reflected radiance, a: confidence (0 on a miss, fading at the screen edges and with distance).
+fn ssr(world: vec3f, r: vec3f, rough: f32) -> vec4f {
+    if (g.prev_eye.w < 0.5) {
+        return vec4f(0.0);
+    }
+    let dimv = vec2f(textureDimensions(t_hist));
+    var step = 0.05;
+    var t = 0.08;
+    var lo = 0.0;
+    for (var i = 0; i < 40; i++) {
+        let h = hist_at(world + r * t);
+        if (h.w < 0.5) {
+            break;
+        }
+        let stored = textureLoad(t_hist, vec2i(h.xy * dimv), 0).a;
+        let gap = h.z - stored;
+        if (gap > 0.02 + h.z * 0.002 && gap < max(0.3, step * 2.5)) {
+            var a = lo;
+            var b = t;
+            for (var k = 0; k < 5; k++) {
+                let m = (a + b) * 0.5;
+                let hm = hist_at(world + r * m);
+                if (hm.z - textureLoad(t_hist, vec2i(hm.xy * dimv), 0).a > 0.0) {
+                    b = m;
+                } else {
+                    a = m;
+                }
+            }
+            let hb = hist_at(world + r * b);
+            // rougher surfaces: average a few texels around the hit (a blurrier reflection)
+            let rad = clamp(rough * 120.0 * b / max(hb.z, 1.0), 1.0, 20.0);
+            var col = vec3f(0.0);
+            for (var k = 0; k < 9; k++) {
+                // centre + two rings
+                let ring = select(1.0, 0.5, k < 5);
+                let o = select(vec2f(0.0), vec2f(cos(f32(k) * 1.5708 + ring), sin(f32(k) * 1.5708 + ring)) * rad * ring, k > 0);
+                col += textureLoad(t_hist, vec2i(clamp(hb.xy * dimv + o, vec2f(0.0), dimv - 1.0)), 0).rgb;
+            }
+            let uv = hb.xy;
+            let edge = smoothstep(0.0, 0.07, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+            let far = 1.0 - smoothstep(20.0, 40.0, b);
+            return vec4f(untonemap(col / 9.0), edge * far);
+        }
+        lo = t;
+        step *= 1.13;
+        t += step;
+    }
+    return vec4f(0.0);
 }
 
 @fragment
@@ -126,6 +234,24 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
         }
     }
 
+    // weathered edges
+    let kind = i32(round(i.params.x * 10.0));
+    if (i.params.x < 0.5 && kind > 0) {
+        let wr = edge_wear(i, nv, kind);
+        if (kind == 1) {
+            // timber: rubbed raw, lighter and drier
+            let lum = dot(base, vec3f(0.3, 0.59, 0.11));
+            base = mix(base, mix(vec3f(lum), base, 0.55) * 2.4 + vec3f(0.06, 0.042, 0.025), wr * 0.85);
+            orm.g = mix(orm.g, 0.85, wr);
+        } else if (kind == 2) {
+            // paint and mill scale worn through to bright steel
+            base = mix(base, vec3f(0.56, 0.56, 0.55), wr);
+            orm = vec3f(orm.r, mix(orm.g, 0.32, wr), mix(orm.b, 1.0, wr));
+        } else {
+            // chipped arrises: fresher, paler material
+            base = mix(base, base * 1.35 + vec3f(0.03), wr * 0.6);
+        }
+    }
     let ao = orm.r;
     // params.w (lit surfaces): roughness scale, for oiled timber and polished floors
     let rough = clamp(orm.g * select(1.0, i.params.w, i.params.x < 0.5 && i.params.w > 0.0), 0.04, 1.0);
@@ -157,7 +283,13 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
         let maxlod = g.probe_max.w;
         let rdir = reflect(-v, n);
         let irr = probe_sample(i.world, n, maxlod);
-        let spec = probe_sample(i.world, rdir, sqrt(rough) * maxlod);
+        var spec = probe_sample(i.world, rdir, sqrt(rough) * maxlod);
+        // screen-space reflection where the ray finds something on screen; the probe is the fallback
+        if (rough < 0.65) {
+            // trace along a mostly geometric normal: the normal map would scatter the rays into noise
+            let sr = ssr(i.world, reflect(-v, normalize(mix(n, nv, 0.75))), rough);
+            spec = mix(spec, sr.rgb, sr.a * (1.0 - smoothstep(0.3, 0.65, rough)));
+        }
         amb = mix(amb, kd * base * irr * ao, pw);
         spec_env = spec * env_brdf(f0, rough, ndv) * ao * pw;
     }
@@ -175,7 +307,12 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     // environment reflection: the sky, strongest on glass and smooth surfaces
     // near-horizontal reflections see the buildings across the street, not sky
     let rd = reflect(-v, n);
-    let refl = sky_dir(rd, false) * mix(0.32, 1.0, smoothstep(0.02, 0.45, rd.y));
+    var refl = sky_dir(rd, false) * mix(0.32, 1.0, smoothstep(0.02, 0.45, rd.y));
+    if (pw < 1.0 && rough < 0.5) {
+        // outdoors: buildings and street on screen reflect in glossy surfaces, the sky elsewhere
+        let sr = ssr(i.world, rd, rough);
+        refl = mix(refl, sr.rgb, sr.a);
+    }
     c += fv * refl * mix((1.0 - rough) * 0.5, 0.65, glass) * ao * (1.0 - pw);
     // no aerial haze indoors
     return vec4f(tonemap(select(haze(c, i.world), c, indoor)), 1.0);

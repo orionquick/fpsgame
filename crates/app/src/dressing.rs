@@ -250,7 +250,7 @@ pub fn markings(lib: &Library, c: &City, area: [f64; 4]) -> Vec<(String, Vec<ren
                 let p = [a[0] + ux * t + nx * (off + side * w), a[1] + uz * t + nz * (off + side * w)];
                 let y = c.terrain.at(p[0], p[1]) + 0.17;
                 let (u, v) = if across_u { ((side + 0.5) * w / tile, t / tile) } else { (t / tile, side + 0.5) };
-                m.0.push(render::TexVertex { pos: [p[0] as f32, y as f32, p[1] as f32], nrm: [0.0, 1.0, 0.0], uv: [u as f32, v as f32], tan: [ux as f32, 0.0, uz as f32, 1.0] });
+                m.0.push(render::TexVertex { pos: [p[0] as f32, y as f32, p[1] as f32], nrm: [0.0, 1.0, 0.0], uv: [u as f32, v as f32], tan: [ux as f32, 0.0, uz as f32, 1.0], edge: [0.0; 4] });
             }
         }
         for k in 0..steps as u32 {

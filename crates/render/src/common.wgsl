@@ -16,6 +16,8 @@ struct Globals {
     probe_pos: vec4f,    // w: radiance decode scale
     gi_min: vec4f,       // GI volume origin, w: cell size
     gi_dim: vec4f,       // GI volume cells, w: enabled
+    prev_vp: mat4x4f,    // previous frame (screen-space reflection history)
+    prev_eye: vec4f,     // w: SSR enabled
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;

@@ -3,7 +3,7 @@
 //! polished concrete with carpet under open-plan desk benches, glass meeting rooms against the blind wall, a kitchen
 //! by the core, and (ground floor) a café with a bar.
 use super::furnish::Furnisher;
-use super::geom::{Geo, Key, Mat};
+use super::geom::{wear, Geo, Key, Mat};
 use super::m;
 use super::plan::{Core, Rect};
 use glam::{Vec2, Vec3};
@@ -29,11 +29,11 @@ fn ins(k: Key) -> Key {
 }
 /// Old-growth heavy timber, darkened with age; grain stretched to suit big members.
 fn timber() -> Key {
-    ins(Key::new(Mat::Surface(TREATED), [0.42, 0.28, 0.19]).tile(0.9).rough(0.85))
+    ins(Key::new(Mat::Surface(TREATED), [0.42, 0.28, 0.19]).tile(0.9).rough(0.85).wear(wear::WOOD))
 }
 /// Rough-sawn columns, darker and oilier than the beams (as in the photos).
 fn column_timber() -> Key {
-    ins(Key::new(Mat::Surface(TREATED), [0.24, 0.16, 0.115]).tile(1.1).rough(0.5))
+    ins(Key::new(Mat::Surface(TREATED), [0.24, 0.16, 0.115]).tile(1.1).rough(0.8).wear(wear::WOOD))
 }
 /// Plank deck seen from below: dark aged boards (as in the photos).
 fn deck() -> Key {
@@ -52,7 +52,7 @@ fn white() -> Key {
     ins(Key::new(Mat::Plain(200), [0.82, 0.82, 0.8]))
 }
 fn black() -> Key {
-    ins(Key::new(Mat::Plain(120), [0.025, 0.025, 0.028]))
+    ins(Key::new(Mat::Plain(120), [0.025, 0.025, 0.028]).wear(wear::METAL))
 }
 fn galv() -> Key {
     ins(Key::new(Mat::Plain(55), [0.26, 0.27, 0.28]))

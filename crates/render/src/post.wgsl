@@ -100,8 +100,14 @@ fn fs_ao(i: FsIn) -> @location(0) vec4f {
     return vec4f(ao, ao, ao, 1.0);
 }
 
+struct CompositeOut {
+    @location(0) color: vec4f,
+    // reflection history for the next frame: display colour, linear distance from the eye (sky: far)
+    @location(1) hist: vec4f,
+};
+
 @fragment
-fn fs_composite(i: FsIn) -> @location(0) vec4f {
+fn fs_composite(i: FsIn) -> CompositeOut {
     let px = vec2i(i.pos.xy);
     let col = textureLoad(t_scene, px, 0);
     let s = vec2i(dims());
@@ -121,5 +127,9 @@ fn fs_composite(i: FsIn) -> @location(0) vec4f {
     let ao = sum / max(wsum, 1e-4);
     // multiply in display space; keep a floor so lit faces don't go muddy
     let k = mix(0.25, 1.0, ao);
-    return vec4f(col.rgb * k, col.a);
+    let w = world_at(px);
+    var o: CompositeOut;
+    o.color = vec4f(col.rgb * k, col.a);
+    o.hist = vec4f(col.rgb * k, select(length(w.xyz - g.eye.xyz), 1e5, w.w >= 1.0));
+    return o;
 }

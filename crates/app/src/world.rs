@@ -18,7 +18,7 @@ impl Base {
                 continue;
             }
             if crate::library::slot_surface(slot).is_some() {
-                let tv = (0..m.pos.len()).map(|i| render::TexVertex { pos: m.pos[i], nrm: m.nrm[i], uv: m.uv[i], tan: m.tan[i] }).collect();
+                let tv = (0..m.pos.len()).map(|i| render::TexVertex { pos: m.pos[i], nrm: m.nrm[i], uv: m.uv[i], tan: m.tan[i], edge: [0.0; 4] }).collect();
                 slots.push((slot, tv, m.idx));
             } else {
                 let b = verts.len() as u32;

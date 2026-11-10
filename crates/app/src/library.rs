@@ -125,7 +125,7 @@ impl Library {
             return Some(m.clone());
         }
         let parts = assets::load_mesh(&self.out, id).ok()?;
-        let m: Arc<Vec<(Vec<TexVertex>, [Vec<u32>; 3])>> = Arc::new(parts.into_iter().map(|p| { let [l1, l2] = p.lods; (p.verts.iter().map(|v| TexVertex { pos: v.pos, nrm: v.nrm, uv: v.uv, tan: v.tan }).collect(), [p.idx, l1, l2]) }).collect());
+        let m: Arc<Vec<(Vec<TexVertex>, [Vec<u32>; 3])>> = Arc::new(parts.into_iter().map(|p| { let [l1, l2] = p.lods; (p.verts.iter().map(|v| TexVertex { pos: v.pos, nrm: v.nrm, uv: v.uv, tan: v.tan, edge: [0.0; 4] }).collect(), [p.idx, l1, l2]) }).collect());
         self.meshes.insert(id.to_string(), m.clone());
         Some(m)
     }
@@ -215,7 +215,7 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
     }
     let mut out = vec![];
     if !glass.is_empty() {
-        let q = |x: f32, y: f32| TexVertex { pos: [x, y, 0.0], nrm: [0.0, 0.0, 1.0], uv: [x + 0.5, 1.0 - y], tan: [1.0, 0.0, 0.0, 1.0] };
+        let q = |x: f32, y: f32| TexVertex { pos: [x, y, 0.0], nrm: [0.0, 0.0, 1.0], uv: [x + 0.5, 1.0 - y], tan: [1.0, 0.0, 0.0, 1.0], edge: [0.0; 4] };
         let mat = lib.glass(gpu, r);
         out.extend(Batch::new(gpu, &[q(-0.5, 0.0), q(0.5, 0.0), q(0.5, 1.0), q(-0.5, 1.0)], &[0, 1, 2, 0, 2, 3], &glass, mat));
     }

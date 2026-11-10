@@ -276,12 +276,12 @@ pub fn gallery(cx: &mut Ctx, group: &str, w: u32, h: u32, fit: bool) -> (RgbaIma
         let tile = lib.catalog.get(&id).and_then(|a| a.tile_m).map_or(2.0, |t| t[0]);
         let m = lib.material(&cx.gpu, &cx.renderer, &id);
         let (x, z) = (x as f32, z as f32);
-        let q = |dx: f32, dz: f32| render::TexVertex { pos: [x + dx, y0 as f32 + 0.01 + (1.1 - dz) * 0.5, z + dz], nrm: [0.0, 0.894, 0.447], uv: [dx + 1.1, dz + 1.1], tan: [1.0, 0.0, 0.0, 1.0] };
+        let q = |dx: f32, dz: f32| render::TexVertex { pos: [x + dx, y0 as f32 + 0.01 + (1.1 - dz) * 0.5, z + dz], nrm: [0.0, 0.894, 0.447], uv: [dx + 1.1, dz + 1.1], tan: [1.0, 0.0, 0.0, 1.0], edge: [0.0; 4] };
         batches.extend(render::Batch::new(&cx.gpu, &[q(-1.1, -1.1), q(1.1, -1.1), q(1.1, 1.1), q(-1.1, 1.1)], &[0, 2, 1, 0, 3, 2], &[render::Instance::new(glam::Mat4::IDENTITY, [1.0; 3], 1.0 / tile)], m));
     }
     // grey platform with a 1 m grid line pattern via the plain material
     let (gw, gd) = (cols as f32 * cell as f32, rows as f32 * cell as f32);
-    let q = |x: f32, z: f32| render::TexVertex { pos: [x - cell as f32 / 2.0, y0 as f32 - 0.01, z - cell as f32 / 2.0], nrm: [0.0, 1.0, 0.0], uv: [x, z], tan: [1.0, 0.0, 0.0, 1.0] };
+    let q = |x: f32, z: f32| render::TexVertex { pos: [x - cell as f32 / 2.0, y0 as f32 - 0.01, z - cell as f32 / 2.0], nrm: [0.0, 1.0, 0.0], uv: [x, z], tan: [1.0, 0.0, 0.0, 1.0], edge: [0.0; 4] };
     let plain = std::sync::Arc::new(render::Material::plain(&cx.gpu, &cx.renderer, 200));
     batches.extend(render::Batch::new(&cx.gpu, &[q(0.0, 0.0), q(gw, 0.0), q(gw, gd), q(0.0, gd)], &[0, 2, 1, 0, 3, 2], &[render::Instance::new(glam::Mat4::IDENTITY, [0.5, 0.5, 0.5], 1.0)], plain));
     let centre = glam::Vec3::new(gw / 2.0 - cell as f32 / 2.0, y0 as f32, gd / 2.0);
