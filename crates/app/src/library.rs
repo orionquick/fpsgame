@@ -186,6 +186,7 @@ pub fn placement_matrix(a: &Asset, part: usize, p: &Placement) -> glam::Mat4 {
 pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[Placement]) -> Vec<Batch> {
     let mut groups: HashMap<(String, usize, u8), Vec<Instance>> = HashMap::new();
     let mut part_mat: HashMap<(String, usize), String> = HashMap::new();
+    let mut glass_parts: HashMap<(String, usize), Vec<Instance>> = HashMap::new();
     let indoor = |p: &Placement| if p.indoor { [0.0, INDOOR_AMBIENT, INDOOR_LAMP, 0.0] } else { [0.0; 4] };
     let mut glass = vec![];
     for p in placements {
@@ -201,6 +202,12 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
         let m = placement_matrix(&a, p.part, p);
         let parts: Vec<usize> = if p.part == ALL_PARTS { (0..a.parts.len()).collect() } else { vec![p.part.min(a.parts.len() - 1)] };
         for part in parts {
+            // glass materials in models go to the transparent pass
+            let is_glass = a.parts[part].material.and_then(|m| a.materials.get(m)).is_some_and(|m| m.glass);
+            if is_glass {
+                glass_parts.entry((p.asset.clone(), part)).or_default().push(Instance::new(m, [0.85, 0.88, 0.88], 1.0));
+                continue;
+            }
             let key = a.parts[part].material.filter(|_| !a.materials.is_empty()).map_or(a.id.clone(), |m| format!("{}#{m}", a.id));
             part_mat.insert((p.asset.clone(), part), key);
             groups.entry((p.asset.clone(), part, p.lod.min(2))).or_default().push(Instance::new(m, p.tint, 1.0).with_params(indoor(p)));
@@ -211,6 +218,13 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
         let q = |x: f32, y: f32| TexVertex { pos: [x, y, 0.0], nrm: [0.0, 0.0, 1.0], uv: [x + 0.5, 1.0 - y], tan: [1.0, 0.0, 0.0, 1.0] };
         let mat = lib.glass(gpu, r);
         out.extend(Batch::new(gpu, &[q(-0.5, 0.0), q(0.5, 0.0), q(0.5, 1.0), q(-0.5, 1.0)], &[0, 1, 2, 0, 2, 3], &glass, mat));
+    }
+    for ((id, part), inst) in glass_parts {
+        let Some(mesh) = lib.mesh(&id) else { continue };
+        let mat = lib.glass(gpu, r);
+        if let Some((v, lists)) = mesh.get(part) {
+            out.extend(Batch::new(gpu, v, &lists[0], &inst, mat).map(|b| b.transparent()));
+        }
     }
     let ids: Vec<String> = part_mat.values().cloned().collect();
     lib.preload(gpu, r, &ids);

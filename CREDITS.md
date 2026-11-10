@@ -44,3 +44,18 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Chalkboard menu stand" by sdonyxz, CC Attribution, https://sketchfab.com/3d-models/3f0da232c28d4825a5037f82a7ba6aee
 - "The ultimate glass pack (cups and bottles)" by Helindu, CC Attribution, https://sketchfab.com/3d-models/1ea37815fb0145e49487386d6924b341
 - "Glass Bottles" by FrodoUndead, CC Attribution, https://sketchfab.com/3d-models/334377879cb4475d9a4720a2f7c4cf55
+- "Coffee Latte In Mug With Saucer" by HQ3DMOD, CC Attribution, https://sketchfab.com/3d-models/9d2b96b5e3aa4bc69611975b3eb0b1fb
+- "Cup and Saucer" by stealth86, CC Attribution, https://sketchfab.com/3d-models/c87d04d6099340f1851360a5ba22b3dd
+- "Cup of Coffee" by JoeDev, CC Attribution, https://sketchfab.com/3d-models/294c5f6a0dc94b808340c0b6654bcae5
+- "Laptop (FREE)" by Brandon Westlake, Free Standard, https://sketchfab.com/3d-models/a651092825974fc5a405129d4f50a7d2
+- "Napkin Holder" by Pablo Marquez, CC Attribution, https://sketchfab.com/3d-models/46c7d789b0a248f7947f002fc3a26a80
+- "Coffee Grinder" by SpatialNeglect, CC Attribution, https://sketchfab.com/3d-models/bcdd3c1ba9a04ec1b18b334fabe03190
+- "Coffee Grinder, PBR" by Omar Faruq Tawsif, CC Attribution, https://sketchfab.com/3d-models/2aff2683d357453ab534dc55f3edf735
+- "Paintings and Posters Collection - Game Ready" by Melon Polygons, CC Attribution, https://sketchfab.com/3d-models/2bc72a05095c485ab7bc09a6b7b78d93
+- "Neon Signs" by Shalmon, CC Attribution, https://sketchfab.com/3d-models/307e887d740649f88fbc77b061f3a742
+- "Hanging Pothos" by Chocolate Dogg, CC Attribution, https://sketchfab.com/3d-models/9b961b9aab1443a2a14b81de726e6d5f
+- "Hanging Plants Pack (LODs, game-ready)" by LOLIPOP, CC Attribution, https://sketchfab.com/3d-models/4adf9301069143ba8a855a451dc5b476
+- "Monstera Deliciosa Potted Mid-Century plant" by Giora, CC Attribution, https://sketchfab.com/3d-models/1ab9bf841df04c07b1819be596327629
+- "Tropical Plants Pack M02P" by MozzarellaARC, CC Attribution, https://sketchfab.com/3d-models/2f093afb792742438f0f7ba7eaab90f0
+- "Ficus Lyrata - Plants" by LadyCris, CC Attribution, https://sketchfab.com/3d-models/161df9b2f7124549a2cfa4c33104046e
+- "Indoor Plants" by Visthétique, CC Attribution, https://sketchfab.com/3d-models/efe25daceaf940f5aa8519b9d77683d2

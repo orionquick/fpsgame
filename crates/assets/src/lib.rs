@@ -52,6 +52,9 @@ pub struct Maps {
     pub rough_factor: Option<f32>,
     #[serde(default)]
     pub metal_factor: Option<f32>,
+    /// Transparent glazing (glTF blend mode, low alpha or named glass): drawn in the glass pass.
+    #[serde(default)]
+    pub glass: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -237,6 +240,8 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
         o.remove("extensionsRequired");
         o.remove("extensionsUsed");
     }
+    // transmissive (glass) materials, noted before their extensions are stripped
+    let transmissive: Vec<bool> = v["materials"].as_array().map_or(vec![], |a| a.iter().map(|m| m["extensions"].get("KHR_materials_transmission").is_some()).collect());
     for m in v["materials"].as_array_mut().into_iter().flatten() {
         if let Some(o) = m.as_object_mut() {
             o.remove("extensions");
@@ -347,7 +352,11 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
             let mr = uri(pbr.metallic_roughness_texture().map(|t| t.texture()));
             let occ = uri(mt.occlusion_texture().map(|t| t.texture()));
             let packed = mr.is_some() && mr == occ;
+            let name = mt.name().unwrap_or("").to_lowercase();
+            let trans = mt.index().and_then(|i| transmissive.get(i).copied()).unwrap_or(false);
+            let glass = trans || mt.alpha_mode() == gltf::material::AlphaMode::Blend && pbr.base_color_factor()[3] < 0.95 || pbr.base_color_factor()[3] < 0.6 || name.contains("glass") || name.contains("bottle");
             Maps {
+                glass,
                 base: uri(pbr.base_color_texture().map(|t| t.texture())),
                 normal: uri(mt.normal_texture().map(|t| t.texture())),
                 orm: mr.clone(),
@@ -388,6 +397,15 @@ const SCALE: &[(&str, f32)] = &[
     ("sf_221f20f292", 0.5),  // Willoughsby Espresso Machine
     ("sf_a1961b9e5a", 0.8),  // Wooden Back Bar Cabinet
     ("sf_61275205fe", 0.2),  // Dining Set Scandinavian Style
+    ("sf_bcdd3c1ba9", 0.025), // Coffee Grinder
+    ("sf_2aff2683d3", 0.35), // Coffee Grinder, PBR
+    ("sf_9d2b96b5e3", 0.0145), // Coffee Latte In Mug With Saucer
+    ("sf_294c5f6a0d", 1.8),  // Cup of Coffee
+    ("sf_9b961b9aab", 0.05), // Hanging Pothos
+    ("sf_a651092825", 0.0008), // Laptop (FREE)
+    ("sf_46c7d789b0", 0.06), // Napkin Holder
+    ("sf_307e887d74", 0.035), // Neon Signs
+    ("sf_2bc72a0509", 0.1),  // Paintings and Posters Collection
 ];
 
 fn rescale(parts: &mut [MeshPart], infos: &mut [Part], k: f32) {

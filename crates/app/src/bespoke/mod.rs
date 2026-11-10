@@ -59,11 +59,18 @@ fn k(mat: &'static str, tint: [f32; 3]) -> Key {
 /// One floor of interior: partitions with doors, floor finishes, dropped ceiling with light panels, door leaves.
 /// `y` is the finished floor level, `ceil` the ceiling height above it.
 /// `loft`: open timber-ceilinged floor: painted core walls, polished concrete, ceilings only inside the core.
-pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool) {
+/// `wood_core`: clad the core in dark timber (the cafe floor), else painted.
+pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool, wood_core: bool) {
     let white = [1.4, 1.4, 1.36];
     for (n, w) in p.walls.iter().enumerate() {
         let (mat, t, tint) = if w.core { (m::CORE_WALL, CORE_T, [1.05, 1.06, 1.08]) } else { (m::DRYWALL, PARTITION_T, white) };
-        let key = if loft && w.core { Key::new(Mat::Plain(215), [0.8, 0.79, 0.76]).inside() } else { k(mat, tint) };
+        let key = if loft && w.core && wood_core {
+            Key::new(Mat::Surface("pht_dark_wooden_planks"), [1.1, 1.0, 0.95]).inside()
+        } else if loft && w.core {
+            Key::new(Mat::Plain(215), [0.8, 0.79, 0.76]).inside()
+        } else {
+            k(mat, tint)
+        };
         let d = w.b - w.a;
         let l = d.length();
         if l < 0.05 {

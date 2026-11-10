@@ -300,8 +300,8 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         let clear = loft::Spec::clear(h);
         let holes = if k == 0 { vec![] } else { vec![stair_hole(core.stair), core.elevator] };
         slab(&mut g, inner, y, if k == 0 { 0.3 } else { 0.09 }, &holes);
-        interior(&mut g, &ground, y, clear, 10 + k as u64, true);
-        loft::structure(&mut g, &spec, y, h, k as u64);
+        interior(&mut g, &ground, y, clear, 10 + k as u64, true, k == 0);
+        loft::structure(&mut g, &spec, y, h, k as u64, k != 0);
         if k + 1 < LEVELS.len() {
             stair(&mut g, core.stair, y, LEVELS[k + 1].0 - y);
         }
@@ -319,6 +319,8 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
             let cafe = Rect::new(T + 0.9, T + 5.0, spec.cols[1] - 0.6, d - T - 1.0);
             let bar = Rect::new(core.r.x0 - 1.0, core.r.z1 + 0.6, w - T, d - T - 0.6);
             loft::cafe(&mut g, &mut fur, cafe, bar, y, clear);
+            // a poster wall on the timber-clad core facing the room
+            fur.put(&mut g, "sf_2bc72a0509", v(core.r.x0 - 0.2, core.r.z0 + 6.8), y + 1.1, v(-1.0, 0.0), false);
             reserved.push(cafe);
             reserved.push(bar);
             fur.put(&mut g, "ph_sofa_03", v(4.6, 1.1), y, v(0.0, 1.0), true);

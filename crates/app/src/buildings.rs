@@ -119,6 +119,25 @@ pub struct Stats {
 /// Prefab placements for every building. `focus` is the area that gets full detail; distant buildings use
 /// the same pieces on a coarser grid.
 pub fn build(lib: &Library, c: &City, focus: [f64; 4]) -> (Vec<Placement>, Stats) {
+    let (mut out, st) = build_all(lib, c, focus);
+    // nothing from the generic assembler may poke into a hand-built building (balconies on shared walls)
+    let rings: Vec<&Vec<[f64; 2]>> = c.buildings.iter().filter(|b| crate::bespoke::OSM_IDS.contains(&b.osm.as_str())).map(|b| &b.outer).collect();
+    let inside = |p: [f64; 2], r: &[[f64; 2]]| {
+        let mut c = false;
+        let n = r.len();
+        for i in 0..n {
+            let (a, b) = (r[i], r[(i + 1) % n]);
+            if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+                c = !c;
+            }
+        }
+        c
+    };
+    out.retain(|pl| !rings.iter().any(|r| inside([pl.x, pl.z], r)));
+    (out, st)
+}
+
+fn build_all(lib: &Library, c: &City, focus: [f64; 4]) -> (Vec<Placement>, Stats) {
     let mut out = vec![];
     let mut st = Stats { buildings: 0, pieces: 0, tris: 0 };
     let roof_tile = piece(lib, "Urban Modular Building Roof Set", 2, 0, false).or_else(|| piece(lib, "Modular Building Flat Roof Kit", 1, 0, false));

@@ -78,7 +78,8 @@ impl Spec {
 }
 
 /// The structure over a floor at `y` (storey `h`): deck, joists, girders, columns, ducts, sprinklers, lights.
-pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64) {
+/// `office_lights`: hang the linear LED pendants (the cafe floor uses warm pendants instead).
+pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights: bool) {
     let (x0, x1, z0, z1) = (s.t, s.w - s.t, s.t, s.d - s.t);
     let top = y + h; // top of the deck above = next finished floor
     let deck_b = top - DECK;
@@ -152,7 +153,7 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64) {
     // linear LED pendants in rows across the bays (between girders), on two cables each
     let lamp_y = y + 2.75;
     let glow = Key::new(Mat::Light, [1.0, 0.95, 0.86]);
-    for k in 0..lines.len() - 1 {
+    for k in 0..if office_lights { lines.len() - 1 } else { 0 } {
         let zm = (lines[k] + lines[k + 1]) / 2.0;
         for row in [-1.0f32, 1.0] {
             let z = zm + row * (lines[k + 1] - lines[k]) * 0.24;
@@ -565,7 +566,7 @@ pub fn cafe(g: &mut Geo, f: &mut Furnisher, area: Rect, bar: Rect, y: f32, clear
         let h = f.bounds(PENDANT).map_or(1.25, |(a, b)| b[1] - a[1]);
         let top = y + clear;
         f.put(g, PENDANT, p, top - h, Vec2::Y, false);
-        g.light(Vec3::new(p.x, top - h - 0.05, p.y), 4.0, [2.0, 1.4, 0.8]);
+        g.light(Vec3::new(p.x, top - h - 0.05, p.y), 5.0, [2.6, 1.7, 0.9]);
     };
     // communal table down the middle
     let c = area.centre();
@@ -585,6 +586,10 @@ pub fn cafe(g: &mut Geo, f: &mut Furnisher, area: Rect, bar: Rect, y: f32, clear
     for k in [-0.33f32, 0.0, 0.33] {
         hang(g, f, c + axis * tl * k);
     }
+    for k in 0..6 {
+        let a = (k as f32 - 2.5) * 0.7;
+        table_clutter(g, f, c + axis * a + across * (if k % 2 == 0 { 0.25 } else { -0.25 }), y + 0.75, 0.12);
+    }
     // bistro tables for two to four in staggered rows either side
     let half_len = if axis == Vec2::Y { area.d() } else { area.w() } / 2.0 - 1.4;
     let half_wid = if axis == Vec2::Y { area.w() } else { area.d() } / 2.0;
@@ -603,6 +608,11 @@ pub fn cafe(g: &mut Geo, f: &mut Furnisher, area: Rect, bar: Rect, y: f32, clear
                 let p = c + axis * (a + (f.rand() - 0.5) * 0.3) + across * s * (off + (f.rand() - 0.5) * 0.25);
                 let turn = Vec2::from_angle(f.rand() * 6.28);
                 f.put(g, TABLE, p, y, turn, true);
+                // darker oiled tops, as in the comparison photos
+                if let Some(t) = f.out.last_mut() {
+                    t.tint = [0.55, 0.45, 0.4];
+                }
+                table_clutter(g, f, p, y + 0.75, 0.3);
                 let seats = 2 + (f.rand() * 2.2) as i32;
                 let start = f.rand() * 6.28;
                 for k in 0..seats {
@@ -625,16 +635,59 @@ pub fn cafe(g: &mut Geo, f: &mut Furnisher, area: Rect, bar: Rect, y: f32, clear
     let bc = Vec2::new(back_x, bar.centre().y);
     f.put(g, "sf_a1961b9e5a", bc, y, Vec2::NEG_X, true);
     let counter = Vec2::new(bar.x1 - 2.5, bar.centre().y);
-    f.put(g, "sf_e3fe539054", counter, y, Vec2::NEG_X, true);
+    // the counter's stools are on its -Z side: turn that toward the room (west)
+    f.put(g, "sf_e3fe539054", counter, y, Vec2::X, true);
     f.put(g, "sf_bab05bc780", counter + Vec2::new(0.35, -0.9), y + 1.1, Vec2::NEG_X, false);
     f.put(g, "sf_221f20f292", counter + Vec2::new(0.35, 0.6), y + 1.1, Vec2::NEG_X, false);
-    for (k, dz) in [-1.6f32, -0.4, 0.8].iter().enumerate() {
-        let h = if k % 2 == 0 { 1.25 } else { 1.65 };
-        f.put(g, "sf_334377879c", bc + Vec2::new(-0.15, *dz), y + h, Vec2::NEG_X, false);
+    // stock the back bar: rows of bottles and glasses from the glassware pack on its shelves
+    let bottles: Vec<String> = (0..40).map(|k| format!("sf_1ea37815fb_{k:02}")).collect();
+    for shelf in [0.9f32, 1.3, 1.7, 2.1] {
+        let mut z = -2.1f32;
+        while z < 2.1 {
+            let id = &bottles[(f.rand() * bottles.len() as f32) as usize % bottles.len()];
+            let turn = Vec2::from_angle(f.rand() * 6.28);
+            let dx = -0.12 + (f.rand() - 0.5) * 0.08;
+            f.put(g, id, bc + Vec2::new(dx, z), y + shelf, turn, false);
+            z += 0.09 + f.rand() * 0.08;
+        }
     }
+    f.put(g, "sf_334377879c", bc + Vec2::new(-0.2, 1.4), y + 0.86, Vec2::NEG_X, false);
     for dz in [-1.2f32, 0.0, 1.2] {
         hang(g, f, counter + Vec2::new(-0.3, dz));
     }
-    // a chalkboard by the door
-    f.put(g, "sf_3f0da232c2", Vec2::new(area.x0 + 0.6, area.z1 - 0.8), y, Vec2::from_angle(0.3), false);
+    // grinders and cups on the counter
+    f.put(g, "sf_2aff2683d3", counter + Vec2::new(0.4, -0.2), y + 1.1, Vec2::NEG_X, false);
+    for k in 0..5 {
+        let p = counter + Vec2::new(0.25 + (f.rand() - 0.5) * 0.2, 0.15 + k as f32 * 0.14);
+        let turn = Vec2::from_angle(f.rand() * 6.28);
+        f.put(g, "sf_c87d04d609", p, y + 1.1, turn, false);
+    }
+    // a chalkboard by the door, display shelves with plants and a framed poster wall on the core side
+    f.put(g, "ph_standing_chalkboard_01", Vec2::new(area.x0 + 0.7, area.z1 - 0.9), y, Vec2::from_angle(0.4), false);
+    f.put(g, "ph_wooden_display_shelves_01", Vec2::new(bar.x0 + 0.3, bar.z0 + 0.4), y, Vec2::Y, true);
+    // plants: big ones along the window walls and corners, hanging pothos off the joists
+    let big = ["sf_1ab9bf841d", "sf_161df9b2f7", "sf_efe25dacea", "sf_0ee05be48d"];
+    let spots = [Vec2::new(area.x0 + 0.5, area.z0 + 0.6), Vec2::new(area.x0 + 0.5, area.centre().y), Vec2::new(area.x1 - 0.5, area.z1 - 0.6), Vec2::new(area.x1 - 0.5, area.z0 + 0.6), Vec2::new(bar.x0 + 0.5, bar.z1 - 0.5)];
+    for (k, p) in spots.iter().enumerate() {
+        let turn = Vec2::from_angle(f.rand() * 6.28);
+        f.put(g, big[k % big.len()], *p, y, turn, false);
+    }
+    for k in 0..5 {
+        let p = Vec2::new(area.x0 + 1.0 + f.rand() * 0.8, area.z0 + 2.0 + k as f32 * (area.d() - 4.0) / 4.0);
+        let h = f.bounds("sf_9b961b9aab").map_or(1.0, |(a, b)| b[1] - a[1]);
+        let turn = Vec2::from_angle(f.rand() * 6.28);
+        f.put(g, "sf_9b961b9aab", p, y + clear - h, turn, false);
+    }
+}
+
+/// Things on a cafe table: a cup or two, sometimes a laptop or a latte.
+fn table_clutter(g: &mut Geo, f: &mut Furnisher, p: Vec2, top: f32, spread: f32) {
+    let n = (f.rand() * 3.0) as i32;
+    for _ in 0..n {
+        let r = f.rand();
+        let id = if r < 0.4 { "sf_c87d04d609" } else if r < 0.7 { "sf_294c5f6a0d" } else if r < 0.85 { "sf_9d2b96b5e3" } else { "sf_a651092825" };
+        let off = Vec2::from_angle(f.rand() * 6.28) * (f.rand() * spread);
+        let turn = Vec2::from_angle(f.rand() * 6.28);
+        f.put(g, id, p + off, top, turn, false);
+    }
 }
