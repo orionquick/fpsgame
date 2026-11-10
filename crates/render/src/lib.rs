@@ -105,6 +105,8 @@ struct Globals {
     /// Screen-space reflections: the previous frame's view-projection and eye (w: SSR on).
     prev_vp: [[f32; 4]; 4],
     prev_eye: [f32; 4],
+    /// Camera white balance (rgb multipliers before the tonemap).
+    white: [f32; 4],
 }
 
 pub struct Camera {
@@ -163,6 +165,8 @@ pub struct PointLight {
 }
 
 pub const MAX_LIGHTS: usize = 128;
+/// Afternoon sunlight (linear, intensity folded in): warm, as in the reference photos.
+pub const SUN_COL: [f32; 3] = [3.5, 3.0, 2.4];
 /// Screen-space reflection history: display colour + linear eye distance.
 const HIST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const PROBE_RES: u32 = 256;
@@ -197,6 +201,7 @@ pub struct Renderer {
     probe: std::cell::Cell<[[f32; 4]; 3]>,
     encode: std::cell::Cell<f32>,
     exposure: std::cell::Cell<f32>,
+    white: std::cell::Cell<[f32; 3]>,
     bind: wgpu::BindGroup,
     far: Cascade,
     near: Cascade,
@@ -454,7 +459,7 @@ impl Renderer {
             None,
             Default::default(),
         );
-        Self { hist_bgl, gi, probe_tex, probe_down, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
+        Self { hist_bgl, gi, probe_tex, probe_down, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), white: std::cell::Cell::new([1.0; 3]), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
     }
 
     /// Renders a reflection probe at `pos` for the box `min`..`max` (world): six 90-degree faces, then a blurred mip
@@ -524,6 +529,11 @@ impl Renderer {
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         self.gi.iterate(&mut enc, n);
         gpu.queue.submit([enc.finish()]);
+    }
+
+    /// Camera white balance: interiors lit by blue skylight through windows are warmed, as a camera would.
+    pub fn set_white_balance(&self, rgb: [f32; 3]) {
+        self.white.set(rgb);
     }
 
     /// Camera exposure (1 = outdoor daylight; interiors are exposed brighter, as a camera would).
@@ -599,7 +609,7 @@ impl Renderer {
             light_near: ln.to_cols_array_2d(),
             inv_view_proj: cam.view_proj.inverse().to_cols_array_2d(),
             sun_dir: [self.sun_dir.x, self.sun_dir.y, self.sun_dir.z, self.exposure.get()],
-            sun_col: v4(3.4, 3.1, 2.75, 0.0),
+            sun_col: v4(SUN_COL[0], SUN_COL[1], SUN_COL[2], 0.0),
             sky_zenith: v4(0.16, 0.34, 0.78, 0.0),
             sky_horizon: v4(0.62, 0.74, 0.90, 0.0),
             ground_col: v4(0.42, 0.37, 0.30, 0.0),
@@ -615,6 +625,10 @@ impl Renderer {
                 let (_, e, valid) = t.prev.get();
                 let on = valid && self.encode.get() == 0.0 && std::env::var("FPS_NO_SSR").is_err();
                 [e.x, e.y, e.z, if on { 1.0 } else { 0.0 }]
+            },
+            white: {
+                let w = self.white.get();
+                [w[0], w[1], w[2], 0.0]
             },
         };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&gl));

@@ -121,9 +121,23 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
         cx.renderer.gi.upload(&cx.gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, true);
         let steps = std::env::var("FPS_GI_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(2000);
         cx.renderer.gi_iterate(&cx.gpu, steps);
+        let _ = cx.gpu.device.poll(render::wgpu_reexport::PollType::wait_indefinitely());
+        if std::env::var("FPS_GI_DEBUG").is_ok() {
+            let (mut mn, mut mx) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+            for t in &cx.gi_tris {
+                for p in t.p {
+                    mn = mn.min(p);
+                    mx = mx.max(p);
+                }
+            }
+            eprintln!("gi: bespoke bounds {mn} .. {mx}");
+        }
         eprintln!("gi: voxelized {} tris + {steps} steps in {:.2}s", cx.gi_tris.len(), t0.elapsed().as_secs_f32());
     } else {
         cx.renderer.gi.disable();
+    }
+    if std::env::var("FPS_GI_DEBUG").is_ok() {
+        eprintln!("eye {} probes {:?}", cam.eye, cx.probes);
     }
     // bake the reflection probe of the room the camera is in (lights set for the capture point first)
     match cx.probes.iter().find(|p| cam.eye.cmpge(p[1]).all() && cam.eye.cmple(p[2]).all()) {
@@ -131,11 +145,13 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
             cx.renderer.set_exposure(1.0);
             cx.renderer.set_lights(&cx.gpu, &cx.lights, p[0]);
             cx.renderer.bake_probe(&cx.gpu, &cx.scene, &batches, p[0], p[1], p[2]);
-            cx.renderer.set_exposure(std::env::var("FPS_EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(if cx.renderer.gi.enabled() { 4.5 } else { 2.2 }));
+            cx.renderer.set_exposure(std::env::var("FPS_EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(if cx.renderer.gi.enabled() { crate::INTERIOR_EXPOSURE } else { 2.2 }));
+            cx.renderer.set_white_balance(crate::INTERIOR_WHITE);
         }
         _ => {
             cx.renderer.clear_probe();
             cx.renderer.set_exposure(1.0);
+            cx.renderer.set_white_balance([1.0; 3]);
         }
     }
     cx.renderer.set_lights(&cx.gpu, &cx.lights, cam.eye);

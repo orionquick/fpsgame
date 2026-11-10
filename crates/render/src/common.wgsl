@@ -18,6 +18,7 @@ struct Globals {
     gi_dim: vec4f,       // GI volume cells, w: enabled
     prev_vp: mat4x4f,    // previous frame (screen-space reflection history)
     prev_eye: vec4f,     // w: SSR enabled
+    white: vec4f,        // camera white balance
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -51,8 +52,14 @@ fn gi_sample(world: vec3f, n: vec3f) -> vec4f {
     if (w <= 0.0) {
         return vec4f(0.0);
     }
-    // light travelling along +x hits surfaces facing -x, etc.
-    let wts = array<f32, 6>(max(-n.x, 0.0), max(n.x, 0.0), max(-n.y, 0.0), max(n.y, 0.0), max(-n.z, 0.0), max(n.z, 0.0));
+    // light travelling along +x hits surfaces facing -x, etc. Each direction's value is the mean over a 60-degree
+    // cone, so the side directions also carry slanting light that reaches the surface: a soft lobe (0.6 for the
+    // facing direction, 0.1 for each side one; a uniform field gives back its value).
+    let c = array<f32, 6>(-n.x, n.x, -n.y, n.y, -n.z, n.z);
+    var wts: array<f32, 6>;
+    for (var d = 0; d < 6; d++) {
+        wts[d] = select(0.0, 0.1 + 0.5 * c[d] * c[d], c[d] > -0.05);
+    }
     let nz = g.gi_dim.z;
     // four taps a cell apart across the surface soften the voxel structure
     let t1 = normalize(select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(n.x) > 0.7) - n * dot(n, select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(n.x) > 0.7)));
@@ -191,7 +198,7 @@ fn tonemap(c: vec3f) -> vec3f {
     if (g.misc.w > 0.0) {
         return clamp(c * g.misc.w, vec3f(0.0), vec3f(1.0));
     }
-    let x = c * g.sun_dir.w;
+    let x = c * g.sun_dir.w * g.white.rgb;
     let a = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0));
     let l = dot(a, vec3f(0.2126, 0.7152, 0.0722));
     return clamp(mix(vec3f(l), a, 1.02), vec3f(0.0), vec3f(1.0));

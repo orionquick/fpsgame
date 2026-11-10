@@ -11,6 +11,13 @@ mod world;
 
 use std::path::PathBuf;
 
+/// Camera white balance indoors: the light is mostly bluish sky through windows, which a camera (or the eye)
+/// would neutralise; warm a little.
+pub const INTERIOR_WHITE: [f32; 3] = [1.0, 0.92, 0.76];
+/// Camera exposure indoors with GI: daylight inside a deep brick hall is a few percent of outdoors, so a camera
+/// opens up about four stops (windows and sun patches blow out, as in the reference photos).
+pub const INTERIOR_EXPOSURE: f32 = 18.0;
+
 pub fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
 }

@@ -233,7 +233,8 @@ fn stone_slabs(g: &mut Geo, r: plan::Rect, y: f32, seed: u64) {
     let grout = Key::new(Mat::Plain(200), [0.8, 0.79, 0.74]).inside();
     g.quad(grout, Vec3::new(r.x0, y - 0.002, r.z1), Vec3::X * r.w(), Vec3::NEG_Z * r.d());
     // the texture averages ~0.13 (dark, warm); honed light concrete is ~0.35-0.4
-    let tints = [[2.5, 2.8, 3.25], [2.65, 2.95, 3.4], [2.35, 2.65, 3.1], [2.55, 2.85, 3.2]];
+    // cream-grey (as in the photos): the texture is warm brown, so lift green and blue a little less than red
+    let tints = [[3.05, 3.3, 3.25], [3.2, 3.42, 3.35], [2.9, 3.15, 3.1], [3.12, 3.35, 3.22]];
     let nx = (r.w() / SLAB).ceil() as i32;
     let nz = (r.d() / SLAB).ceil() as i32;
     for i in 0..nx {
@@ -244,7 +245,7 @@ fn stone_slabs(g: &mut Geo, r: plan::Rect, y: f32, seed: u64) {
             let z1 = (z0 + SLAB).min(r.z1);
             let h = (i as u64) << 20 | j as u64;
             let t = tints[(rnd(seed, h) * 4.0) as usize % 4];
-            let key = Key::new(Mat::Surface("pht_brushed_concrete"), t).inside().tile(2.0).rough(0.6);
+            let key = Key::new(Mat::Surface("pht_brushed_concrete"), t).inside().tile(2.0).rough(0.8);
             let (a, b) = (x0 + if i > 0 { JOINT } else { 0.0 }, z0 + if j > 0 { JOINT } else { 0.0 });
             let (c, d) = (x1 - if x1 < r.x1 { JOINT } else { 0.0 }, z1 - if z1 < r.z1 { JOINT } else { 0.0 });
             let uv = [rnd(seed, h ^ 0xa1) * 7.0, rnd(seed, h ^ 0xb2) * 7.0];

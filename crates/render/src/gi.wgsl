@@ -27,6 +27,8 @@ const SPREAD: f32 = 0.14;
 // share of the light arriving along the perpendicular axes that turns into each direction (stands in for the
 // diagonal paths six axes can't carry)
 const TURN: f32 = 0.05;
+// just off a surface: half of the reflected light spreads sideways (Lambertian hemisphere)
+const NEAR_TURN: f32 = 0.5;
 
 // sky as in common.wgsl (zenith/horizon, ambient strength 1.15); below the horizon: sunlit street and facades
 const ZENITH: vec3f = vec3f(0.16, 0.34, 0.78);
@@ -48,29 +50,27 @@ fn stack(p: vec3i, d: i32) -> vec3i {
     return vec3i(c.x, c.y, c.z + d * dim.z);
 }
 
-// Bounce light leaving cell q along direction d (outside the grid: the nearest edge cell's).
+// Bounce light leaving cell q along direction d, times whether that slot transmits (alpha: 1 for air and for a
+// solid cell's open faces, 0 for a closed face's slot, which only holds the light arriving there for the shaders).
+// Outside the grid: the nearest edge cell's.
 fn light(q: vec3i, d: i32) -> vec3f {
-    return textureLoad(src, stack(q, d), 0).rgb;
+    let l = textureLoad(src, stack(q, d), 0);
+    return l.rgb * l.a;
 }
 
 // Bounce light arriving at p travelling along d: mostly from straight behind, some from the cells beside that.
-// A solid upstream cell only sends light out of an open face, so it counts only when the cell ahead of it is air.
 fn arriving(p: vec3i, d: i32) -> vec3f {
     var dirs = DIRS;
     var sides = SIDES;
     let back = p - dirs[d];
-    var sum = vec3f(0.0);
-    if (!solid(back) || !solid(back + dirs[d])) {
-        sum += light(back, d) * STRAIGHT;
-    }
     let s = sides[d];
-    for (var k = 0; k < 4; k++) {
-        let q = back + dirs[s[k]];
-        if (!solid(q) || !solid(q + dirs[d])) {
-            sum += light(q, d) * SPREAD;
-        }
-    }
-    return sum;
+    return light(back, d) * STRAIGHT + (light(back + dirs[s.x], d) + light(back + dirs[s.y], d) + light(back + dirs[s.z], d) + light(back + dirs[s.w], d)) * SPREAD;
+}
+
+// Share of the light travelling along e at air cell p that turns into the four perpendicular directions.
+fn turn(p: vec3i, e: i32) -> f32 {
+    var dirs = DIRS;
+    return select(TURN, NEAR_TURN, solid(p - dirs[e]));
 }
 
 fn split(id: vec3u) -> vec4i {
@@ -93,17 +93,24 @@ fn propagate(@builtin(global_invocation_id) id: vec3u) {
     var dirs = DIRS;
     let v = textureLoad(vox, p, 0);
     if (v.a < 0.5) {
+        // air: carried along, with some turning between this cell's directions (last step's light). Light that
+        // has just left a surface (the cell behind it along that direction is solid) turns much more: a matte
+        // surface scatters into its whole hemisphere, so a sunlit floor also lights the columns beside it.
         var sides = SIDES;
         let s = sides[d];
-        let side = arriving(p, s.x) + arriving(p, s.y) + arriving(p, s.z) + arriving(p, s.w);
-        textureStore(dst, vec3i(id), vec4f(arriving(p, d) * (1.0 - TURN) + side * (TURN / 4.0), 1.0));
+        var side = vec3f(0.0);
+        for (var k = 0; k < 4; k++) {
+            let e = s[k];
+            side += textureLoad(src, stack(p, e), 0).rgb * turn(p, e) * 0.25;
+        }
+        textureStore(dst, vec3i(id), vec4f(arriving(p, d) * (1.0 - turn(p, d)) + side, 1.0));
         return;
     }
     // solid: light leaves through the open faces only. A closed face's slot holds the light arriving at the
-    // cell along that direction instead (nothing transports it: the next cell is solid), so the shaders read
-    // what reaches a surface even where it sits inside its voxel.
+    // cell along that direction instead, marked as not transmitting, so the shaders read what reaches a surface
+    // even where it sits inside its voxel.
     if (!inside(p + dirs[d]) || solid(p + dirs[d])) {
-        textureStore(dst, vec3i(id), vec4f(arriving(p, d), 1.0));
+        textureStore(dst, vec3i(id), vec4f(arriving(p, d), 0.0));
         return;
     }
     var gathered = vec3f(0.0);

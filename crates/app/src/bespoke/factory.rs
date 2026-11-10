@@ -12,6 +12,8 @@ use glam::{Vec2, Vec3};
 
 pub const OSM: &str = "way/376480375";
 
+/// Interior face of the outer walls: Megascans old brick wall (aged, dusty, irregular).
+const BRICK_IN: &str = "tc2jfcwn";
 const T: f32 = 0.33; // exterior wall: 13 in. of brick
 const LEVELS: [(f32, f32); 3] = [(0.0, 4.6), (4.6, 3.9), (8.5, 3.9)];
 const ROOF: f32 = 12.4;
@@ -133,8 +135,8 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     };
     let brick = Key::new(Mat::Surface(brick_id), tint);
     // converted loft: the outer walls are exposed brick inside too
-    // (darker and browner than outside: aged, out of the sun, as in the interior photos)
-    let brick_in = Key::new(Mat::Surface(brick_id), [tint[0] * 0.9, tint[1] * 0.98, tint[2] * 0.98]).inside();
+    // inside: old, irregular, dusty red-brown brick with pale mortar (as in the interior photos)
+    let brick_in = Key::new(Mat::Surface(BRICK_IN), [1.05, 1.0, 1.0]).inside().wear(wear::DUSTY);
     let stone = Key::new(Mat::Surface(m::CONCRETE), [0.86, 0.8, 0.72]);
     let plinth = Key::new(Mat::Surface(m::CONCRETE), [0.42, 0.38, 0.35]);
     let sill_in = Key::new(Mat::Plain(160), [0.75, 0.74, 0.71]).inside();
@@ -303,6 +305,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         slab(&mut g, inner, y, if k == 0 { 0.3 } else { 0.09 }, &holes);
         interior(&mut g, &ground, y, clear, 10 + k as u64, true, k == 0);
         loft::structure(&mut g, &spec, y, h, k as u64, k != 0 && !super::undecorated());
+        wall_members(&mut g, &faces, &spec, y, top - loft::DECK, w);
         if k + 1 < LEVELS.len() {
             stair(&mut g, core.stair, y, LEVELS[k + 1].0 - y);
         }
@@ -602,6 +605,52 @@ fn storefront(g: &mut Geo, f: &Face, u0: f32, u1: f32, green: Key, glass: Key, e
         let r = f.at(u1, 0.0) - a;
         let dep = b - a;
         g.quad(stone, Vec3::new(a.x, 0.005, a.y), Vec3::new(dep.x, 0.0, dep.y), Vec3::new(r.x, 0.0, r.y));
+    }
+}
+
+/// Members against the inside of the brick, as in the interior photos: rough timber posts with corbels under the
+/// girder ends (west and east walls), and the seismic retrofit such warehouses got: cast concrete pilasters on
+/// the piers along the north and south walls and a concrete bond beam round the top of the walls.
+fn wall_members(g: &mut Geo, faces: &[Face], spec: &loft::Spec, y: f32, deck_b: f32, w: f32) {
+    let conc = Key::new(Mat::Surface(m::CONCRETE), [0.98, 0.96, 0.92]).inside().wear(wear::STONE);
+    let girder_b = deck_b - loft::GIRDER_D + loft::DECK;
+    // timber posts and corbels carrying the girder ends
+    for &z in &spec.girders {
+        for (x0, x1, into) in [(T, T + 0.28, 1.0f32), (w - T - 0.28, w - T, -1.0)] {
+            let edge = if into > 0.0 { x0 } else { x1 };
+            if spec.core.r.x0 - 0.3 < edge.max(x0) && edge.min(x1) < spec.core.r.x1 + 0.3 && z > spec.core.r.z0 - 0.4 && z < spec.core.r.z1 + 0.4 {
+                continue;
+            }
+            g.timber(loft::column_timber(), Vec3::new(x0, y, z - 0.18), Vec3::new(x1, girder_b - 0.3, z + 0.18));
+            let reach = edge + into * 0.55;
+            g.timber(loft::timber(), Vec3::new(edge.min(reach), girder_b - 0.3, z - 0.21), Vec3::new(edge.max(reach), girder_b, z + 0.21));
+        }
+    }
+    // pilasters at the column lines, moved onto the nearest pier so they never cover a window
+    for (f, along_x) in [(&faces[1], false), (&faces[3], true)] {
+        let piers = f.piers();
+        for &x in &spec.cols {
+            let mut u = if along_x { w - x } else { x };
+            if f.bays.iter().any(|&(b0, b1)| u > b0 - 0.35 && u < b1 + 0.35) {
+                u = piers.iter().map(|p| (p.0 + p.1) / 2.0).filter(|c| *c > 0.6 && *c < f.len() - 0.6).min_by(|a, b| (a - u).abs().total_cmp(&(b - u).abs())).unwrap_or(u);
+            }
+            f.bx(g, conc, u - 0.26, u + 0.26, y, deck_b - 0.6, -T - 0.2, -T);
+        }
+    }
+    // bond beam round the walls just under the deck (kept out of the stair and lift core)
+    for f in faces {
+        let len = f.len();
+        let mut spans = vec![(T, len - T)];
+        // the core sits against the east party wall: leave that stretch out
+        if f.bays.is_empty() && spec.core.r.x1 > w - T - 0.6 {
+            let (c0, c1) = (f.len() - spec.core.r.z1, f.len() - spec.core.r.z0);
+            spans = vec![(T, c0.max(T)), (c1.min(len - T), len - T)];
+        }
+        for (u0, u1) in spans {
+            if u1 - u0 > 0.3 {
+                f.bx(g, conc, u0, u1, deck_b - 0.6, deck_b, -T - 0.24, -T);
+            }
+        }
     }
 }
 

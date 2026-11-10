@@ -20,7 +20,7 @@ struct VIn {
     // rgb: tint, a: uv scale (1 for models; 1/tile size for world-UV city surfaces)
     @location(8) tint: vec4f,
     // x: mode (0 lit, 3 one-sided glazing, 4 emissive at strength y; legacy 1/2 procedural windows);
-    //    lit surfaces carry the edge-wear kind in tenths (0.1 wood, 0.2 metal, 0.3 stone)
+    //    lit surfaces carry the edge-wear kind in tenths (0.1 wood, 0.2 metal, 0.3 stone, 0.4 dusty masonry)
     // lit: y = indoor ambient factor (0 = outdoor), z = indoor lamp light
     @location(9) params: vec4f,
 };
@@ -116,7 +116,7 @@ fn untonemap(a: vec3f) -> vec3f {
     let qb = 0.59 * y - 0.03;
     let qc = 0.14 * y;
     let x = (-qb - sqrt(max(qb * qb - 4.0 * qa * qc, vec3f(0.0)))) / (2.0 * qa);
-    return x / max(g.sun_dir.w, 1e-3);
+    return x / (max(g.sun_dir.w, 1e-3) * g.white.rgb);
 }
 
 fn hist_at(p: vec3f) -> vec4f {
@@ -236,7 +236,11 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
 
     // weathered edges
     let kind = i32(round(i.params.x * 10.0));
-    if (i.params.x < 0.5 && kind > 0) {
+    if (i.params.x < 0.5 && kind == 4) {
+        // dusty old masonry: faded towards a warm grey, with a pale film that collects in the rough mortar
+        let lum = dot(base, vec3f(0.3, 0.59, 0.11));
+        base = mix(base, vec3f(lum) * vec3f(1.12, 1.0, 0.9), 0.42) + vec3f(0.012, 0.011, 0.01) * orm.g;
+    } else if (i.params.x < 0.5 && kind > 0) {
         let wr = edge_wear(i, nv, kind);
         if (kind == 1) {
             // timber: rubbed raw, lighter and drier

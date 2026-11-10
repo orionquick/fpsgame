@@ -14,7 +14,7 @@ use render::gi::GI_DIM;
 use std::collections::HashMap;
 
 pub const CELL: f32 = 0.5;
-const SUN_COL: Vec3 = Vec3::new(3.4, 3.1, 2.75);
+const SUN_COL: Vec3 = Vec3::from_array(render::SUN_COL);
 const GROUND_ALBEDO: Vec3 = Vec3::new(0.28, 0.27, 0.25);
 
 pub struct Tri {
@@ -125,6 +125,20 @@ fn key_albedo(lib: &crate::library::Library, key: &Key, cache: &mut HashMap<Stri
 pub fn build(tris: &[Tri], city: &[Prism], terrain: impl Fn(f32, f32) -> f32, lights: &[render::PointLight], sun: Vec3, center: Vec3) -> Field {
     let [nx, ny, nz] = GI_DIM.map(|d| d as usize);
     let half = Vec3::new(nx as f32, 0.0, nz as f32) * CELL * 0.5;
+    // inside (or near) a bespoke building that fits the volume: centre on the building so all of it is covered
+    let (mut bmin, mut bmax) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for t in tris {
+        for p in t.p {
+            bmin = bmin.min(p);
+            bmax = bmax.max(p);
+        }
+    }
+    let center = if !tris.is_empty() && center.cmpge(bmin - 4.0).all() && center.cmple(bmax + 4.0).all() && (bmax - bmin).x < half.x * 2.0 - 4.0 && (bmax - bmin).z < half.z * 2.0 - 4.0 {
+        let c = (bmin + bmax) * 0.5;
+        Vec3::new(c.x, center.y, c.z)
+    } else {
+        center
+    };
     let snap = |v: f32| (v / CELL).floor() * CELL;
     let origin = Vec3::new(snap(center.x - half.x), snap(terrain(center.x, center.z) - 2.0), snap(center.z - half.z));
     let top = origin.y + ny as f32 * CELL;

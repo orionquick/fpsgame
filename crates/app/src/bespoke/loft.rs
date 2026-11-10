@@ -20,24 +20,24 @@ pub struct Spec {
     pub core: Core,
 }
 
-const DECK: f32 = 0.1;
+pub(super) const DECK: f32 = 0.1;
 const JOIST_D: f32 = 0.3;
-const GIRDER_D: f32 = 0.5;
+pub(super) const GIRDER_D: f32 = 0.5;
 
 fn ins(k: Key) -> Key {
     k.inside()
 }
 /// Old-growth heavy timber, rough-sawn and checked, warm red-brown with age (as in the photos).
-fn timber() -> Key {
-    ins(Key::new(Mat::Surface(ROUGH_TIMBER), [1.2, 0.78, 0.56]).tile(1.3).rough(0.9).wear(wear::WOOD))
+pub(super) fn timber() -> Key {
+    ins(Key::new(Mat::Surface(ROUGH_TIMBER), [1.45, 0.92, 0.64]).tile(1.3).rough(0.9).wear(wear::WOOD))
 }
 /// Rough-sawn columns, darker than the beams (as in the photos).
-fn column_timber() -> Key {
+pub(super) fn column_timber() -> Key {
     ins(Key::new(Mat::Surface(ROUGH_TIMBER), [0.9, 0.56, 0.4]).tile(1.5).rough(0.85).wear(wear::WOOD))
 }
-/// Plank deck seen from below: dark aged boards (as in the photos).
+/// Plank deck seen from below: warm honey boards (as in the photos).
 fn deck() -> Key {
-    ins(Key::new(Mat::Surface("pht_wood_planks"), [1.35, 1.3, 1.5]).tile(1.5).rough(1.0))
+    ins(Key::new(Mat::Surface("pht_wood_planks"), [1.95, 1.9, 2.2]).tile(1.5).rough(1.0))
 }
 const OAK: &str = "rd5oqpp0";
 const DECK_PLANKS: &str = "ul4vcieaw";

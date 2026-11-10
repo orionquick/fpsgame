@@ -37,7 +37,8 @@ fn vs_tex(v: TIn) -> TOut {
 
 @fragment
 fn fs_tex(i: TOut) {
-    if (textureSample(t_base, samp, i.uv).a < 0.5) {
+    // a sharp mip: seen from the sun, foliage would otherwise pick a blurred level whose alpha cuts out blobs
+    if (textureSampleLevel(t_base, samp, i.uv, 1.0).a < 0.5) {
         discard;
     }
 }

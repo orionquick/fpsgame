@@ -255,11 +255,13 @@ impl ApplicationHandler for App {
                             g.renderer.set_exposure(1.0);
                             g.renderer.set_lights(&g.gpu, &g.lights, p[0]);
                             g.renderer.bake_probe(&g.gpu, &g.scene, &refs, p[0], p[1], p[2]);
-                            g.renderer.set_exposure(if g.renderer.gi.enabled() { 4.5 } else { 2.2 });
+                            g.renderer.set_exposure(if g.renderer.gi.enabled() { crate::INTERIOR_EXPOSURE } else { 2.2 });
+                            g.renderer.set_white_balance(crate::INTERIOR_WHITE);
                         }
                         None => {
                             g.renderer.clear_probe();
                             g.renderer.set_exposure(1.0);
+                            g.renderer.set_white_balance([1.0; 3]);
                         }
                     }
                     g.baked = inside;

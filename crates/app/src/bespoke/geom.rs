@@ -42,6 +42,9 @@ pub mod wear {
     pub const METAL: u8 = 2;
     /// Brick, stone, concrete: chipped arrises.
     pub const STONE: u8 = 3;
+    /// Old interior masonry: no edge wear (walls are built in strips), but a dusty, sun-faded film that
+    /// takes the saturation out of red brick.
+    pub const DUSTY: u8 = 4;
 }
 
 impl Key {
