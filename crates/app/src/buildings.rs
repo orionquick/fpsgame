@@ -70,7 +70,7 @@ fn style(lib: &Library, height: f64, seed: u64) -> Option<Style> {
     let s = if height > 50.0 {
         Style {
             ground,
-            upper: vec![g("Urban Modular Building Window 01", 0, true), g("Urban Modular Building Window 01", 0, true), g("Urban Modular Building Wall Set 01", 1, false)].into_iter().flatten().collect(),
+            upper: vec![g("Urban Modular Building Window 01", 0, true); 7].into_iter().chain([g("Urban Modular Building Wall Set 01", 1, false)]).flatten().collect(),
             ground_corner: g("Modular Building Ground Floor Kit", 2, false),
             upper_corner: g("Urban Modular Building Wall Corner Set", 0, false),
             cornice: g("Modular Building 4th Floor Trim Kit", 0, false),
@@ -121,7 +121,7 @@ pub struct Stats {
 pub fn build(lib: &Library, c: &City, focus: [f64; 4]) -> (Vec<Placement>, Stats) {
     let mut out = vec![];
     let mut st = Stats { buildings: 0, pieces: 0, tris: 0 };
-    let roof_tile = piece(lib, "Modular Building Flat Roof Kit", 1, 0, false);
+    let roof_tile = piece(lib, "Urban Modular Building Roof Set", 2, 0, false).or_else(|| piece(lib, "Modular Building Flat Roof Kit", 1, 0, false));
     let spans: std::collections::HashMap<&str, (f64, f64)> = c.buildings.iter().map(|b| (b.osm.as_str(), city::mesh::building_span(b, &c.terrain))).collect();
     for b in &c.buildings {
         let (y0, y1) = city::mesh::building_span(b, &c.terrain);
@@ -269,7 +269,9 @@ fn build_one(b: &Building, sty: &Style, start: f64, height: f64, on_ground: bool
     }
     // flat roof tiles over the footprint
     if let Some(rt) = roof_tile {
-        let s = 2.0f32;
+        // 6 m tiles where they fit, then 3 m tiles to fill along the edges (grey: the kit's tile reads pink)
+        let mut filled: Vec<[f64; 3]> = vec![];
+        for s in [6.0 / rt.w, 3.0 / rt.w, 1.5 / rt.w] {
         let size = rt.w * s;
         let half = size as f64 * 0.5;
         let mn = ring.iter().fold([f64::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
@@ -279,12 +281,16 @@ fn build_one(b: &Building, sty: &Style, start: f64, height: f64, on_ground: bool
             let mut z = mn[1] + size as f64 * 0.5;
             while z < mx[1] {
                 // whole tile inside the footprint: no overhangs
-                if [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0], [0.0, 0.0]].iter().all(|c: &[f64; 2]| point_in(ring, [x + c[0] * half, z + c[1] * half])) {
-                    out.push(Placement { asset: rt.id.clone(), part: rt.part, x, z, y: start + height - 0.1, rot: 0.0, scale: [s, 1.0, s], tint: [1.0, 1.0, 1.0], lod: 0 });
+                let inside = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0], [0.0, 0.0]].iter().all(|c: &[f64; 2]| point_in(ring, [x + c[0] * half, z + c[1] * half]));
+                let free = !filled.iter().any(|f| (x - f[0]).abs() < (half + f[2]) - 0.01 && (z - f[1]).abs() < (half + f[2]) - 0.01);
+                if inside && free {
+                    filled.push([x, z, half]);
+                    out.push(Placement { asset: rt.id.clone(), part: rt.part, x, z, y: start + height - 0.1, rot: 0.0, scale: [s, 1.0, s], tint: [0.62, 0.64, 0.64], lod: 0 });
                 }
                 z += size as f64;
             }
             x += size as f64;
+        }
         }
     }
 }

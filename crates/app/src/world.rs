@@ -34,7 +34,9 @@ impl Base {
 pub fn city_batches(gpu: &Gpu, r: &render::Renderer, lib: &mut crate::library::Library, base: &Base) -> Vec<render::Batch> {
     let pick = |lib: &crate::library::Library, title: &str| -> Option<(String, f32)> {
         let v: Vec<&assets::Asset> = lib.catalog.assets.iter().filter(|a| a.title == title && a.kind == assets::AssetKind::Surface).collect();
-        let a = v.iter().find(|a| a.tile_m.is_some_and(|t| (t[0] - t[1]).abs() < 1e-3)).or(v.first())?;
+        // prefer square tiles of at least 1.5 m (big variants repeat less), tagged as the thing itself when possible
+        let square = |a: &&&assets::Asset| a.tile_m.is_some_and(|t| (t[0] - t[1]).abs() < 1e-3 && t[0] >= 1.5);
+        let a = v.iter().find(|a| square(a) && a.tags.iter().any(|t| t == "lawn" || t == "garden")).or_else(|| v.iter().find(square)).or_else(|| v.iter().find(|a| a.tile_m.is_some_and(|t| (t[0] - t[1]).abs() < 1e-3))).or(v.first())?;
         Some((a.id.clone(), a.tile_m.map_or(2.0, |t| t[0])))
     };
     let chosen: Vec<_> = base.slots.iter().map(|(slot, _, _)| crate::library::slot_surface(*slot).and_then(|(t, tint)| pick(lib, t).map(|p| (p, tint)))).collect();

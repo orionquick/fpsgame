@@ -138,7 +138,7 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
     for p in placements {
         if p.asset == GLASS {
             let m = glam::Mat4::from_translation(glam::Vec3::new(p.x as f32, p.y as f32, p.z as f32)) * glam::Mat4::from_rotation_y((90.0 - p.rot as f32).to_radians()) * glam::Mat4::from_scale(glam::Vec3::from(p.scale));
-            glass.push(Instance::new(m, p.tint, 1.0));
+            glass.push(Instance::new(m, p.tint, 1.0).with_params([3.0, 0.0, 0.0, 0.0]));
             continue;
         }
         let Some(a) = lib.catalog.get(&p.asset).cloned() else { continue };

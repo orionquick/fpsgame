@@ -61,6 +61,35 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         (!v.is_empty()).then(|| v[(k % v.len() as u64) as usize])
     };
 
+    // plantings: boxwood and lady palms scattered on lawns and plazas
+    let shrubs: Vec<&assets::Asset> = ["Boxwood", "Broadleaf Lady Palm"].iter().filter_map(|t| pick(t, 0)).collect();
+    if !shrubs.is_empty() {
+        for (ai, a) in c.areas.iter().enumerate() {
+            if !matches!(a.kind, city::model::AreaKind::Grass | city::model::AreaKind::Plaza) || !a.outer.iter().any(|p| in_rect(*p, area)) {
+                continue;
+            }
+            let mn = a.outer.iter().fold([f64::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
+            let mx = a.outer.iter().fold([f64::MIN; 2], |m, p| [m[0].max(p[0]), m[1].max(p[1])]);
+            let step = if a.kind == city::model::AreaKind::Grass { 4.0 } else { 9.0 };
+            let mut x = mn[0] + step * 0.5;
+            while x < mx[0] {
+                let mut z = mn[1] + step * 0.5;
+                while z < mx[1] {
+                    let h = hash(hash((x * 10.0) as i64 as u64, (z * 10.0) as i64 as u64), ai as u64);
+                    let (jx, jz) = (((h % 1000) as f64 / 1000.0 - 0.5) * step * 0.8, (((h >> 10) % 1000) as f64 / 1000.0 - 0.5) * step * 0.8);
+                    let p = [x + jx, z + jz];
+                    if h % 100 < 45 && point_in(&a.outer, p) && !in_building(p) {
+                        let s = shrubs[((h >> 20) % shrubs.len() as u64) as usize];
+                        let sc = 0.8 + ((h >> 30) % 60) as f32 / 100.0;
+                        out.push(Placement { asset: s.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: ((h >> 40) % 360) as f64, scale: [sc, sc, sc], tint: [1.0, 1.0, 1.0], lod: 0 });
+                    }
+                    z += step;
+                }
+                x += step;
+            }
+        }
+    }
+
     // curbs and sidewalk furniture along both edges of every road segment
     let curb = pick("Modular Curb Kit", 0);
     let furniture: [(&str, u64); 7] = [("Fire Hydrant", 4), ("Parking Meter", 22), ("Trash Can", 6), ("Metal Bollard", 5), ("Concrete Bench", 2), ("Parking Road Sign", 3), ("Construction Barrel", 3)];

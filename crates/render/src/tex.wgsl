@@ -66,7 +66,8 @@ fn ggx(n: vec3f, v: vec3f, l: vec3f, rough: f32, f0: vec3f) -> vec3f {
 @fragment
 fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let texel = textureSample(t_base, samp, i.uv);
-    if (texel.a < 0.5) {
+    // params.x == 3: one-sided glazing, only visible from outside
+    if (texel.a < 0.5 || (i.params.x > 2.5 && !front)) {
         discard;
     }
     var base = texel.rgb * i.tint;
