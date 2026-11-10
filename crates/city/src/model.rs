@@ -14,6 +14,12 @@ pub struct Building {
     pub height_src: String,
     pub kind: String,
     pub name: Option<String>,
+    /// Ground height under the building (relative to home plate) when measured by lidar.
+    #[serde(default)]
+    pub base_y: Option<f64>,
+    /// For an upper tier: the building it stands on.
+    #[serde(default)]
+    pub part_of: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,6 +91,9 @@ pub struct City {
     pub lines: Vec<Line>,
     pub areas: Vec<Area>,
     pub trees: Vec<[f64; 2]>,
+    /// Tree heights above ground, parallel to `trees` (empty: default size).
+    #[serde(default)]
+    pub tree_h: Vec<f64>,
     pub attribution: String,
 }
 

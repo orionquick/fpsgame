@@ -82,7 +82,7 @@ pub fn annotate(img: &mut RgbaImage, rect: [f64; 4], play: [f64; 4]) {
 pub fn compare(cx: &Ctx, raw: &Path, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mpp = city::import::NAIP_MPP;
     let mut ours = ortho(cx, mpp);
-    let mut naip = image::open(raw.join("naip.png"))?.to_rgba8();
+    let mut naip = image::open(raw.join(city::import::naip_name(&cx.city.import_box)))?.to_rgba8();
     if naip.dimensions() != ours.dimensions() {
         naip = image::imageops::resize(&naip, ours.width(), ours.height(), image::imageops::FilterType::Triangle);
     }

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 earcutr = "0.5.0"
+las = { version = "0.11.2", features = ["laz"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tiff = "0.11.3"

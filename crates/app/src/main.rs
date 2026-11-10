@@ -28,7 +28,7 @@ const USAGE: &str = "usage:
   fps compare                        render next to the NAIP aerial -> out/compare.png
   fps shot --x X --z Z [--yaw D] [--pitch D] [--w 1600] [--h 900] [--out name.png]
                                      eye-height shot (yaw 0 = north, 90 = east; metres from home plate, z = south)
-  fps play [--x X --z Z --yaw D]     walk the city (default spawn: 5th Ave & Market St, facing north)";
+  fps play [--x X --z Z --yaw D]     walk the city (default spawn: 5th Ave & J St, facing north)";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some("play") => {
             let c = city::City::load(&city_path())?;
-            play::run(c, (arg(&args, "--x", -291.5), arg(&args, "--z", -470.0)), arg(&args, "--yaw", 0.0))?;
+            play::run(c, (arg(&args, "--x", -291.5), arg(&args, "--z", -250.0)), arg(&args, "--yaw", 0.0))?;
         }
         _ => eprintln!("{USAGE}"),
     }

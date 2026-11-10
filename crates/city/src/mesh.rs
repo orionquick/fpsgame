@@ -71,6 +71,17 @@ fn polygon(m: &mut Mesh, outer: &[[f64; 2]], holes: &[Ring], y: &dyn Fn(f64, f64
 /// Ribbon along a polyline with mitred joins and square end caps, draped on terrain.
 fn ribbon(m: &mut Mesh, pts: &[[f64; 2]], width: f64, lift: f64, ter: &Terrain, col: [f32; 3]) {
     let pts: Vec<[f64; 2]> = pts.windows(2).filter(|w| w[0] != w[1]).map(|w| w[0]).chain(pts.last().copied()).collect();
+    // densify so the ribbon follows the terrain between sparse OSM nodes
+    let mut dense = vec![];
+    for w in pts.windows(2) {
+        let n = ((w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]) / 3.0).ceil().max(1.0) as usize;
+        for k in 0..n {
+            let t = k as f64 / n as f64;
+            dense.push([w[0][0] + (w[1][0] - w[0][0]) * t, w[0][1] + (w[1][1] - w[0][1]) * t]);
+        }
+    }
+    dense.extend(pts.last().copied());
+    let pts = dense;
     if pts.len() < 2 {
         return;
     }
@@ -78,6 +89,7 @@ fn ribbon(m: &mut Mesh, pts: &[[f64; 2]], width: f64, lift: f64, ter: &Terrain, 
     let dir = |a: [f64; 2], b: [f64; 2]| { let (dx, dz) = (b[0] - a[0], b[1] - a[1]); let l = (dx * dx + dz * dz).sqrt(); [dx / l, dz / l] };
     let n = pts.len();
     let mut left = vec![];
+    let mut mid = vec![];
     let mut right = vec![];
     for i in 0..n {
         let d0 = if i > 0 { dir(pts[i - 1], pts[i]) } else { dir(pts[0], pts[1]) };
@@ -97,22 +109,23 @@ fn ribbon(m: &mut Mesh, pts: &[[f64; 2]], width: f64, lift: f64, ter: &Terrain, 
         let l = [p[0] + nrm[0] * miter, p[1] + nrm[1] * miter];
         let r = [p[0] - nrm[0] * miter, p[1] - nrm[1] * miter];
         left.push([l[0], ter.at(l[0], l[1]) + lift, l[1]]);
+        mid.push([p[0], ter.at(p[0], p[1]) + lift, p[1]]);
         right.push([r[0], ter.at(r[0], r[1]) + lift, r[1]]);
     }
-    for i in 0..n - 1 {
-        let i0 = m.base();
-        for p in [left[i], right[i], right[i + 1], left[i + 1]] {
-            m.v(p, UP, col);
-        }
-        // orient upward
-        let a = left[i];
-        let b = right[i];
-        let c = right[i + 1];
-        let cross = (b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0]);
-        if cross < 0.0 {
-            m.idx.extend([i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3]);
-        } else {
-            m.idx.extend([i0, i0 + 2, i0 + 1, i0, i0 + 3, i0 + 2]);
+    // two strips (left-centre, centre-right) so a crowned street surface is followed across its width
+    for (a_side, b_side) in [(&left, &mid), (&mid, &right)] {
+        for i in 0..n - 1 {
+            let i0 = m.base();
+            for p in [a_side[i], b_side[i], b_side[i + 1], a_side[i + 1]] {
+                m.v(p, UP, col);
+            }
+            let (a, b, c) = (a_side[i], b_side[i], b_side[i + 1]);
+            let cross = (b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0]);
+            if cross < 0.0 {
+                m.idx.extend([i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3]);
+            } else {
+                m.idx.extend([i0, i0 + 2, i0 + 1, i0, i0 + 3, i0 + 2]);
+            }
         }
     }
 }
@@ -153,14 +166,18 @@ const FACADES: [(u8, u8, u8); 8] = [
 
 /// Building base/top heights used by both the mesh and collision.
 pub fn building_span(b: &Building, ter: &Terrain) -> (f64, f64) {
+    if let Some(base) = b.base_y {
+        return (base - 0.5 + b.min_height, base + b.height);
+    }
     let g: Vec<f64> = b.outer.iter().map(|p| ter.at(p[0], p[1])).collect();
     let lo = g.iter().copied().fold(f64::INFINITY, f64::min);
     let avg = g.iter().sum::<f64>() / g.len() as f64;
     (lo - 0.5 + b.min_height, avg + b.height)
 }
 
-fn tree(m: &mut Mesh, x: f64, z: f64, y: f64, seed: u64) {
-    let s = 0.8 + (seed % 100) as f64 / 250.0;
+fn tree(m: &mut Mesh, x: f64, z: f64, y: f64, seed: u64, height: Option<f64>) {
+    // the crown model tops out at 6.8 x scale
+    let s = height.map_or(0.8 + (seed % 100) as f64 / 250.0, |h| (h / 6.8).clamp(0.5, 3.5));
     let trunk = srgb(92, 74, 58);
     let leaf = [srgb(70, 104, 52), srgb(84, 118, 60), srgb(62, 96, 58)][(seed % 3) as usize];
     let r = 0.18 * s;
@@ -256,7 +273,7 @@ pub fn build(c: &City) -> Mesh {
     }
 
     for (i, t) in c.trees.iter().enumerate() {
-        tree(&mut m, t[0], t[1], ter.at(t[0], t[1]), hash(&i.to_string()));
+        tree(&mut m, t[0], t[1], ter.at(t[0], t[1]), hash(&i.to_string()), c.tree_h.get(i).copied());
     }
     m
 }

@@ -108,24 +108,24 @@ mod tests {
     fn walking_up_5th_ave_never_enters_a_building() {
         let c = city();
         let col = Collision::new(&c);
-        // 5th Ave centreline from Market St north to Broadway
-        let mut p = [-291.5f32, -470.0];
-        for i in 0..2400 {
+        // 5th Ave centreline from L St north to Market St
+        let mut p = [-291.5f32, -60.0];
+        for i in 0..2100 {
             let y = c.terrain.at(p[0] as f64, p[1] as f64) as f32;
             let dir = [0.0, -1.0];
             p = [p[0] + dir[0] * 0.2, p[1] + dir[1] * 0.2];
             col.push_out(&mut p, y + 0.45, 1.35, 0.35);
             assert!(!inside_any(&col, p, y + 0.45), "inside a building at {p:?} (step {i})");
         }
-        assert!(p[1] < -900.0, "walk north stalled at {p:?}");
+        assert!(p[1] < -460.0, "walk north stalled at {p:?}");
     }
 
     #[test]
     fn walking_east_mid_block_stops_at_the_facade() {
         let c = city();
         let col = Collision::new(&c);
-        // 5th Ave between G St and F St, walking east into the block
-        let mut p = [-291.5f32, -664.0];
+        // 5th Ave between Island Ave and Market St, walking east into the block
+        let mut p = [-291.5f32, -430.0];
         for i in 0..400 {
             let y = c.terrain.at(p[0] as f64, p[1] as f64) as f32;
             p[0] += 0.2;

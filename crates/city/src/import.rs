@@ -28,9 +28,34 @@ fn cached(path: &Path, fetch: impl FnOnce() -> Res<Vec<u8>>) -> Res<Vec<u8>> {
     Ok(b)
 }
 
+/// GET with retries: USGS servers answer 429/502 under load, and sometimes send a tiny HTML page instead.
 fn get(url: &str) -> Res<Vec<u8>> {
-    let mut r = ureq::get(url).header("User-Agent", UA).call()?;
-    Ok(r.body_mut().with_config().limit(512 << 20).read_to_vec()?)
+    let mut last = String::new();
+    for attempt in 0..6u64 {
+        match ureq::get(url).header("User-Agent", UA).call() {
+            Ok(mut r) => {
+                let b = r.body_mut().with_config().limit(512 << 20).read_to_vec()?;
+                if b.len() > 2048 || !b.starts_with(b"<") {
+                    return Ok(b);
+                }
+                last = format!("{}-byte HTML page", b.len());
+            }
+            Err(e) => last = e.to_string(),
+        }
+        eprintln!("  retrying ({last})...");
+        std::thread::sleep(std::time::Duration::from_secs(5 * (attempt + 1)));
+    }
+    Err(format!("{url}: {last}").into())
+}
+
+/// Cache key for raw downloads, so changing the play box never reuses data fetched for another area.
+fn box_key(b: &LatLonBox) -> String {
+    format!("{:.4}_{:.4}_{:.4}_{:.4}", b.w, b.s, b.e, b.n).replace('-', "m")
+}
+
+/// Cached aerial photo for an import box.
+pub fn naip_name(b: &LatLonBox) -> String {
+    format!("naip_{}.png", box_key(b))
 }
 
 fn raster_size(b: &LatLonBox, f: &Frame, mpp: f64) -> (usize, usize) {
@@ -47,6 +72,7 @@ pub fn import(raw: &Path) -> Res<City> {
     std::fs::create_dir_all(raw)?;
     let frame = Frame::new(HOME_PLATE.0, HOME_PLATE.1);
     let ib = PLAY_BOX.grow_m(&frame, MARGIN_M);
+    let key = box_key(&ib);
 
     let q = format!(
         "[out:json][timeout:180];(\
@@ -63,7 +89,7 @@ pub fn import(raw: &Path) -> Res<City> {
          );out geom;",
         s = ib.s, w = ib.w, n = ib.n, e = ib.e
     );
-    let osm = cached(&raw.join("osm.json"), || {
+    let osm = cached(&raw.join(format!("osm_{key}.json")), || {
         let mut last = String::new();
         for attempt in 0..6 {
             let url = OVERPASS[attempt % OVERPASS.len()];
@@ -78,19 +104,24 @@ pub fn import(raw: &Path) -> Res<City> {
     })?;
 
     let (dw, dh) = raster_size(&ib, &frame, DEM_MPP);
-    let dem = cached(&raw.join("dem.tif"), || {
+    // fallback ground only: the lidar replaces it below
+    let dem = cached(&raw.join(format!("dem_{key}.tif")), || {
         eprintln!("fetching 3DEP elevation {dw}x{dh}...");
         get(&export_url(DEM_URL, &ib, dw, dh, "&format=tiff&pixelType=F32&interpolation=RSP_BilinearInterpolation"))
-    })?;
+    })
+    .unwrap_or_else(|e| {
+        eprintln!("  elevation service unavailable ({e}); using lidar ground only");
+        vec![]
+    });
 
     let (nw, nh) = raster_size(&ib, &frame, NAIP_MPP);
-    cached(&raw.join("naip.png"), || {
+    cached(&raw.join(naip_name(&ib)), || {
         eprintln!("fetching NAIP aerial {nw}x{nh}...");
         get(&export_url(NAIP_URL, &ib, nw, nh, "&format=png"))
     })?;
 
     let rect = ib.xz_rect(&frame);
-    let mut terrain = parse_dem(&dem, rect)?;
+    let mut terrain = parse_dem(&dem, rect).unwrap_or_else(|_| Terrain::flat(rect));
     let origin_elev = terrain.at(0.0, 0.0);
     terrain.y.iter_mut().for_each(|v| *v -= origin_elev as f32);
 
@@ -104,10 +135,56 @@ pub fn import(raw: &Path) -> Res<City> {
         lines: vec![],
         areas: vec![],
         trees: vec![],
+        tree_h: vec![],
         attribution: "Map data © OpenStreetMap contributors (ODbL). Elevation: USGS 3DEP. Imagery: USDA NAIP via USGS.".into(),
     };
     parse_osm(&serde_json::from_slice(&osm)?, &mut city);
+
+    let ldir = raw.join("lidar");
+    std::fs::create_dir_all(&ldir)?;
+    for (t, p) in crate::lidar::TILES.iter().zip(crate::lidar::tile_paths(&ldir)) {
+        cached(&p, || {
+            eprintln!("fetching lidar tile {t} (USGS is slow, ~1 min per 10 MB)...");
+            get(&crate::lidar::tile_url(t))
+        })?;
+    }
+    eprintln!("rasterising lidar at {} m...", crate::lidar::RES);
+    let g = crate::lidar::rasterize(&crate::lidar::tile_paths(&ldir), &frame, rect)?;
+    let k = g.cell(0.0, 0.0).ok_or("home plate outside the lidar grid")?;
+    city.origin_elev = g.ground[k] as f64;
+    city.terrain = crate::lidar::terrain(&g, 2.0, city.origin_elev);
+    let st = crate::lidar::apply(&g, &mut city.buildings, city.origin_elev);
+    let lt = crate::lidar::trees(&g, &city.buildings);
+    eprintln!("lidar: {} tree crowns (OSM had {})", lt.len(), city.trees.len());
+    city.trees = lt.iter().map(|t| snap_off_roads(t.0, &city.lines)).collect();
+    city.tree_h = lt.iter().map(|t| t.1).collect();
+    eprintln!("lidar: {} buildings measured, {} kept OSM height (no returns), {} upper tiers, {} structures missing from OSM", st.lidar, st.kept_osm, st.parts, st.added);
+    city.attribution = "Map data © OpenStreetMap contributors (ODbL). Elevation and building heights: USGS 3DEP lidar CA_SanDiegoCo_D24 (2024). Imagery: USDA NAIP via USGS.".into();
     Ok(city)
+}
+
+/// Crown peaks can overhang the street; moves a tree that lands on a roadway to just past the nearest curb.
+fn snap_off_roads(p: [f64; 2], lines: &[Line]) -> [f64; 2] {
+    let mut best: Option<(f64, [f64; 2], f64)> = None;
+    for l in lines.iter().filter(|l| matches!(l.kind, LineKind::Road | LineKind::Service)) {
+        for w in l.pts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
+            let l2 = dx * dx + dz * dz;
+            if l2 < 1e-6 {
+                continue;
+            }
+            let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / l2).clamp(0.0, 1.0);
+            let q = [a[0] + dx * t, a[1] + dz * t];
+            let d = (p[0] - q[0]).hypot(p[1] - q[1]);
+            if d < l.width * 0.5 && best.is_none_or(|b| d < b.0) {
+                best = Some((d, q, l.width * 0.5));
+            }
+        }
+    }
+    let Some((d, q, half)) = best else { return p };
+    let (nx, nz) = if d > 1e-3 { ((p[0] - q[0]) / d, (p[1] - q[1]) / d) } else { (1.0, 0.0) };
+    [q[0] + nx * (half + 1.0), q[1] + nz * (half + 1.0)]
 }
 
 fn parse_dem(b: &[u8], rect: [f64; 4]) -> Res<Terrain> {
@@ -243,7 +320,7 @@ fn parse_osm(v: &Value, c: &mut City) {
             let kind = t["building"].clone();
             let mut push = |outer: Ring, holes: Vec<Ring>| {
                 if outer.len() >= 3 {
-                    c.buildings.push(Building { osm: id.clone(), outer, holes, height, min_height, height_src: src.into(), kind: kind.clone(), name: name.clone() });
+                    c.buildings.push(Building { osm: id.clone(), outer, holes, height, min_height, height_src: src.into(), kind: kind.clone(), name: name.clone(), base_y: None, part_of: None });
                 }
             };
             if typ == "way" {

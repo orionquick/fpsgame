@@ -54,8 +54,8 @@ impl LatLonBox {
 /// Home plate at the San Diego ballpark (approx: ~18 m in from the backstop curve of the OSM field polygon).
 pub const HOME_PLATE: (f64, f64) = (32.70712, -117.15704);
 
-/// The confirmed play area: 4th Ave → 14th St, Imperial Ave → Broadway.
-pub const PLAY_BOX: LatLonBox = LatLonBox { w: -117.1611, s: 32.7060, e: -117.1519, n: 32.7158 };
+/// The play area: 4th Ave → 14th St, Imperial Ave → Market St (ballpark, south Gaslamp, south East Village).
+pub const PLAY_BOX: LatLonBox = LatLonBox { w: -117.1611, s: 32.7060, e: -117.1519, n: 32.7117 };
 
 /// Extra context imported around the play box, metres.
 pub const MARGIN_M: f64 = 120.0;

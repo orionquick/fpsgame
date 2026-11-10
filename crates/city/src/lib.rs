@@ -1,6 +1,7 @@
 //! Downtown San Diego: OSM + USGS import, the city model, and static meshes built from it.
 pub mod geo;
 pub mod import;
+pub mod lidar;
 pub mod mesh;
 pub mod model;
 
