@@ -23,7 +23,7 @@ const MEETING_TABLES: &[&str] = &["viejdi1", "vghpabdga"];
 const DINING_TABLES: &[&str] = &["ph_round_wooden_table_02", "vl0jbem", "ph_round_wooden_table_02"];
 const DINING_CHAIRS: &[&str] = &["ukikajmaw", "ukipagtbw", "uknjbb2bw", "uknkaffaw", "uknqadhbw", "ukpgfbebw"];
 const STOOLS: &[&str] = &["ph_bar_chair_round_01", "ph_metal_stool_02"];
-const PENDANT: &str = "vgzledvaw";
+const PENDANT: &str = "sf_2ba27702aa";
 
 /// Which way the furniture models face, as a turn from their +Z axis (degrees clockwise).
 const FRONT: f64 = 0.0;
@@ -336,10 +336,10 @@ fn restaurant(f: &mut Furnisher, g: &mut Geo, r: &Rect, y: f32, ceil: f32) {
                     }
                 }
             }
-            let hang = y + ceil - 0.9;
+            // the bar light model includes its own cord: hang it from the joists
+            let hang = y + ceil - ps[1];
             f.put(g, PENDANT, p, hang, Vec2::Y, false);
-            let top = hang + ps[1];
-            g.cuboid(cord, glam::Vec3::new(p.x - 0.006, top, p.y - 0.006), glam::Vec3::new(p.x + 0.006, y + ceil, p.y + 0.006));
+            let _ = &cord;
         }
     }
 }
@@ -357,6 +357,11 @@ pub fn bar(f: &mut Furnisher, g: &mut Geo, a: Vec2, b: Vec2, y: f32) {
     let n = (l / 0.75).floor() as i32;
     for i in 0..n {
         let p = a + dir * ((i as f32 + 0.5) * l / n as f32) - back * 0.45;
+        if i == n / 3 {
+            // espresso machine on the counter
+            let m = a + dir * ((i as f32 + 0.5) * l / n as f32) + back * 0.35;
+            f.put(g, "sf_17042d9af8", m, y + 1.06, -back, false);
+        }
         let s = f.pick(STOOLS);
         let jitter = Vec2::new(f.rnd() - 0.5, f.rnd() - 0.5) * 0.18;
         let face = back.rotate(Vec2::from_angle(f.rnd() * 6.28));

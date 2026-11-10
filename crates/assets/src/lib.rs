@@ -370,6 +370,12 @@ const SCALE: &[(&str, f32)] = &[
     ("sf_4517652104", 0.02), // Bar Table (centimetres)
     ("sf_aaf556f40f", 1.75), // Bar Stool (Saandy)
     ("sf_561abc2fc9", 0.6),  // Desktop Computer (Tytan)
+    ("sf_d021f42ea8", 0.0046), // American fire hydrant (cm, oversized)
+    ("sf_f3eb47d02e", 0.4),  // Street Asset Pack (vmatthew)
+    ("sf_2f52ea53c5", 0.85), // City Props Collection vol. 2
+    ("sf_383923d441", 0.135), // Coffee Maker
+    ("sf_6881aa1e84", 0.15), // Street Lamp (bez_glaza)
+    ("sf_f61aeec14f", 0.0085), // Trash Can (Lyskilde)
 ];
 
 fn rescale(parts: &mut [MeshPart], infos: &mut [Part], k: f32) {

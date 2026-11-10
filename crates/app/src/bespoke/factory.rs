@@ -294,7 +294,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         cols: vec![T + (w - 2.0 * T) * 0.25, T + (w - 2.0 * T) * 0.5, T + (w - 2.0 * T) * 0.75],
         core: core.clone(),
     };
-    for (k, &(y, h)) in LEVELS.iter().enumerate() {
+    for (k, &(y, _)) in LEVELS.iter().enumerate() {
         let top = if k + 1 < LEVELS.len() { LEVELS[k + 1].0 } else { ROOF };
         let h = top - y;
         let clear = loft::Spec::clear(h);
@@ -359,8 +359,8 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
                 }
                 // one bay per floor is a lounge by the windows instead
                 if i == 0 && j == 2 + k {
-                    fur.put(&mut g, "ph_sofa_02", c - v(0.0, 1.2), y, v(0.0, 1.0), true);
-                    fur.put(&mut g, "ph_mid_century_lounge_chair", c + v(1.3, 0.9), y, v(-0.7, -0.6), true);
+                    fur.put(&mut g, "sf_959bc21f62", c - v(0.0, 1.2), y, v(0.0, 1.0), true);
+                    fur.put(&mut g, "sf_ddab2f2c25", c + v(1.3, 0.9), y, v(-0.7, -0.6), true);
                     fur.put(&mut g, "ph_modern_arm_chair_01", c + v(-1.3, 0.9), y, v(0.7, -0.6), true);
                     fur.put(&mut g, "ph_coffee_table_round_01", c, y, v(0.0, 1.0), true);
                     fur.put(&mut g, "ph_potted_plant_01", c + v(-2.2, -1.3), y, v(1.0, 0.3), false);
@@ -431,6 +431,21 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         let l = west.a + west.dir() * (*u + 5.0) + west.out() * 6.2;
         fur.put(&mut g, "ph_street_lamp_01", l, 0.0, west.out(), true);
     }
+    // plaza furniture: benches between the trees facing the front, bike racks and a newsbox by the north entry,
+    // bins at the doors, a sidewalk clock at the corner (City Props Collection by TampaJoey)
+    for u in [10.0f32, 20.0] {
+        let p = west.a + west.dir() * u + west.out() * 7.6;
+        fur.put(&mut g, "sf_32b8b82bb1_06", p, 0.0, -west.out(), true);
+    }
+    for (k, u) in [-1.6f32, -2.6, -3.6].iter().enumerate() {
+        let p = west.a + west.dir() * (2.0 + k as f32 * 0.9) + west.out() * (5.0 - u * 0.0);
+        fur.put(&mut g, "sf_2f52ea53c5_25", p, 0.0, west.dir().rotate(Vec2::from_angle(0.05 * k as f32)), true);
+    }
+    fur.put(&mut g, "sf_8975781045", west.a + west.dir() * 0.4 + west.out() * 1.8, 0.0, west.out(), true);
+    for u in [3.1f32, 27.0] {
+        fur.put(&mut g, "sf_32b8b82bb1_16", west.a + west.dir() * u + west.out() * 0.7, 0.0, west.out(), true);
+    }
+    fur.put(&mut g, "sf_2f52ea53c5_22", west.a + west.dir() * (d + 2.5) + west.out() * 5.0, 0.0, west.out(), true);
     for (k, (x, z)) in [(23.0f32, 4.0f32), (23.0, 8.0), (27.0, 4.0), (27.0, 8.0)].iter().enumerate() {
         fur.put(&mut g, "ph_exterior_aircon_unit", v(*x, *z + 14.0), ROOF + 0.02, if k % 2 == 0 { v(1.0, 0.0) } else { v(-1.0, 0.0) }, true);
     }

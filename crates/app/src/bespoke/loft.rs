@@ -426,6 +426,8 @@ pub fn kitchen(g: &mut Geo, f: &mut Furnisher, a: Vec2, b: Vec2, y: f32) {
     // fridge
     g.beam(ins(Key::new(Mat::Plain(60), [0.6, 0.61, 0.62])), b - dir * 0.85 + out * 0.36, b - dir * 0.05 + out * 0.36, 0.34, y, y + 1.9);
     g.block_box(Vec3::new(a.x, 0.0, a.y), Vec3::new(dir.x, 0.0, dir.y) * l, Vec3::new(out.x, 0.0, out.y) * 0.7, y, y + 0.92);
+    // coffee maker on the counter, a pendant pair over the island
+    f.put(g, "sf_383923d441", a + dir * (l * 0.3) + out * 0.3, y + 0.92, out, false);
     // island with stools
     let (p, q) = (a + out * 2.2 + dir * 0.8, b + out * 2.2 - dir * 1.4);
     g.beam(cab, p, q, 0.45, y, y + 0.9);

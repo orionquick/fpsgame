@@ -92,7 +92,19 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
 
     // curbs and sidewalk furniture along both edges of every road segment
     let curb = pick("Modular Curb Kit", 0);
-    let furniture: [(&str, u64); 7] = [("Fire Hydrant", 4), ("Parking Meter", 22), ("Trash Can", 6), ("Metal Bollard", 5), ("Concrete Bench", 2), ("Parking Road Sign", 3), ("Construction Barrel", 3)];
+    // US street furniture from Sketchfab (City Props Collection vol. 1/2 by TampaJoey, newspaper boxes by Keith Ito,
+    // hydrant by Fayruso, trash can by Lyskilde): (asset ids, percent of 6 m slots)
+    let furniture: [(&[&str], u64); 8] = [
+        (&["sf_32b8b82bb1_15"], 20),
+        (&["sf_32b8b82bb1_03", "sf_32b8b82bb1_16", "sf_2f52ea53c5_26", "sf_f61aeec14f"], 7),
+        (&["sf_32b8b82bb1_14", "sf_d021f42ea8"], 4),
+        (&["sf_8975781045"], 3),
+        (&["sf_2f52ea53c5_25"], 3),
+        (&["sf_32b8b82bb1_06", "sf_2f52ea53c5_02"], 2),
+        (&["sf_32b8b82bb1_23"], 1),
+        (&["sf_2f52ea53c5_10"], 1),
+    ];
+    let have = |id: &str| lib.catalog.get(id).is_some();
     for r in &roads {
         let (dx, dz) = (r.b[0] - r.a[0], r.b[1] - r.a[1]);
         let len = dx.hypot(dz);
@@ -123,6 +135,17 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
                     out.push(Placement { asset: cb.id.clone(), part: straight, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading + turn, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
                 }
             }
+            if have("sf_6881aa1e84") {
+                let n = (len / 32.0).floor() as usize;
+                for k in 0..n {
+                    let t = (k as f64 + if side > 0.0 { 0.25 } else { 0.75 }) * 32.0;
+                    let p = [r.a[0] + ux * t + nx * (r.half + 0.6), r.a[1] + uz * t + nz * (r.half + 0.6)];
+                    if !in_rect(p, area) || on_other_road(p, r.line, 4.0) || in_building(p) {
+                        continue;
+                    }
+                    out.push(Placement { asset: "sf_6881aa1e84".into(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading + 90.0 * side, scale: [1.0; 3], tint: [1.0; 3], lod: 0, indoor: false });
+                }
+            }
             let slots = (len / 6.0).floor() as usize;
             for k in 0..slots {
                 let t = (k as f64 + 0.5) * 6.0;
@@ -132,10 +155,13 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
                 }
                 let h = hash(hash(k as u64, r.line as u64), side.to_bits());
                 let mut roll = h % 100;
-                for (title, pct) in furniture {
+                for (ids, pct) in furniture {
                     if roll < pct {
-                        if let Some(a) = pick(title, h >> 8) {
-                            out.push(Placement { asset: a.id.clone(), part: 0, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
+                        let id = ids[((h >> 8) % ids.len() as u64) as usize];
+                        if have(id) {
+                            // a few degrees off square, as installed
+                            let jitter = ((h >> 20) % 17) as f64 - 8.0;
+                            out.push(Placement { asset: id.to_string(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading + jitter, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
                         }
                         break;
                     }
