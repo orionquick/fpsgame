@@ -1,0 +1,17 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fps"
+path = "src/main.rs"
+
+[dependencies]
+city = { version = "0.1.0", path = "../city" }
+glam = "0.30"
+image = "0.25.10"
+pollster = "1.0.1"
+render = { version = "0.1.0", path = "../render" }
+winit = "0.30"
