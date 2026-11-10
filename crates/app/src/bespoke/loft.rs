@@ -479,3 +479,74 @@ pub fn task_chair(g: &mut Geo, c: Vec2, y: f32, face: Vec2, style: u8) {
         g.beam(if style >= 2 { seat_k } else { k }, a - f * 0.2, a + f * 0.12, 0.03, y + 0.66, y + 0.7);
     }
 }
+
+/// The Office Props Pack (crazyshroomz, CC-BY) cubicle, reassembled from its pieces at their authored offsets.
+/// Walls stand on the kit's -X and +Z sides; the CRT and beige keyboard are swapped for modern ones.
+const KIT: &str = "sf_260ff7a37a";
+/// Pieces that make up one cubicle (pack object indices), and the ones left out.
+const KIT_SKIP: &[u32] = &[
+    2,  // Object_4: beige tower (replaced)
+    5,  // Object_7: beige keyboard (replaced)
+    7,  // Object_9: CRT monitor (replaced)
+    9,  // Object_11: beige desktop case (replaced)
+    21, 22, 23, // water cooler and bottles (one per cluster instead)
+    30, 31, 32, 34, // floor paper scatter
+];
+
+/// One cubicle from the pack at local `origin`, kit +Z along `z_dir`; adds modern screens and a varied chair.
+pub fn kit_cubicle(g: &mut Geo, f: &mut Furnisher, origin: Vec2, y: f32, z_dir: Vec2) {
+    let az = z_dir.normalize();
+    let ax = Vec2::new(az.y, -az.x);
+    for k in 0..36u32 {
+        if KIT_SKIP.contains(&k) || k == 16 {
+            continue;
+        }
+        let id = format!("{KIT}_{k:02}");
+        let solid = matches!(k, 17 | 20 | 4); // desk, partitions, filing cabinet
+        f.put_kit_piece(g, &id, origin, y, az, solid);
+    }
+    // the pack's desk surface is at 0.74 m: a flat-screen desktop set (monitor, keyboard, mouse) in the corner
+    let at = |x: f32, z: f32| origin + ax * x + az * z;
+    let turn = (f.rand() - 0.5) * 0.35;
+    f.put(g, "sf_561abc2fc9", at(-0.7, 0.55), y + 0.74, ax.rotate(Vec2::from_angle(turn)), false);
+    // chair pulled out at its own angle
+    let chair = at(0.0, 0.3) + ax * (f.rand() * 0.5);
+    let face = (-ax).rotate(Vec2::from_angle((f.rand() - 0.5) * 1.4));
+    if f.rand() < 0.5 {
+        f.put(g, "sf_675f34f730", chair, y, face, false);
+    } else {
+        let slide = f.rand() * 0.4;
+        f.put_kit_piece(g, &format!("{KIT}_16"), origin + ax * slide, y, az, false);
+    }
+    if f.rand() < 0.4 {
+        let id = ["sf_16c1a779bb_00", "sf_16c1a779bb_25", "sf_16c1a779bb_10"][(f.rand() * 3.0) as usize % 3];
+        let dir = ax.rotate(Vec2::from_angle(f.rand() - 0.5));
+        f.put(g, id, at(-0.9, 1.15), y + 0.74, dir, false);
+    }
+}
+
+/// Four kit cubicles in a pinwheel around `c` with their partitions back to back; a water cooler at one corner.
+pub fn kit_cluster(g: &mut Geo, f: &mut Furnisher, c: Vec2, y: f32) -> Rect {
+    // the kit's walls face -X and +Z: for each quadrant pick the heading that turns both walls toward the centre
+    let half = 1.16;
+    for (sx, sz) in [(1.0f32, 1.0f32), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+        let toward = [Vec2::new(-sx, 0.0), Vec2::new(0.0, -sz)];
+        let mut best = Vec2::Y;
+        for az in [Vec2::X, Vec2::Y, Vec2::NEG_X, Vec2::NEG_Y] {
+            let ax = Vec2::new(az.y, -az.x);
+            let walls = [-ax, az];
+            if walls.iter().all(|w| toward.iter().any(|t| w.dot(*t) > 0.9)) {
+                best = az;
+            }
+        }
+        let ax = Vec2::new(best.y, -best.x);
+        // kit wall planes sit at x = -1.15 and z = +1.34; put them on the cluster's centre lines
+        let origin = c + Vec2::new(sx, sz) * 0.06 - (-ax) * 1.15 - best * 1.34 + (Vec2::new(sx, 0.0) + Vec2::new(0.0, sz)) * 0.0;
+        let _ = half;
+        kit_cubicle(g, f, origin, y, best);
+    }
+    let corner = c + Vec2::new(2.6, -2.4);
+    f.put(g, &format!("{KIT}_21"), corner, y, Vec2::Y, true);
+    let r = 2.7;
+    Rect::new(c.x - r, c.y - r, c.x + r, c.y + r)
+}

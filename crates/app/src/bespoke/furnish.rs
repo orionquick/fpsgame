@@ -81,6 +81,25 @@ impl<'a> Furnisher<'a> {
         Some(s)
     }
 
+    /// Bounds (min, max) of an asset's parts in its own (unrecentred) coordinates.
+    pub fn bounds(&self, id: &str) -> Option<([f32; 3], [f32; 3])> {
+        let a = self.cat.get(id)?;
+        let mn = a.parts.iter().fold([f32::MAX; 3], |m, p| [m[0].min(p.min[0]), m[1].min(p.min[1]), m[2].min(p.min[2])]);
+        let mx = a.parts.iter().fold([f32::MIN; 3], |m, p| [m[0].max(p.max[0]), m[1].max(p.max[1]), m[2].max(p.max[2])]);
+        Some((mn, mx))
+    }
+
+    /// Places a kit piece keeping its offset from the kit origin: the kit's origin goes to local `origin` with its
+    /// +Z axis along `z_dir` (local plan). Returns the piece's footprint centre (local).
+    pub fn put_kit_piece(&mut self, g: &mut Geo, id: &str, origin: Vec2, y: f32, z_dir: Vec2, solid: bool) -> Option<Vec2> {
+        let (mn, mx) = self.bounds(id)?;
+        let az = z_dir.normalize();
+        let ax = Vec2::new(az.y, -az.x); // model X is 90 degrees counter-clockwise of model Z (seen from above)
+        let c = origin + ax * ((mn[0] + mx[0]) * 0.5) + az * ((mn[2] + mx[2]) * 0.5);
+        self.put(g, id, c, y + mn[1], az, solid);
+        Some(c)
+    }
+
     /// `put` with a uniform scale.
     pub fn put_scaled(&mut self, g: &mut Geo, id: &str, c: Vec2, y: f32, face: Vec2, scale: f32, solid: bool) {
         let n = self.out.len();

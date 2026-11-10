@@ -110,6 +110,7 @@ pub struct Vertex {
     pub tan: [f32; 4],
 }
 
+#[derive(Clone)]
 pub struct MeshPart {
     pub verts: Vec<Vertex>,
     pub idx: Vec<u32>,
@@ -217,7 +218,11 @@ fn read_zip_file(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Res<Ve
 }
 
 /// Extracts every mesh node of a glTF in the zip, transformed by its node chain (cm Z-up → m Y-up).
-fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> Res<(Vec<MeshPart>, Vec<Part>, Vec<Maps>)> {
+type Extracted = (Vec<MeshPart>, Vec<Part>, Vec<Maps>, Vec<Option<usize>>, Vec<String>);
+
+/// `megascans`: apply the Megascans centimetre Z-up fix; `split`: break a prop pack into one object per child of
+/// its root node (returned per part, with the object names).
+fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, megascans: bool, split: bool) -> Res<Extracted> {
     let mut v: serde_json::Value = serde_json::from_slice(&read_zip_file(zip, gltf_name)?)?;
     // Unreal exports add custom "_..." vertex attributes the gltf crate rejects; we don't use them.
     for m in v["meshes"].as_array_mut().into_iter().flatten() {
@@ -249,27 +254,49 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> R
     let mut parts = vec![];
     let mut infos = vec![];
     let multi = doc.materials().len() > 1;
-    fn walk<'a>(n: gltf::Node<'a>, parent: M4, out: &mut Vec<(gltf::Node<'a>, M4)>) {
+    fn walk<'a>(n: gltf::Node<'a>, parent: M4, obj: Option<usize>, split_at: Option<usize>, out: &mut Vec<(gltf::Node<'a>, M4, Option<usize>)>, objs: &mut Vec<String>) {
         let m = mul(&parent, &n.transform().matrix());
-        out.push((n.clone(), m));
+        out.push((n.clone(), m, obj));
         for c in n.children() {
-            walk(c, m, out);
+            // children of the split node each start an object
+            let o = if Some(n.index()) == split_at {
+                let name = c.name().map(String::from).or_else(|| c.mesh().and_then(|m| m.primitives().next().and_then(|p| p.material().name().map(String::from)))).unwrap_or_else(|| format!("object {}", objs.len()));
+                objs.push(name);
+                Some(objs.len() - 1)
+            } else {
+                obj
+            };
+            walk(c, m, o, split_at, out, objs);
         }
     }
     let ident: M4 = [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.], [0., 0., 0., 1.]];
+    // packs: descend the single-child chain from the root to the node whose children are the props
+    let split_at = if split {
+        doc.default_scene().or_else(|| doc.scenes().next()).and_then(|sc| {
+            let mut n = sc.nodes().next()?;
+            while n.children().count() == 1 {
+                n = n.children().next()?;
+            }
+            (n.children().count() >= 4).then(|| n.index())
+        })
+    } else {
+        None
+    };
     let mut nodes = vec![];
+    let mut objs = vec![];
     for s in doc.scenes() {
         for n in s.nodes() {
-            walk(n, ident, &mut nodes);
+            walk(n, ident, None, split_at, &mut nodes, &mut objs);
         }
     }
     // Megascans centimetre exports are Z-up; some nodes carry the +90° X rotation to Y-up and some don't.
     let to_y_up: M4 = [[1., 0., 0., 0.], [0., 0., 1., 0.], [0., -1., 0., 0.], [0., 0., 0., 1.]];
-    for (node, m) in nodes {
+    let mut part_obj = vec![];
+    for (node, m, obj) in nodes {
         let Some(mesh) = node.mesh() else { continue };
         // Only the centimetre Z-up exports (node scale 0.01) lack it; metre exports without a node scale are already Y-up.
         let zlen = (m[2][0].powi(2) + m[2][1].powi(2) + m[2][2].powi(2)).sqrt();
-        let m = if zlen < 0.1 && m[2][1].abs() < 0.5 * zlen { mul(&to_y_up, &m) } else { m };
+        let m = if megascans && zlen < 0.1 && m[2][1].abs() < 0.5 * zlen { mul(&to_y_up, &m) } else { m };
         // multi-material models: one part per material so each gets its own textures
         let mut groups: Vec<Option<usize>> = if multi { mesh.primitives().map(|p| p.material().index()).collect() } else { vec![None] };
         groups.dedup();
@@ -301,6 +328,7 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> R
         let min = verts.iter().fold([f32::MAX; 3], |a, v| [a[0].min(v.pos[0]), a[1].min(v.pos[1]), a[2].min(v.pos[2])]);
         let max = verts.iter().fold([f32::MIN; 3], |a, v| [a[0].max(v.pos[0]), a[1].max(v.pos[1]), a[2].max(v.pos[2])]);
         infos.push(Part { name: node.name().unwrap_or("").to_string(), min, max, tris: idx.len() as u32 / 3, material: group });
+        part_obj.push(obj);
         let lods = [simplify(&verts, &idx, 0.25, 0.02), simplify(&verts, &idx, 0.06, 0.08)];
         parts.push(MeshPart { verts, idx, lods });
         }
@@ -332,7 +360,26 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> R
             }
         })
         .collect();
-    Ok((parts, infos, mats))
+    Ok((parts, infos, mats, part_obj, objs))
+}
+
+/// Unit fixes for third-party models modelled at the wrong scale (by id prefix; checked with `fps gallery`).
+const SCALE: &[(&str, f32)] = &[
+    ("sf_260ff7a37a", 0.22), // Office Props Pack (crazyshroomz): everything ~4.5x real size
+    ("sf_7377ec591d", 0.2),  // Desk lamp
+    ("sf_4517652104", 0.02), // Bar Table (centimetres)
+    ("sf_aaf556f40f", 1.75), // Bar Stool (Saandy)
+    ("sf_561abc2fc9", 0.6),  // Desktop Computer (Tytan)
+];
+
+fn rescale(parts: &mut [MeshPart], infos: &mut [Part], k: f32) {
+    for (mp, info) in parts.iter_mut().zip(infos.iter_mut()) {
+        for v in mp.verts.iter_mut() {
+            v.pos = v.pos.map(|c| c * k);
+        }
+        info.min = info.min.map(|c| c * k);
+        info.max = info.max.map(|c| c * k);
+    }
 }
 
 /// Upright exports whose metadata "height" is really the depth, so the Z-up rule would knock them over
@@ -354,7 +401,7 @@ fn suffix_map(names: &[String], keys: &[&str]) -> Option<String> {
     names.iter().find(|n| { let l = n.to_lowercase(); keys.iter().any(|k| l.ends_with(&format!("{k}.jpg")) || l.ends_with(&format!("{k}.png")) || l.ends_with(&format!("{k}.exr"))) }).cloned()
 }
 
-fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: &str) -> Res<Asset> {
+fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: &str) -> Res<Vec<Asset>> {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(inbox.join(rel))?)?;
     let names: Vec<String> = zip.file_names().filter_map(|r| r.ok().map(|n| n.to_string())).collect();
     let meta_name = names.iter().find(|n| n.ends_with(".json")).cloned();
@@ -363,7 +410,12 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
     let title = title.map(String::from).or_else(|| meta["name"].as_str().map(String::from)).unwrap_or_else(|| id.clone());
     let tags: Vec<String> = meta["tags"].as_array().map_or(vec![], |a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect());
     if let Some(g) = names.iter().find(|n| n.ends_with(".gltf")).cloned() {
-        let (mut parts, mut infos, gmats) = extract_model(&mut zip, &g)?;
+        let third_party = group == "polyhaven" || group == "sketchfab";
+        let pack = group == "sketchfab" && { let t = title.to_lowercase(); ["pack", "assets", "props", "collection", "kit"].iter().any(|k| t.contains(k)) };
+        let (mut parts, mut infos, gmats, part_obj, objs) = extract_model(&mut zip, &g, !third_party, pack)?;
+        if let Some(&(_, k)) = SCALE.iter().find(|(p, _)| id.starts_with(p)) {
+            rescale(&mut parts, &mut infos, k);
+        }
         // Some metre-scale exports are still Z-up: if the metadata height matches the Z extent, stand them up.
         let meta_h = meta["meta"].as_array().and_then(|m| m.iter().find(|x| x["key"] == "height")).and_then(|x| x["value"].as_str().map(String::from).or_else(|| x["value"].as_f64().map(|f| f.to_string()))).and_then(|s| s.trim_end_matches('m').trim().parse::<f32>().ok());
         let ext = |i: usize| infos.iter().map(|p| p.max[i]).fold(f32::MIN, f32::max) - infos.iter().map(|p| p.min[i]).fold(f32::MAX, f32::min);
@@ -396,7 +448,22 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
         // Poly Haven / Sketchfab models carry their materials in the glTF itself
         let gltf_mats = group == "polyhaven" || group == "sketchfab" || (maps.base.is_none() && gmats.iter().any(|m| m.base.is_some()));
         let (maps, materials) = if gltf_mats { (gmats.first().cloned().unwrap_or_default(), gmats) } else { (maps, vec![]) };
-        return Ok(Asset { id, title, group: group.into(), kind: AssetKind::Model, zip: rel.into(), tags, parts: infos, maps, tile_m: None, normal_dx: rel.contains("_ue_"), materials });
+        if pack && !objs.is_empty() {
+            // one asset per prop in the pack, each with its own mesh file; materials are shared
+            let mut out_assets = vec![];
+            for (k, name) in objs.iter().enumerate() {
+                let sel: Vec<usize> = (0..parts.len()).filter(|&i| part_obj[i] == Some(k)).collect();
+                if sel.is_empty() {
+                    continue;
+                }
+                let sub_id = format!("{id}_{k:02}");
+                let sub_parts: Vec<MeshPart> = sel.iter().map(|&i| parts[i].clone()).collect();
+                write_parts(&mesh_path(out, &sub_id), &sub_parts)?;
+                out_assets.push(Asset { id: sub_id, title: format!("{title} / {name}"), group: group.into(), kind: AssetKind::Model, zip: rel.into(), tags: tags.clone(), parts: sel.iter().map(|&i| infos[i].clone()).collect(), maps: maps.clone(), tile_m: None, normal_dx: false, materials: materials.clone() });
+            }
+            return Ok(out_assets);
+        }
+        return Ok(vec![Asset { id, title, group: group.into(), kind: AssetKind::Model, zip: rel.into(), tags, parts: infos, maps, tile_m: None, normal_dx: rel.contains("_ue_"), materials }]);
     }
     let tile = meta["maps"].as_array().and_then(|m| m.iter().find_map(|x| x["physicalSize"].as_str())).and_then(|s| {
         let (a, b) = s.split_once('x')?;
@@ -414,7 +481,7 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
     if maps.base.is_none() {
         return Err(format!("{rel}: no mesh and no base colour map").into());
     }
-    Ok(Asset { id, title, group: group.into(), kind: AssetKind::Surface, zip: rel.into(), tags, parts: vec![], maps, tile_m: tile.or(Some([2.0, 2.0])), normal_dx: false, materials: vec![] })
+    Ok(vec![Asset { id, title, group: group.into(), kind: AssetKind::Surface, zip: rel.into(), tags, parts: vec![], maps, tile_m: tile.or(Some([2.0, 2.0])), normal_dx: false, materials: vec![] }])
 }
 
 /// Compiles every zip under `inbox` (titles and groups from `manifest.jsonl` when present) into `out`.
@@ -463,8 +530,13 @@ pub fn compile(inbox: &Path, out: &Path) -> Res<(Catalog, Vec<String>)> {
     let mut seen = std::collections::HashSet::new();
     for r in results.into_inner().unwrap() {
         match r {
-            Ok(a) if seen.insert(a.id.clone()) => cat.assets.push(a),
-            Ok(_) => {}
+            Ok(list) => {
+                for a in list {
+                    if seen.insert(a.id.clone()) {
+                        cat.assets.push(a);
+                    }
+                }
+            }
             Err(e) => errors.push(e),
         }
     }

@@ -58,7 +58,7 @@ map editor (scenes live in data/scenes/NAME.ops.jsonl, the op log; NAME.json is 
   fps review NAME                        review image -> out/NAME_review.png
   fps streets NAME                       named streets in the scene bounds, with centreline positions
   fps mcp [--scene NAME]                 MCP server on stdio (see .mcp.json)
-  fps gallery GROUP                      contact sheet of an asset group's models (orientation/scale check)
+  fps gallery GROUP|ID-PREFIX [--fit]    contact sheet of an asset group's models (orientation/scale check)
   fps assets                             compile data/megascans_inbox -> data/assets (meshes + catalog)";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("gallery") => {
             let group = args.get(1).cloned().ok_or("missing asset group")?;
             let mut cx = review::Ctx::new(city::City::load(&city_path())?);
-            let (img, legend) = review::gallery(&mut cx, &group, arg(&args, "--w", 1800), arg(&args, "--h", 1100));
+            let (img, legend) = review::gallery(&mut cx, &group, arg(&args, "--w", 1800), arg(&args, "--h", 1100), args.iter().any(|a| a == "--fit"));
             let p = out_dir().join(format!("gallery_{group}.png"));
             img.save(&p)?;
             for (i, id, t) in legend {

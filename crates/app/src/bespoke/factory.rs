@@ -366,7 +366,13 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
                     fur.put(&mut g, "ph_potted_plant_01", c + v(-2.2, -1.3), y, v(1.0, 0.3), false);
                     continue;
                 }
-                pads.push(loft::cubicles(&mut g, &mut fur, c, v(1.0, 0.0), pairs, y));
+                // the Office Props Pack cubicles where a full pinwheel fits, modelled benches elsewhere
+                let kit_r = Rect::new(c.x - 2.75, c.y - 2.75, c.x + 2.75, c.y + 2.75);
+                if xb - xa >= 5.6 && !reserved.iter().any(|q| q.x0 < kit_r.x1 && q.x1 > kit_r.x0 && q.z0 < kit_r.z1 && q.z1 > kit_r.z0) {
+                    pads.push(loft::kit_cluster(&mut g, &mut fur, c, y));
+                } else {
+                    pads.push(loft::cubicles(&mut g, &mut fur, c, v(1.0, 0.0), pairs, y));
+                }
             }
         }
         loft::floor(&mut g, &spec, y, &pads);
