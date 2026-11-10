@@ -210,14 +210,21 @@ pub fn decal(svg: &std::path::Path, id: &str, wm: f32, hm: f32, px: u32, under: 
             // texels of the source per decal pixel: the decal spans wm metres over w pixels, the source tile metres over 1024
             let k = 1024.0 * wm / (tile * w as f32);
             let at = |img: &image::RgbaImage, x: u32, y: u32| *img.get_pixel(((x as f32 * k) as u32) % 1024, ((y as f32 * k) as u32) % 1024);
-            // stain: the concrete's own colour, darkened (the material tint then matches the floor slabs')
-            let base = image::RgbImage::from_fn(w, h, |x, y| {
-                let p = at(&m.base, x, y);
-                image::Rgb([(p[0] as f32 * 0.42) as u8, (p[1] as f32 * 0.42) as u8, (p[2] as f32 * 0.40) as u8])
-            });
+            // stain: an even ink at the concrete's mean colour, darkened (the photo's stencil is solid, not
+            // mottled); the concrete's finish (roughness, AO) and a softened normal keep it lit like the slabs
+            let mut mean = [0f64; 3];
+            for p in m.base.pixels() {
+                for c in 0..3 {
+                    mean[c] += (p[c] as f64 / 255.0).powf(2.2);
+                }
+            }
+            let n = (m.base.width() * m.base.height()) as f64;
+            let ink: Vec<u8> = (0..3).map(|c| (((mean[c] / n) * [0.2, 0.21, 0.22][c]).powf(1.0 / 2.2) * 255.0) as u8).collect();
+            let base = image::RgbImage::from_fn(w, h, |_, _| image::Rgb([ink[0], ink[1], ink[2]]));
             let nrm = image::RgbImage::from_fn(w, h, |x, y| {
                 let p = at(&m.normal, x, y);
-                image::Rgb([p[0], p[1], p[2]])
+                let soft = |v: u8| ((v as f32 - 128.0) * 0.3 + 128.0) as u8;
+                image::Rgb([soft(p[0]), soft(p[1]), 255])
             });
             let rough = image::GrayImage::from_fn(w, h, |x, y| image::Luma([at(&m.orm, x, y)[1]]));
             let ao = image::GrayImage::from_fn(w, h, |x, y| image::Luma([at(&m.orm, x, y)[0]]));

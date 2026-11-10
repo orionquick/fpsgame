@@ -159,7 +159,7 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
     cx.renderer.set_lights(&cx.gpu, &cx.lights, cam.eye);
     // interiors: meter the exposure like a camera (unless FPS_EXPOSURE pins it)
     if metered && std::env::var("FPS_EXPOSURE").is_err() {
-        let (img, e) = render::render_image_metered(&cx.gpu, &cx.renderer, &cx.scene, &batches, &cam, w, h, crate::INTERIOR_KEY, (1.0, 40.0));
+        let (img, e) = render::render_image_metered(&cx.gpu, &cx.renderer, &cx.scene, &batches, &cam, w, h, if cx.lights.is_empty() { crate::INTERIOR_KEY } else { crate::LAMPLIT_KEY }, (1.0, 40.0));
         eprintln!("exposure {e:.1}");
         return img;
     }

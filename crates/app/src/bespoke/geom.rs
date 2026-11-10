@@ -252,6 +252,19 @@ impl Geo {
         }
         let long = if s.x >= s.y && s.x >= s.z { Vec3::X } else if s.y >= s.z { Vec3::Y } else { Vec3::Z };
         let c = (mn + mx) * 0.5;
+        // each member its own stretch of the texture (and a random half-turn, which keeps the grain lengthwise),
+        // so neighbouring joists don't line up as one printed board
+        let h = |salt: u64| {
+            let mut x = (c.x.to_bits() as u64) ^ ((c.y.to_bits() as u64) << 21) ^ ((c.z.to_bits() as u64) << 42) ^ salt;
+            x ^= x >> 33;
+            x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+            x ^= x >> 33;
+            x = x.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+            x ^= x >> 33;
+            (x >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let uv = [h(1) * 9.0, h(2) * 9.0];
+        let turns = if h(3) < 0.5 { 0 } else { 2 };
         for n in [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z] {
             // up = the long axis when it lies in this face, else any in-plane axis
             let up = if n.dot(long).abs() < 0.5 { long } else if n.y.abs() < 0.5 { Vec3::Y } else { Vec3::Z };
@@ -260,7 +273,7 @@ impl Geo {
             let fc = c + n * ((n.abs() * s).max_element() * 0.5);
             let o = fc - right * hr - up * hu;
             let (r, u) = (right * 2.0 * hr, up * 2.0 * hu);
-            self.poly(k, &[o, o + r, o + r + u, o + u], right, up);
+            self.quad_uv(k, o, r, u, uv, turns);
         }
     }
 

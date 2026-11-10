@@ -23,6 +23,8 @@ pub const INTERIOR_EXPOSURE: f32 = 18.0;
 /// Metering target for interior shots: scene log-average luminance x exposure (calibrated so the empty daylit
 /// hall meters to about the exposure that matched its photo).
 pub const INTERIOR_KEY: f32 = 0.11;
+/// Lamp-lit rooms keep deep shadows (bright lamps and a dark ceiling, as in the bar photo): a lower key.
+pub const LAMPLIT_KEY: f32 = 0.075;
 
 pub fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
