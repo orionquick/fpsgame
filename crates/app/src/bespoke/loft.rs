@@ -27,21 +27,23 @@ const GIRDER_D: f32 = 0.5;
 fn ins(k: Key) -> Key {
     k.inside()
 }
-/// Old-growth heavy timber, darkened with age; grain stretched to suit big members.
+/// Old-growth heavy timber, rough-sawn and checked, warm red-brown with age (as in the photos).
 fn timber() -> Key {
-    ins(Key::new(Mat::Surface(TREATED), [0.42, 0.28, 0.19]).tile(0.9).rough(0.85).wear(wear::WOOD))
+    ins(Key::new(Mat::Surface(ROUGH_TIMBER), [1.2, 0.78, 0.56]).tile(1.3).rough(0.9).wear(wear::WOOD))
 }
-/// Rough-sawn columns, darker and oilier than the beams (as in the photos).
+/// Rough-sawn columns, darker than the beams (as in the photos).
 fn column_timber() -> Key {
-    ins(Key::new(Mat::Surface(TREATED), [0.24, 0.16, 0.115]).tile(1.1).rough(0.8).wear(wear::WOOD))
+    ins(Key::new(Mat::Surface(ROUGH_TIMBER), [0.9, 0.56, 0.4]).tile(1.5).rough(0.85).wear(wear::WOOD))
 }
 /// Plank deck seen from below: dark aged boards (as in the photos).
 fn deck() -> Key {
-    ins(Key::new(Mat::Surface("pht_wood_planks"), [0.62, 0.46, 0.33]).tile(1.5).rough(1.0))
+    ins(Key::new(Mat::Surface("pht_wood_planks"), [1.35, 1.3, 1.5]).tile(1.5).rough(1.0))
 }
 const OAK: &str = "rd5oqpp0";
 const DECK_PLANKS: &str = "ul4vcieaw";
 const TREATED: &str = "scoleyp0";
+/// Poly Haven rough_wood: weathered heavy timber with checks and splits, grain along V.
+const ROUGH_TIMBER: &str = "pht_rough_wood";
 const VENEER: &str = "vlskbcz";
 const TABLE_TOP: &str = "tdfhffuq";
 const LEATHER: &str = "oizuetp0";
