@@ -343,7 +343,9 @@ fn fs_glass(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
         amb = mix(amb, gi.rgb, gi.a);
     }
     let film = i.tint * 0.025 * (amb + g.sun_col.rgb * max(dot(nv, l), 0.0) * sun_shadow(i.world, nv));
-    let a = clamp(0.30 + f * 0.7, 0.0, 1.0);
+    // base opacity: windows ~0.3; clear glassware passes a lower one in params.y
+    let base_a = select(0.30, i.params.y, i.params.y > 0.0);
+    let a = clamp(base_a + f * 0.7, 0.0, 1.0);
     let c = refl * mix(0.45, 1.0, f) + film;
     return vec4f(tonemap(haze(c, i.world)) * a, a);
 }

@@ -180,7 +180,34 @@ fn leather(id: &str, diamond: bool) -> std::io::Result<()> {
     write_surface("procedural", id, &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nm)), ("Roughness", png_gray(&rough))], (0.24, 0.24), "fps proctex")
 }
 
+/// Flexible duct jacket (as in the bar photo): fine ribs running round the duct with a slight spiral, crests
+/// catching the light, dusty mauve-brown. Texture x runs along the duct (0.5 m repeat, 20 ribs), y round it.
+fn flex_duct() -> std::io::Result<()> {
+    let n = 1024usize;
+    let ribs = 20.0;
+    let mut h = vec![0f32; n * n];
+    let mut base = image::RgbImage::new(n as u32, n as u32);
+    let mut rough = image::GrayImage::new(n as u32, n as u32);
+    for y in 0..n {
+        for x in 0..n {
+            let (u, v) = (x as f32 / n as f32, y as f32 / n as f32);
+            // one rib per 1/20 along the duct; a whole-rib spiral pitch round the circumference keeps it tiling
+            let t = (u * ribs + v).fract();
+            // rounded crest, narrow dark valley (the wire helix)
+            let crest = (t * std::f32::consts::PI).sin().powf(0.6);
+            h[y * n + x] = crest;
+            let dust = vnoise(u * 12.0, v * 12.0, 12, 11) * 0.6 + vnoise(u * 50.0, v * 50.0, 50, 12) * 0.4;
+            let k = (0.55 + 0.45 * crest) * (0.88 + 0.16 * dust);
+            base.put_pixel(x as u32, y as u32, image::Rgb([(0.6 * k * 255.0) as u8, (0.44 * k * 255.0) as u8, (0.4 * k * 255.0) as u8]));
+            rough.put_pixel(x as u32, y as u32, image::Luma([(150.0 - 50.0 * crest) as u8]));
+        }
+    }
+    let nm = normals(&h, n, n, 7.0);
+    write_surface("procedural", "pt_flex_duct", &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nm)), ("Roughness", png_gray(&rough))], (0.5, 0.5), "fps proctex")
+}
+
 pub fn all() -> std::io::Result<()> {
+    flex_duct()?;
     subway()?;
     cowhide()?;
     weave()?;

@@ -448,7 +448,12 @@ fn lounge(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     let (cx, cz) = ((RUG.0 + RUG.2) * 0.5, (RUG.1 + RUG.3) * 0.5);
     // looking east at the bar from the lounge, north is on the left: arranged as in the photo
     // black tufted sofa with its back to the bar, facing the room; the drum table in front of it
-    put(f, g, "sf_4b25966ff2", v(cx + 1.4, cz + 0.1), y, dir(180.0), 1.4, [1.0; 3], true);
+    // long and low, as in the photo (~3.2 m, about three table widths): stretched more in length than height
+    put(f, g, "sf_4b25966ff2", v(cx + 1.45, cz + 0.1), y, dir(180.0), 1.0, [1.0; 3], true);
+    if let Some(p) = f.out.last_mut() {
+        p.scale = [1.7, 1.35, 1.45];
+    }
+    g.block_aabb(Vec3::new(cx + 0.95, y, cz - 1.5), Vec3::new(cx + 1.95, y + 0.8, cz + 1.7));
     drum_table(g, v(cx - 0.3, cz + 0.05), y, 0.62, 0.42);
     // front left: tan tufted sofa with its back to us, angled in; woven poufs by the column
     biscuit_sofa(g, v(cx - 2.45, cz - 1.5), y, dir(32.0));
@@ -456,11 +461,11 @@ fn lounge(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     pouf(g, v(cx - 2.05, cz - 2.75), y, 0.26, 61.0);
     // front right: cognac sling chairs turned to the table, a brass tray table between
     sling_chair(g, v(cx - 1.85, cz + 1.25), y, dir(-38.0));
-    sling_chair(g, v(cx - 0.3, cz + 2.15), y, dir(-98.0));
+    sling_chair(g, v(cx - 0.55, cz + 2.35), y, dir(-92.0));
     put(f, g, "sf_49e5ede6a1", v(cx - 1.55, cz + 0.25), y, dir(0.0), 1.15, [1.0; 3], true);
     // cowhide drums at the sofa's right end
-    cow_drum(g, v(cx + 0.55, cz + 1.45), y, 0.24);
-    cow_drum(g, v(cx + 1.45, cz + 1.75), y, 0.22);
+    cow_drum(g, v(cx + 0.45, cz + 2.0), y, 0.24);
+    cow_drum(g, v(cx + 1.35, cz + 2.15), y, 0.22);
     // greenery on the table
     put(f, g, "sf_1ab9bf841d", v(cx - 0.4, cz - 0.1), y + 0.42, dir(30.0), 0.35, [1.0; 3], false);
 
@@ -762,12 +767,13 @@ fn chandelier(g: &mut Geo, c: Vec2, ceiling: f32, floor: f32, scale: f32) {
                 let y = Vec3::Y * up;
                 let base = q + y * 0.018;
                 g.tube(st, base, base + y * 0.025, 0.028, 8);
-                // the clear glass lit gold by the Edison bulb inside it (a glowing cup, as the photo reads), with a
-                // brighter filament band at its heart
-                let cup = Key::new(Mat::Light, [0.13, 0.075, 0.03]);
-                g.tube(cup, base + y * 0.025, base + y * 0.155, 0.05, 12);
-                disc(g, cup, base + y * 0.155, 0.05, 12);
-                g.tube(edison, base + y * 0.07, base + y * 0.11, 0.0505, 12);
+                // a clear glass cup (nearly transparent: edges and faint reflections) round an Edison bulb: a warm
+                // glowing globe with a brighter filament in it
+                let clear = Key::new(Mat::Glass, [0.9, 0.88, 0.82]).rough(0.05);
+                g.tube(clear, base + y * 0.025, base + y * 0.155, 0.05, 14);
+                disc(g, clear, base + y * 0.155, 0.05, 14);
+                g.tube(Key::new(Mat::Light, [0.22, 0.12, 0.045]), base + y * 0.045, base + y * 0.125, 0.024, 10);
+                g.tube(edison, base + y * 0.06, base + y * 0.11, 0.007, 6);
             }
         }
         for k in 0..4 {
@@ -779,7 +785,7 @@ fn chandelier(g: &mut Geo, c: Vec2, ceiling: f32, floor: f32, scale: f32) {
 
 /// Rose-painted spiral ducts: one along the top of the bar wall, one across the south of the lounge, one north.
 fn ducts(g: &mut Geo, s: &Site) {
-    let rose = ins(Key::new(Mat::Surface("pht_corrugated_iron_02"), [5.0, 3.4, 4.6]).tile(0.35).rough(0.8));
+    let rose = ins(Key::new(Mat::Surface("pt_flex_duct"), [1.0, 1.0, 1.0]).tile(0.5));
     let y = s.deck_b - 0.5 - 0.62;
     let runs = [
         // the big one, hung low just over the bar wall's cap (as in the photo)

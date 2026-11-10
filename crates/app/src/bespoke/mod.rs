@@ -312,7 +312,8 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, g: &G
                 (lib.material(gpu, r, id), Instance::new(glam::Mat4::IDENTITY, tint, 1.0 / tile).with_params(indoor), false)
             }
             Mat::Plain(rough) => (plain.entry(rough).or_insert_with(|| Arc::new(Material::plain(gpu, r, rough))).clone(), Instance::new(glam::Mat4::IDENTITY, tint, 1.0).with_params(indoor), false),
-            Mat::Glass => (lib.glass(gpu, r), Instance::new(glam::Mat4::IDENTITY, tint, 1.0), true),
+            // glass clarity rides in params.y (Key::rough): base opacity, 0 = the default glazing
+            Mat::Glass => (lib.glass(gpu, r), Instance::new(glam::Mat4::IDENTITY, tint, 1.0).with_params([0.0, gloss, 0.0, 0.0]), true),
             Mat::Screen(id) => (lib.material(gpu, r, id), Instance::new(glam::Mat4::IDENTITY, tint, 1.0 / if key.tile_cm > 0 { key.tile_cm as f32 / 100.0 } else { 1.0 }).with_params([4.0, 1.0, 0.0, 0.0]), false),
             Mat::Light => (plain.entry(255).or_insert_with(|| Arc::new(Material::plain(gpu, r, 255))).clone(), Instance::new(glam::Mat4::IDENTITY, tint, 1.0).with_params([4.0, 1.2, 0.0, 0.0]), false),
         };
