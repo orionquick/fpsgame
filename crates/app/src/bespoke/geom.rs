@@ -118,6 +118,12 @@ impl Geo {
         self.lights.push(render::PointLight { pos: w.to_array(), radius, color, _pad: 0.0 });
     }
 
+    /// A downlight: like `light`, but surfaces above it get little (shaded lamps, bulbs in glass).
+    pub fn downlight(&mut self, p: Vec3, radius: f32, color: [f32; 3]) {
+        let w = self.world(p);
+        self.lights.push(render::PointLight { pos: w.to_array(), radius, color, _pad: 1.0 });
+    }
+
     /// `origin` is the world position of local (0, 0, 0); `ex` the world direction of local +x (horizontal).
     pub fn new(origin: Vec3, ex: Vec3) -> Self {
         let ex = Vec3::new(ex.x, 0.0, ex.z).normalize();
@@ -141,7 +147,7 @@ impl Geo {
         (w.x as f64).atan2(-w.z as f64).to_degrees()
     }
 
-    fn world(&self, p: Vec3) -> Vec3 {
+    pub fn world(&self, p: Vec3) -> Vec3 {
         self.origin + self.ex * p.x + Vec3::Y * p.y + self.ez * p.z
     }
     fn wdir(&self, d: Vec3) -> Vec3 {
@@ -190,6 +196,21 @@ impl Geo {
         let verts: Vec<TexVertex> = [(o, 0.0, 0.0), (o + r, lr, 0.0), (o + r + u, lr, lu), (o + u, 0.0, lu)]
             .iter()
             .map(|&(p, eu, ev)| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv: [p.dot(tr) + uv[0], -p.dot(tu) + uv[1]], tan: [wt.x, wt.y, wt.z, 1.0], edge: [eu, ev, lr, lu] })
+            .collect();
+        let g = self.groups.entry(k).or_default();
+        let base = g.0.len() as u32;
+        g.0.extend(verts);
+        g.1.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    /// A decal: the whole texture stretched once over the rectangle (`tile` = the material's tile size, which the
+    /// shader divides texture coordinates by).
+    pub fn decal(&mut self, k: Key, o: Vec3, r: Vec3, u: Vec3, tile: f32) {
+        let n = r.cross(u).normalize();
+        let (wn, wt) = (self.wdir(n), self.wdir(r.normalize()));
+        let verts: Vec<TexVertex> = [(o, 0.0, 0.0), (o + r, 1.0, 0.0), (o + r + u, 1.0, 1.0), (o + u, 0.0, 1.0)]
+            .iter()
+            .map(|&(p, s, t)| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv: [s * tile, -t * tile], tan: [wt.x, wt.y, wt.z, 1.0], edge: [0.0; 4] })
             .collect();
         let g = self.groups.entry(k).or_default();
         let base = g.0.len() as u32;

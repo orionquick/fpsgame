@@ -140,6 +140,7 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
         eprintln!("eye {} probes {:?}", cam.eye, cx.probes);
     }
     // bake the reflection probe of the room the camera is in (lights set for the capture point first)
+    let mut metered = false;
     match cx.probes.iter().find(|p| cam.eye.cmpge(p[1]).all() && cam.eye.cmple(p[2]).all()) {
         Some(p) if std::env::var("FPS_NO_PROBE").is_err() => {
             cx.renderer.set_exposure(1.0);
@@ -147,6 +148,7 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
             cx.renderer.bake_probe(&cx.gpu, &cx.scene, &batches, p[0], p[1], p[2]);
             cx.renderer.set_exposure(std::env::var("FPS_EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(if cx.renderer.gi.enabled() { crate::INTERIOR_EXPOSURE } else { 2.2 }));
             cx.renderer.set_white_balance(crate::INTERIOR_WHITE);
+            metered = cx.renderer.gi.enabled();
         }
         _ => {
             cx.renderer.clear_probe();
@@ -155,7 +157,30 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
         }
     }
     cx.renderer.set_lights(&cx.gpu, &cx.lights, cam.eye);
+    // interiors: meter the exposure like a camera (unless FPS_EXPOSURE pins it)
+    if metered && std::env::var("FPS_EXPOSURE").is_err() {
+        let (img, e) = render::render_image_metered(&cx.gpu, &cx.renderer, &cx.scene, &batches, &cam, w, h, crate::INTERIOR_KEY, (1.0, 40.0));
+        eprintln!("exposure {e:.1}");
+        return img;
+    }
     render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &batches, &cam, w, h)
+}
+
+/// Interior plan: GI around the rect's centre, a fixed bright exposure, cut away above `cut`.
+pub fn plan(cx: &Ctx, rect: [f32; 4], cut: f32, mpp: f32) -> RgbaImage {
+    let batches = cx.batches();
+    let c = glam::Vec3::new((rect[0] + rect[2]) * 0.5, cut - 1.0, (rect[1] + rect[3]) * 0.5);
+    if !cx.gi_tris.is_empty() {
+        let terrain = |x: f32, z: f32| cx.city.terrain.at(x as f64, z as f64) as f32;
+        let f = crate::gi::build(&cx.gi_tris, &cx.gi_city, terrain, &cx.lights, cx.renderer.sun_dir, c);
+        cx.renderer.gi.upload(&cx.gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, true);
+        cx.renderer.gi_iterate(&cx.gpu, 200);
+    }
+    cx.renderer.clear_probe();
+    cx.renderer.set_exposure(std::env::var("FPS_EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0));
+    cx.renderer.set_lights(&cx.gpu, &cx.lights, c);
+    let (w, h) = (((rect[2] - rect[0]) / mpp) as u32, ((rect[3] - rect[1]) / mpp) as u32);
+    render::render_image(&cx.gpu, &cx.renderer, &cx.scene, &batches, &Camera::plan(rect, cut), w, h)
 }
 
 /// Grid every 100 m with coordinate labels, plus the play-area outline. `rect` is what the image covers.

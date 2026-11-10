@@ -187,7 +187,11 @@ fn upload_compressed(gpu: &Gpu, t: &CompressedTex) -> wgpu::TextureView {
     });
     let block = if t.kind == 0 || t.kind == 2 { 8 } else { 16 };
     for (mip, data) in t.mips.iter().enumerate() {
-        let (lw, lh) = ((t.w >> mip).max(4), (t.h >> mip).max(4));
+        // block-compressed levels are stored in whole 4x4 blocks
+        let (lw, lh) = (((t.w >> mip).max(1)).div_ceil(4) * 4, ((t.h >> mip).max(1)).div_ceil(4) * 4);
+        if mip == 0 && (t.w % 4 != 0 || t.h % 4 != 0) {
+            eprintln!("bc texture {}x{} is not block aligned", t.w, t.h);
+        }
         let bw = lw.div_ceil(4);
         gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: mip as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },

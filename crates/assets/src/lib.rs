@@ -374,6 +374,12 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
 
 /// Unit fixes for third-party models modelled at the wrong scale (by id prefix; checked with `fps gallery`).
 const SCALE: &[(&str, f32)] = &[
+    ("sf_36ac2ea964", 2.35), // Chesterfield Lounge Set: under half real size
+    ("sf_f79b73c0eb", 0.01), // Game Ready - Beer Tap (centimetres)
+    ("sf_3ae5d56740", 0.028), // realistic leather sofa (odd units: ~2.2 m wide)
+    ("sf_3d1f1d848e", 0.00125), // Couch, Sofa (Free): millimetre-ish, ~2 m wide
+    ("sf_94181c1253", 3.8),  // Turner Chair: ~0.83 m wide lounge chair
+    ("sf_ce05a5d98b", 1.25), // Television (Wall-mounted): ~60 in. as in the bar
     ("sf_260ff7a37a", 0.22), // Office Props Pack (crazyshroomz): everything ~4.5x real size
     ("sf_7377ec591d", 0.2),  // Desk lamp
     ("sf_4517652104", 0.02), // Bar Table (centimetres)
@@ -447,7 +453,7 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
     let tags: Vec<String> = meta["tags"].as_array().map_or(vec![], |a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect());
     if let Some(g) = names.iter().find(|n| n.ends_with(".gltf")).cloned() {
         let third_party = group == "polyhaven" || group == "sketchfab";
-        let pack = group == "sketchfab" && { let t = title.to_lowercase(); ["pack", "assets", "props", "collection", "kit"].iter().any(|k| t.contains(k)) };
+        let pack = group == "sketchfab" && { let t = title.to_lowercase(); ["pack", "assets", "props", "collection", "kit", "lounge set", "sofa set"].iter().any(|k| t.contains(k)) };
         let (mut parts, mut infos, gmats, part_obj, objs) = extract_model(&mut zip, &g, !third_party, pack)?;
         if let Some(&(_, k)) = SCALE.iter().find(|(p, _)| id.starts_with(p)) {
             rescale(&mut parts, &mut infos, k);

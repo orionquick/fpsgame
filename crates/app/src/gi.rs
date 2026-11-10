@@ -317,7 +317,10 @@ pub fn build(tris: &[Tri], city: &[Prism], terrain: impl Fn(f32, f32) -> f32, li
                         continue;
                     }
                     let xr = d / l.radius;
-                    let fall = (1.0 - xr * xr).powi(2) / (1.0 + d * d);
+                    // downlights light little above themselves (as in the shader)
+                    let up = ((toward.y + 0.35) / 0.85).clamp(0.0, 1.0);
+                    let down = 0.12 + 0.88 * up * up * (3.0 - 2.0 * up);
+                    let fall = (1.0 - xr * xr).powi(2) / (1.0 + d * d) * (1.0 + (down - 1.0) * l._pad);
                     lamp += Vec3::from(l.color) * fall * 0.7;
                 }
                 let e = albedo[i] * (SUN_COL * sun_e + lamp);

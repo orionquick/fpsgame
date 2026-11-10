@@ -244,11 +244,11 @@ mod tests {
         let c = city();
         let col = Collision::new(&c, None);
         let b = crate::bespoke::all(&c).into_iter().next().expect("factory");
-        // the lowest slab top is the ground floor; the upper floors sit 4.6 and 8.5 m above it
+        // the lowest slab top is the ground floor (the tall hall); the upper floors sit 6.0 and 9.9 m above it
         let slab_tops: Vec<f32> = b.geo.blocks.iter().map(|k| k.y1).collect();
         let ground = slab_tops.iter().copied().filter(|&y| y > 0.0).fold(f32::MAX, f32::min);
         let p = [76.0f32, -170.0]; // inside, in the open office area
-        for lvl in [4.6f32, 8.5] {
+        for lvl in [6.0f32, 9.9] {
             let f = col.roof_under(p, ground + lvl + 0.1, 0.45).expect("floor under");
             assert!((f - (ground + lvl)).abs() < 0.05, "floor at {f}, expected {}", ground + lvl);
         }

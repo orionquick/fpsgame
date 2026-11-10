@@ -7,7 +7,7 @@
 //! - north: two windowed bays at the west end, the rest is a party wall; east: party wall.
 use super::geom::{wear, Geo, Hole, Key, Mat};
 use super::plan::{self, Rect};
-use super::{furnish, interior, lift_doors, loft, m, slab, stair, stair_hole, Building};
+use super::{beerloft, furnish, interior, lift_doors, loft, m, slab, stair, stair_hole, Building};
 use glam::{Vec2, Vec3};
 
 pub const OSM: &str = "way/376480375";
@@ -15,10 +15,11 @@ pub const OSM: &str = "way/376480375";
 /// Interior face of the outer walls: Megascans old brick wall (aged, dusty, irregular).
 const BRICK_IN: &str = "tc2jfcwn";
 const T: f32 = 0.33; // exterior wall: 13 in. of brick
-const LEVELS: [(f32, f32); 3] = [(0.0, 4.6), (4.6, 3.9), (8.5, 3.9)];
-const ROOF: f32 = 12.4;
-const PARAPET: f32 = 13.3;
-const GROUND_HEAD: f32 = 3.5;
+/// The ground floor is the tall old warehouse hall (6 m to the deck, as in the interior photos).
+const LEVELS: [(f32, f32); 3] = [(0.0, 6.0), (6.0, 3.9), (9.9, 3.9)];
+const ROOF: f32 = 13.8;
+const PARAPET: f32 = 14.7;
+const GROUND_HEAD: f32 = 4.4;
 /// Upper window sill height and window height per upper floor.
 const SILL: f32 = 0.85;
 const WIN_H: [f32; 2] = [2.3, 2.45];
@@ -297,6 +298,10 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         cols: vec![T + (w - 2.0 * T) * 0.25, T + (w - 2.0 * T) * 0.5, T + (w - 2.0 * T) * 0.75],
         core: core.clone(),
     };
+    if std::env::var("FPS_DUMP_PLAN").is_ok() {
+        eprintln!("plan w {w} d {d} core {:?} stair {:?} lift {:?} cols {:?} girders {:?}", core.r, core.stair, core.elevator, spec.cols, spec.girders);
+        eprintln!("origin {:?} ex {:?}", g.world(Vec3::ZERO), g.world(Vec3::X) - g.world(Vec3::ZERO));
+    }
     for (k, &(y, _)) in LEVELS.iter().enumerate() {
         let top = if k + 1 < LEVELS.len() { LEVELS[k + 1].0 } else { ROOF };
         let h = top - y;
@@ -304,7 +309,8 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         let holes = if k == 0 { vec![] } else { vec![stair_hole(core.stair), core.elevator] };
         slab(&mut g, inner, y, if k == 0 { 0.3 } else { 0.09 }, &holes);
         interior(&mut g, &ground, y, clear, 10 + k as u64, true, k == 0);
-        loft::structure(&mut g, &spec, y, h, k as u64, k != 0 && !super::undecorated());
+        let bar_floor = k == 0 && !super::undecorated();
+        loft::structure(&mut g, &spec, y, h, k as u64, k != 0 && !super::undecorated(), !bar_floor);
         wall_members(&mut g, &faces, &spec, y, top - loft::DECK, w);
         if k + 1 < LEVELS.len() {
             stair(&mut g, core.stair, y, LEVELS[k + 1].0 - y);
@@ -338,27 +344,16 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         let mut reserved = vec![lobby];
         let mut pads = vec![];
         if k == 0 {
-            // ground floor: cafe by the garage doors, bar in front of the core, lounge at the north entry
-            let cafe = Rect::new(T + 1.7, T + 5.0, spec.cols[1] - 0.6, d - T - 1.0);
-            // counters with stools behind the glazed garage doors on the park side (storefronts keep their doors clear)
+            // ground floor: the beer hall of the interior photos (bar, lounge, chandeliers), window counters
+            // behind the glazed garage doors on the park side
             for (i, &(u0, u1)) in faces[0].bays.iter().enumerate() {
                 if matches!(faces[0].ground[i], Some(Ground::Garage)) {
                     loft::window_counter(&mut g, &mut fur, v(T + 0.05, u0 + 0.2), v(T + 0.05, u1 - 0.2), v(1.0, 0.0), y);
                 }
             }
-            // a channel-tufted banquette along the party wall north of the cafe, two-tops in front
-            loft::banquette(&mut g, &mut fur, v(10.0, T), v(core.r.x0 - 3.0, T), v(0.0, 1.0), y, clear);
-            let bar = Rect::new(core.r.x0 - 1.0, core.r.z1 + 0.6, w - T, d - T - 0.6);
-            loft::cafe(&mut g, &mut fur, cafe, bar, y, clear);
-            // a poster wall on the timber-clad core facing the room
-            fur.put(&mut g, "sf_2bc72a0509", v(core.r.x0 - 0.2, core.r.z0 + 6.8), y + 1.1, v(-1.0, 0.0), false);
-            reserved.push(cafe);
-            reserved.push(bar);
-            fur.put(&mut g, "ph_sofa_03", v(4.6, 1.1), y, v(0.0, 1.0), true);
-            fur.put(&mut g, "ph_modern_coffee_table_02", v(4.5, 2.6), y, v(0.2, 1.0), true);
-            fur.put(&mut g, "ph_modern_arm_chair_01", v(2.4, 3.4), y, v(0.8, -0.6), true);
-            fur.put(&mut g, "ph_modern_arm_chair_01", v(6.7, 3.5), y, v(-0.7, -0.7), true);
-            fur.put(&mut g, "ph_potted_plant_01", v(1.0, 1.0), y, v(0.3, 1.0), false);
+            let site = beerloft::Site { y, deck_b: top - loft::DECK, cols: spec.cols.clone(), girders: spec.girders.clone(), core: core.r };
+            beerloft::build(&mut g, &mut fur, &site);
+            reserved.push(Rect::new(T + 1.5, T + 3.0, core.r.x0, d - T - 2.0));
         } else {
             loft::glass_room(&mut g, ne, y, clear, &[3, 0]);
             loft::meeting(&mut g, &mut fur, ne, y, clear, v(1.0, 0.0));

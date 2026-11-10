@@ -59,3 +59,18 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Tropical Plants Pack M02P" by MozzarellaARC, CC Attribution, https://sketchfab.com/3d-models/2f093afb792742438f0f7ba7eaab90f0
 - "Ficus Lyrata - Plants" by LadyCris, CC Attribution, https://sketchfab.com/3d-models/161df9b2f7124549a2cfa4c33104046e
 - "Indoor Plants" by Visthétique, CC Attribution, https://sketchfab.com/3d-models/efe25daceaf940f5aa8519b9d77683d2
+- "Chesterfield Lounge Set" by Jakoza, CC Attribution, https://sketchfab.com/3d-models/36ac2ea9644c4988ad780f3022fd4616
+- "Antique leather sofa set - Game Model" by Lorenzo Drago, Free Standard, https://sketchfab.com/3d-models/52c1749220224fbab64bf46fdf0cd0b3
+- "Old Armchair" by MaX3Dd, CC Attribution, https://sketchfab.com/3d-models/c20f084f29bd440197a18b4c750f69eb
+- "17 Stories Coffee Table" by bluejam99, CC Attribution, https://sketchfab.com/3d-models/c06c7445f9a743fa8edaf3e7bd834b0b
+- "Round side coffee table marble top" by 3DTechDesign, CC Attribution, https://sketchfab.com/3d-models/49e5ede6a16d4dd39386d6aa705fdbeb
+- "Television (Wall-mounted)" by AleixoAlonso, CC Attribution, https://sketchfab.com/3d-models/ce05a5d98b54400184ab60262dbf7232
+- "Game Ready - Beer Tap" by Allan-Jay Branscombe, CC Attribution, https://sketchfab.com/3d-models/f79b73c0eb0f4538bea171df26584190
+- "Tudor Leather Wing Armchair" by m00nta, CC Attribution, https://sketchfab.com/3d-models/dbdbcd544ec44ebfaa2c228303ae8185
+- "realistic leather sofa" by Fred Drabble, CC Attribution, https://sketchfab.com/3d-models/3ae5d56740584b64a3b03e0a2ed3209e
+- "Black Leather Couch" by fizzlefreshh, CC Attribution, https://sketchfab.com/3d-models/e868e007bacf425cb0b3df2b44397bf6
+- "Couch, Sofa (Free)" by frkngnl, CC Attribution, https://sketchfab.com/3d-models/3d1f1d848ee144fb889459ab48a9acc8
+- "Turner Chair" by pythondesign, CC Attribution, https://sketchfab.com/3d-models/94181c1253e14bcda953ab74aa865fb1
+- "Modern Leather Sofa with Wooden Legs" by renderatolyesi, CC Attribution, https://sketchfab.com/3d-models/bef6ee1ea5024c5e8768f17fb0ac5113
+- "Black-leather-sofa" by journeyk, CC Attribution, https://sketchfab.com/3d-models/4b25966ff2ce4123bc222fc88315b705
+- "Armchair" by assetfactory, Free Standard, https://sketchfab.com/3d-models/7fbd1546db4b4cd3ba410d2cf571180b

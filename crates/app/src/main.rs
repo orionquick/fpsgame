@@ -5,6 +5,7 @@ mod gi;
 mod library;
 mod mcp;
 mod play;
+mod proctex;
 mod review;
 mod service;
 mod world;
@@ -17,6 +18,9 @@ pub const INTERIOR_WHITE: [f32; 3] = [1.0, 0.92, 0.76];
 /// Camera exposure indoors with GI: daylight inside a deep brick hall is a few percent of outdoors, so a camera
 /// opens up about four stops (windows and sun patches blow out, as in the reference photos).
 pub const INTERIOR_EXPOSURE: f32 = 18.0;
+/// Metering target for interior shots: scene log-average luminance x exposure (calibrated so the empty daylit
+/// hall meters to about the exposure that matched its photo).
+pub const INTERIOR_KEY: f32 = 0.11;
 
 pub fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -83,6 +87,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             c.save(&city_path())?;
             println!("wrote {}", city_path().display());
         }
+        Some("plan") => {
+            // fps plan X0 Z0 X1 Z1 CUT_Y [--mpp m] [--out f]: interior plan, everything above CUT_Y cut away
+            let f = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok()).ok_or("usage: fps plan X0 Z0 X1 Z1 CUT_Y");
+            let (rect, cut) = ([f(1)?, f(2)?, f(3)?, f(4)?], f(5)?);
+            let mut ed = editor()?;
+            let img = ed.plan(rect, cut, arg(&args, "--mpp", 0.02));
+            let p = out_dir().join(arg(&args, "--out", "plan.png".to_string()));
+            img.save(&p)?;
+            println!("wrote {}", p.display());
+        }
         Some("ortho") => {
             let mut cx = review::Ctx::new(city::City::load(&city_path())?);
             cx.set_focus(cx.city.play_rect());
@@ -97,6 +111,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             review::compare(&cx, &root().join("data/raw"), &out_dir())?;
             println!("wrote {}", out_dir().join("compare.png").display());
         }
+        Some("decal") => {
+            // fps decal SVG ID W_M H_M PX: render an SVG into a cutout decal surface (dark ink where the SVG draws)
+            // packaged for `fps assets` as data/megascans_inbox/decals/<ID>.zip
+            let svg = args.get(1).ok_or("usage: fps decal SVG ID W_M H_M PX")?;
+            let id = args.get(2).ok_or("missing id")?;
+            let (wm, hm): (f32, f32) = (args.get(3).and_then(|v| v.parse().ok()).ok_or("missing width")?, args.get(4).and_then(|v| v.parse().ok()).ok_or("missing height")?);
+            let px: u32 = args.get(5).and_then(|v| v.parse().ok()).unwrap_or(2048);
+            proctex::decal(std::path::Path::new(svg), id, wm, hm, px)?;
+        }
+        Some("proctex") => proctex::all()?,
         Some("sbs") => {
             // fps sbs OUT.png H img1 img2 ...: reference photos and renders side by side at one height.
             let out = args.get(1).ok_or("usage: fps sbs OUT.png H img...")?;

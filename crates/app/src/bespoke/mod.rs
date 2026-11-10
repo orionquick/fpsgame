@@ -2,6 +2,7 @@
 //! (openings, reveals, sashes, trim) and a generated interior (offices, corridors, core, stairs, lift).
 pub mod factory;
 pub mod furnish;
+pub mod beerloft;
 pub mod geom;
 pub mod loft;
 pub mod plan;
@@ -254,7 +255,7 @@ fn stone_slabs(g: &mut Geo, r: plan::Rect, y: f32, seed: u64) {
     }
 }
 
-fn rnd(seed: u64, i: u64) -> f32 {
+pub(crate) fn rnd(seed: u64, i: u64) -> f32 {
     let mut x = seed ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x51ab;
     x ^= x >> 33;
     x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);

@@ -40,6 +40,14 @@ impl Editor {
         self.cx.set_focus(a.rect);
         review::scene_review(&self.cx, a, s, mpp)
     }
+    /// Interior plan of `rect` cut at `cut` (lit by the GI and lamps of the building around it).
+    pub fn plan(&mut self, rect: [f32; 4], cut: f32, mpp: f32) -> RgbaImage {
+        self.cx.set_scene(&Scene::default());
+        let c = [(rect[0] + rect[2]) as f64 * 0.5, (rect[1] + rect[3]) as f64 * 0.5];
+        self.cx.set_focus([c[0] - 45.0, c[1] - 45.0, c[0] + 45.0, c[1] + 45.0]);
+        review::plan(&self.cx, rect, cut, mpp)
+    }
+
     pub fn shot(&mut self, s: &Scene, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> RgbaImage {
         self.cx.set_scene(s);
         let d = render::look_dir(yaw, 0.0);

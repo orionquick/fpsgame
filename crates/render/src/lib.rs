@@ -127,6 +127,14 @@ impl Camera {
         let view = Mat4::look_at_rh(eye, Vec3::new(cx, 0.0, cz), Vec3::NEG_Z);
         Self { view_proj: Mat4::orthographic_rh(-hw, hw, -hh, hh, 1.0, top + 400.0) * view, eye, focus: Vec3::new(cx, 0.0, cz), fog: 0.0 }
     }
+    /// Top-down orthographic view of `rect` cut at height `cut` (everything above it left out): interior plans.
+    pub fn plan(rect: [f32; 4], cut: f32) -> Self {
+        let (cx, cz) = ((rect[0] + rect[2]) * 0.5, (rect[1] + rect[3]) * 0.5);
+        let (hw, hh) = ((rect[2] - rect[0]) * 0.5, (rect[3] - rect[1]) * 0.5);
+        let eye = Vec3::new(cx, cut, cz);
+        let view = Mat4::look_at_rh(eye, Vec3::new(cx, cut - 1.0, cz), Vec3::NEG_Z);
+        Self { view_proj: Mat4::orthographic_rh(-hw, hw, -hh, hh, 0.01, 60.0) * view, eye, focus: Vec3::new(cx, cut - 3.0, cz), fog: 0.0 }
+    }
     /// First-person view. Yaw 0 = north (-z), 90 = east (+x); pitch up positive. Degrees.
     pub fn perspective(eye: Vec3, yaw_deg: f32, pitch_deg: f32, fov_y_deg: f32, aspect: f32) -> Self {
         let dir = look_dir(yaw_deg, pitch_deg);
@@ -786,7 +794,47 @@ impl Targets {
 }
 
 /// Renders one frame off-screen and reads it back as an RGBA image.
+/// Scene luminance key of a rendered image: the log-average luminance before exposure, from the display image
+/// through the inverse tonemap (ignoring the darkest and brightest 3% of pixels: black gaps, lamps, windows).
+pub fn scene_key(img: &image::RgbaImage, exposure: f32, white: [f32; 3]) -> f32 {
+    let lin = |c: u8| {
+        let v = c as f32 / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    let untone = |a: f32| {
+        let y = a.clamp(0.0, 0.98);
+        let (qa, qb, qc) = (2.43 * y - 2.51, 0.59 * y - 0.03, 0.14 * y);
+        (-qb - (qb * qb - 4.0 * qa * qc).max(0.0).sqrt()) / (2.0 * qa)
+    };
+    let wl = 0.2126 * white[0] + 0.7152 * white[1] + 0.0722 * white[2];
+    let mut l: Vec<f32> = img
+        .pixels()
+        .step_by(7)
+        .map(|p| {
+            let d = 0.2126 * lin(p[0]) + 0.7152 * lin(p[1]) + 0.0722 * lin(p[2]);
+            (untone(d) / (exposure * wl)).max(1e-5).ln()
+        })
+        .collect();
+    l.sort_by(f32::total_cmp);
+    let (a, b) = (l.len() * 3 / 100, l.len() * 97 / 100);
+    (l[a..b].iter().sum::<f32>() / (b - a).max(1) as f32).exp()
+}
+
+/// `render_image` with the exposure metered like a camera: a first pass is measured and the exposure set so the
+/// scene's log-average luminance lands on `key` (display mid-grey ~0.18 before the tonemap); clamped to `range`.
+pub fn render_image_metered(gpu: &Gpu, r: &Renderer, scene: &Scene, batches: &[&Batch], cam: &Camera, w: u32, h: u32, key: f32, range: (f32, f32)) -> (image::RgbaImage, f32) {
+    let probe = render_once(gpu, r, scene, batches, cam, w / 2, h / 2, false);
+    let k = scene_key(&probe, r.exposure.get(), r.white.get());
+    let e = (key / k).clamp(range.0, range.1);
+    r.set_exposure(e);
+    (render_image(gpu, r, scene, batches, cam, w, h), e)
+}
+
 pub fn render_image(gpu: &Gpu, r: &Renderer, scene: &Scene, batches: &[&Batch], cam: &Camera, w: u32, h: u32) -> image::RgbaImage {
+    render_once(gpu, r, scene, batches, cam, w, h, std::env::var("FPS_NO_SSR").is_err())
+}
+
+fn render_once(gpu: &Gpu, r: &Renderer, scene: &Scene, batches: &[&Batch], cam: &Camera, w: u32, h: u32, ssr: bool) -> image::RgbaImage {
     let format = r.color_format;
     let t = Targets::new(gpu, r, w, h);
     let out = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -805,7 +853,7 @@ pub fn render_image(gpu: &Gpu, r: &Renderer, scene: &Scene, batches: &[&Batch], 
     let scope_val = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     // a first pass fills the reflection history for the second
-    if std::env::var("FPS_NO_SSR").is_err() {
+    if ssr {
         r.render(gpu, &mut enc, scene, batches, cam, &t, &out.create_view(&Default::default()));
     }
     r.render(gpu, &mut enc, scene, batches, cam, &t, &out.create_view(&Default::default()));

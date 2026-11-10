@@ -85,7 +85,7 @@ impl Spec {
 
 /// The structure over a floor at `y` (storey `h`): deck, joists, girders, columns, ducts, sprinklers, lights.
 /// `office_lights`: hang the linear LED pendants (the cafe floor uses warm pendants instead).
-pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights: bool) {
+pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights: bool, ducts: bool) {
     let (x0, x1, z0, z1) = (s.t, s.w - s.t, s.t, s.d - s.t);
     let top = y + h; // top of the deck above = next finished floor
     let deck_b = top - DECK;
@@ -122,7 +122,9 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights
 
     }
     // spiral supply ducts: a main along x near the middle, branches along z, hung under the girders
+    // (the bar floor has its own painted ducts)
     let duct_y = girder_b - 0.38;
+    if ducts {
     let zc = s.core.r.z0 - 1.2;
     g.tube(galv(), Vec3::new(x0 + 1.0, duct_y, zc), Vec3::new(s.core.r.x0 - 0.3, duct_y, zc), 0.3, 18);
     for &x in s.cols.iter() {
@@ -143,6 +145,7 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights
     while x < s.core.r.x0 - 0.5 {
         g.cuboid(black(), Vec3::new(x - 0.01, duct_y, zc - 0.01), Vec3::new(x + 0.01, girder_b, zc + 0.01));
         x += 2.4;
+    }
     }
     // sprinkler mains (red) and branch lines with heads
     let red = ins(Key::new(Mat::Plain(90), [0.06, 0.06, 0.065]));

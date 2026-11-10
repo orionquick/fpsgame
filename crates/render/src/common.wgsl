@@ -124,7 +124,9 @@ fn local_lights(world: vec3f, n: vec3f, v: vec3f, base: vec3f, rough: f32) -> ve
         let l = d / max(dist, 1e-3);
         let ndl = max(dot(n, l), 0.0);
         let x = dist / lt.radius;
-        let fall = (1.0 - x * x) * (1.0 - x * x) / (1.0 + dist * dist);
+        var fall = (1.0 - x * x) * (1.0 - x * x) / (1.0 + dist * dist);
+        // downlights (pad > 0): surfaces above the lamp get little of it (shaded lamps, bulbs in glass)
+        fall *= mix(1.0, 0.12 + 0.88 * smoothstep(-0.35, 0.5, l.y), lt.pad);
         let h = normalize(l + v);
         let spec = pow(max(dot(n, h), 0.0), mix(64.0, 4.0, rough)) * (1.0 - rough) * 0.5;
         c += lt.color * fall * (base * ndl + vec3f(spec) * ndl);
