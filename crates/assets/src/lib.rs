@@ -597,7 +597,7 @@ pub struct MaterialImages {
 fn decode(zip: &mut zip::ZipArchive<std::fs::File>, name: &Option<String>, size: u32) -> Option<image::RgbaImage> {
     let bytes = read_zip_file(zip, name.as_ref()?).ok()?;
     let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    Some(if img.width() != size { image::imageops::resize(&img, size, size, image::imageops::FilterType::Triangle) } else { img })
+    Some(if img.width() != size || img.height() != size { image::imageops::resize(&img, size, size, image::imageops::FilterType::Triangle) } else { img })
 }
 
 /// Loads an asset's textures from its zip at `size` x `size`.

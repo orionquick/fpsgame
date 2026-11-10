@@ -74,3 +74,4 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Modern Leather Sofa with Wooden Legs" by renderatolyesi, CC Attribution, https://sketchfab.com/3d-models/bef6ee1ea5024c5e8768f17fb0ac5113
 - "Black-leather-sofa" by journeyk, CC Attribution, https://sketchfab.com/3d-models/4b25966ff2ce4123bc222fc88315b705
 - "Armchair" by assetfactory, Free Standard, https://sketchfab.com/3d-models/7fbd1546db4b4cd3ba410d2cf571180b
+- "Modern Leather coffee stool  Furniture 3D Model" by Line Zero Studio, CC Attribution, https://sketchfab.com/3d-models/8cff98e6d16b41d5a6700b4ea3887790

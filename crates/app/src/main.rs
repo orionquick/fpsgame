@@ -15,6 +15,8 @@ use std::path::PathBuf;
 /// Camera white balance indoors: the light is mostly bluish sky through windows, which a camera (or the eye)
 /// would neutralise; warm a little.
 pub const INTERIOR_WHITE: [f32; 3] = [1.0, 0.92, 0.76];
+/// White balance when the interior lamps are on: their light is already warm, so the camera stays near neutral.
+pub const LAMPLIT_WHITE: [f32; 3] = [1.0, 0.98, 0.93];
 /// Camera exposure indoors with GI: daylight inside a deep brick hall is a few percent of outdoors, so a camera
 /// opens up about four stops (windows and sun patches blow out, as in the reference photos).
 pub const INTERIOR_EXPOSURE: f32 = 18.0;
@@ -118,7 +120,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let id = args.get(2).ok_or("missing id")?;
             let (wm, hm): (f32, f32) = (args.get(3).and_then(|v| v.parse().ok()).ok_or("missing width")?, args.get(4).and_then(|v| v.parse().ok()).ok_or("missing height")?);
             let px: u32 = args.get(5).and_then(|v| v.parse().ok()).unwrap_or(2048);
-            proctex::decal(std::path::Path::new(svg), id, wm, hm, px)?;
+            // optional: SURFACE TILE_M to stain into that surface's own maps
+            let under = args.get(6).zip(args.get(7).and_then(|t| t.parse::<f32>().ok()));
+            proctex::decal(std::path::Path::new(svg), id, wm, hm, px, under.map(|(s, t)| (s.as_str(), t)))?;
         }
         Some("proctex") => proctex::all()?,
         Some("sbs") => {

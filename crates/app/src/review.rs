@@ -147,7 +147,7 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
             cx.renderer.set_lights(&cx.gpu, &cx.lights, p[0]);
             cx.renderer.bake_probe(&cx.gpu, &cx.scene, &batches, p[0], p[1], p[2]);
             cx.renderer.set_exposure(std::env::var("FPS_EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(if cx.renderer.gi.enabled() { crate::INTERIOR_EXPOSURE } else { 2.2 }));
-            cx.renderer.set_white_balance(crate::INTERIOR_WHITE);
+            cx.renderer.set_white_balance(if cx.lights.is_empty() { crate::INTERIOR_WHITE } else { crate::LAMPLIT_WHITE });
             metered = cx.renderer.gi.enabled();
         }
         _ => {

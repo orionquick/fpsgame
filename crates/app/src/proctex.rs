@@ -166,12 +166,13 @@ fn leather(id: &str, diamond: bool) -> std::io::Result<()> {
             // distance to the nearest seam (0 on it, 0.5 at the puff's centre)
             let d = fa.min(1.0 - fa).min(fb.min(1.0 - fb));
             let puff = (d * 2.0).min(1.0).powf(0.6);
-            let seam = (d / 0.03).min(1.0);
+            let seam = (d / 0.018).min(1.0);
             let button = if diamond { 1.0 } else { (((fa - 0.0).powi(2).min((1.0 - fa).powi(2)) + (fb).powi(2).min((1.0 - fb).powi(2))).sqrt() / 0.05).min(1.0) };
             h[y * n + x] = puff * seam * button;
             let grain = vnoise(u * 90.0, v * 90.0, 180, 9);
             let k = (0.78 + 0.22 * puff) * (0.92 + 0.08 * grain) * (0.55 + 0.45 * seam) * (0.6 + 0.4 * button);
-            base.put_pixel(x as u32, y as u32, image::Rgb([(0.62 * k * 255.0) as u8, (0.36 * k * 255.0) as u8, (0.19 * k * 255.0) as u8]));
+            // light cognac (sRGB ~ 190, 125, 80 on the puffs, as in the photo)
+            base.put_pixel(x as u32, y as u32, image::Rgb([(0.74 * k * 255.0).min(255.0) as u8, (0.54 * k * 255.0) as u8, (0.38 * k * 255.0) as u8]));
             rough.put_pixel(x as u32, y as u32, image::Luma([(95.0 + 70.0 * (1.0 - puff) + grain * 20.0) as u8]));
         }
     }
@@ -189,17 +190,45 @@ pub fn all() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Rasterises a stencil SVG (drawn in black) into a decal surface: base colour = ink, opacity = coverage.
-pub fn decal(svg: &std::path::Path, id: &str, wm: f32, hm: f32, px: u32) -> Result<(), Box<dyn std::error::Error>> {
+/// Rasterises a stencil SVG (drawn in black) into a decal surface. With `under` = (surface id, tile metres) the
+/// decal carries that surface's own maps (colour darkened as stain, normal, roughness, AO) tiled at its scale, so
+/// the stencil lights, shines and reflects like the floor it is stained into; otherwise flat ink.
+pub fn decal(svg: &std::path::Path, id: &str, wm: f32, hm: f32, px: u32, under: Option<(&str, f32)>) -> Result<(), Box<dyn std::error::Error>> {
     let tree = resvg::usvg::Tree::from_data(&std::fs::read(svg)?, &resvg::usvg::Options::default())?;
     let size = tree.size();
     let (w, h) = (px, ((px as f32) * size.height() / size.width()).round() as u32);
     let mut pix = resvg::tiny_skia::Pixmap::new(w, h).ok_or("bad size")?;
     resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(w as f32 / size.width(), h as f32 / size.height()), &mut pix.as_mut());
-    // stencilled pigment in the concrete: a warm dark grey ink, opacity from the drawing's coverage
-    let ink = image::RgbImage::from_fn(w, h, |_, _| image::Rgb([74, 72, 68]));
     let alpha = image::GrayImage::from_fn(w, h, |x, y| image::Luma([pix.pixel(x, y).map_or(0, |p| p.alpha())]));
-    write_surface("decals", id, &[("BaseColor", png_rgb(&ink)), ("Opacity", png_gray(&alpha))], (wm, hm), &svg.display().to_string())?;
+    let mut maps = vec![("Opacity", png_gray(&alpha))];
+    match under {
+        Some((sid, tile)) => {
+            let root = crate::root();
+            let cat = assets::Catalog::load(&root.join("data/assets")).map_err(|e| e.to_string())?;
+            let a = cat.get(sid).ok_or("no such surface")?;
+            let m = assets::load_material(&root.join("data/megascans_inbox"), a, 1024).map_err(|e| e.to_string())?;
+            // texels of the source per decal pixel: the decal spans wm metres over w pixels, the source tile metres over 1024
+            let k = 1024.0 * wm / (tile * w as f32);
+            let at = |img: &image::RgbaImage, x: u32, y: u32| *img.get_pixel(((x as f32 * k) as u32) % 1024, ((y as f32 * k) as u32) % 1024);
+            // stain: the concrete's own colour, darkened (the material tint then matches the floor slabs')
+            let base = image::RgbImage::from_fn(w, h, |x, y| {
+                let p = at(&m.base, x, y);
+                image::Rgb([(p[0] as f32 * 0.42) as u8, (p[1] as f32 * 0.42) as u8, (p[2] as f32 * 0.40) as u8])
+            });
+            let nrm = image::RgbImage::from_fn(w, h, |x, y| {
+                let p = at(&m.normal, x, y);
+                image::Rgb([p[0], p[1], p[2]])
+            });
+            let rough = image::GrayImage::from_fn(w, h, |x, y| image::Luma([at(&m.orm, x, y)[1]]));
+            let ao = image::GrayImage::from_fn(w, h, |x, y| image::Luma([at(&m.orm, x, y)[0]]));
+            maps.extend([("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nrm)), ("Roughness", png_gray(&rough)), ("AO", png_gray(&ao))]);
+        }
+        None => {
+            let ink = image::RgbImage::from_fn(w, h, |_, _| image::Rgb([74, 72, 68]));
+            maps.push(("BaseColor", png_rgb(&ink)));
+        }
+    }
+    write_surface("decals", id, &maps, (wm, hm), &svg.display().to_string())?;
     alpha.save(crate::out_dir().join(format!("{id}_preview.png")))?;
     println!("wrote decal {id} ({w}x{h}) from {}", svg.display());
     Ok(())

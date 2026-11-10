@@ -29,6 +29,10 @@ const BAR_Z: (f32, f32) = (8.6, 20.2);
 /// The tiled wall runs on north past the bar (as in the photo), leaving a passage at the north end.
 const WALL_Z0: f32 = 3.6;
 const WALL_H: f32 = 3.6;
+/// Bar stools as in the photo: round cognac leather seat with a low curved back, dark legs and footring.
+const STOOL: &str = "sf_8cff98e6d1";
+/// Brown faux leather seat, the dark legs darkened with it.
+const COGNAC: [f32; 3] = [0.42, 0.27, 0.17];
 /// The stencilled rug under the lounge (x0, z0, x1, z1): between the column lines, 7.2 x 5.4 m.
 const RUG: (f32, f32, f32, f32) = (8.0, 11.2, 15.2, 16.6);
 
@@ -42,7 +46,8 @@ fn brass() -> Key {
     ins(Key::new(Mat::Plain(60), [0.62, 0.45, 0.2]))
 }
 fn walnut() -> Key {
-    ins(Key::new(Mat::Surface("pht_black_walnut_veneer_01"), [1.0, 0.9, 0.8]).tile(1.2).rough(0.7).wear(wear::WOOD))
+    // dark walnut, as the chair frames and trim in the photo
+    ins(Key::new(Mat::Surface("pht_black_walnut_veneer_01"), [0.24, 0.15, 0.11]).tile(1.2).rough(0.6))
 }
 fn concrete_top() -> Key {
     ins(Key::new(Mat::Surface(super::m::CONCRETE), [0.62, 0.62, 0.6]).rough(0.7))
@@ -141,7 +146,7 @@ fn bar_wall(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     g.timber(wf, Vec3::new(x - 0.14, fy0, fz0), Vec3::new(x, fy1, fz0 + 0.1));
     g.timber(wf, Vec3::new(x - 0.14, fy0, fz1 - 0.1), Vec3::new(x, fy1, fz1));
     marquee(g, "TAP ROOM", x - 0.1, centre, fy0 + 0.25, 0.085);
-    for (zc, yc) in [(centre - 0.62, y + 1.62), (centre + 0.62, y + 1.62), (fz0 - 0.85, y + 2.75), (fz1 + 0.85, y + 2.75)] {
+    for (zc, yc) in [(centre - 0.62, y + 1.62), (centre + 0.62, y + 1.62), (fz0 - 0.85, y + 3.08), (fz1 + 0.85, y + 3.08)] {
         tv(g, f, Vec3::new(x, yc, zc), v(-1.0, 0.0));
     }
 
@@ -300,11 +305,11 @@ fn counter(g: &mut Geo, f: &mut Furnisher, s: &Site) {
         let near_col = s.girders.iter().any(|&gz| (gz - zz).abs() < 0.45) && (x0 - 0.45 - cx).abs() < 0.6;
         if !near_col {
             let r = super::rnd(0xBA5, k);
-            let pull = 0.36 + r * 0.22;
-            let turn = (r - 0.5) * 40.0;
-            put(f, g, "sf_b117e9bb66", v(x0 - pull, zz + (r - 0.5) * 0.08), y, dir(turn), 1.0, [1.0; 3], true);
+            let pull = 0.3 + r * 0.14;
+            let turn = (r - 0.5) * 30.0;
+            put(f, g, STOOL, v(x0 - pull, zz + (r - 0.5) * 0.06), y, dir(turn), 1.0, COGNAC, true);
         }
-        zz += 0.62;
+        zz += 0.74;
         k += 1;
     }
     // things on the bar
@@ -355,15 +360,15 @@ fn lounge(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     let (cx, cz) = ((RUG.0 + RUG.2) * 0.5, (RUG.1 + RUG.3) * 0.5);
     // looking east at the bar from the lounge, north is on the left: arranged as in the photo
     // black tufted sofa with its back to the bar, facing the room; the drum table in front of it
-    put(f, g, "sf_4b25966ff2", v(cx + 1.35, cz + 0.1), y, dir(180.0), 1.15, [1.0; 3], true);
+    put(f, g, "sf_4b25966ff2", v(cx + 1.4, cz + 0.1), y, dir(180.0), 1.4, [1.0; 3], true);
     drum_table(g, v(cx - 0.3, cz + 0.05), y, 0.62, 0.42);
     // front left: tan tufted sofa with its back to us, angled in; woven poufs by the column
     biscuit_sofa(g, v(cx - 2.45, cz - 1.5), y, dir(32.0));
     pouf(g, v(cx - 1.25, cz - 2.35), y, 0.26, 23.0);
     pouf(g, v(cx - 2.05, cz - 2.75), y, 0.26, 61.0);
     // front right: cognac sling chairs turned to the table, a brass tray table between
-    put(f, g, "sf_7fbd1546db", v(cx - 1.85, cz + 1.25), y, dir(-38.0), 0.85, [1.35, 2.2, 2.2], true);
-    put(f, g, "sf_7fbd1546db", v(cx - 0.3, cz + 2.15), y, dir(-98.0), 0.85, [1.35, 2.2, 2.2], true);
+    sling_chair(g, v(cx - 1.85, cz + 1.25), y, dir(-38.0));
+    sling_chair(g, v(cx - 0.3, cz + 2.15), y, dir(-98.0));
     put(f, g, "sf_49e5ede6a1", v(cx - 1.55, cz + 0.25), y, dir(0.0), 1.15, [1.0; 3], true);
     // cowhide drums at the sofa's right end
     cow_drum(g, v(cx + 0.55, cz + 1.45), y, 0.24);
@@ -384,8 +389,8 @@ fn lounge(g: &mut Geo, f: &mut Furnisher, s: &Site) {
         for k in 0..4 {
             let r = super::rnd(0x4170 + i as u64, k);
             let a = k as f32 * 90.0 + 45.0 + (r - 0.5) * 30.0;
-            let p = v(*tx, *tz) + dir(a) * (0.62 + r * 0.15);
-            put(f, g, "sf_b117e9bb66", p, y, dir(a + 180.0 + (r - 0.5) * 50.0), 1.0, [1.0; 3], true);
+            let p = v(*tx, *tz) + dir(a) * (0.78 + r * 0.1);
+            put(f, g, STOOL, p, y, dir(a + 180.0 + (r - 0.5) * 40.0), 1.0, COGNAC, true);
         }
     }
     // a TV on a ceiling mount by the column, angled to the lounge (as in the photo)
@@ -393,10 +398,13 @@ fn lounge(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     let mount = Vec3::new(cx + 3.4 + 0.1, y + 3.1, RUG.3 + 0.6);
     g.tube(black(), mount, Vec3::new(mount.x, s.deck_b, mount.z), 0.025, 8);
     // black can speakers hung on rods
-    for p in [v(cx - 2.0, cz - 2.9), v(cx + 2.2, RUG.3 + 1.0), v(cx - 2.6, RUG.3 + 1.8)] {
-        let top = s.deck_b - 0.3;
-        g.tube(black(), Vec3::new(p.x, top, p.y), Vec3::new(p.x, top - 0.55, p.y), 0.008, 5);
-        g.tube(black(), Vec3::new(p.x, top - 0.55, p.y), Vec3::new(p.x, top - 0.95, p.y), 0.13, 14);
+    // black pendant speakers (truncated cones, wide end down) on cables
+    for p in [v(cx - 2.0, cz - 2.9), v(cx + 2.2, RUG.3 + 1.0), v(cx - 2.6, RUG.3 + 1.8), v(cx + 2.6, cz - 1.2), v(cx - 0.4, RUG.1 - 3.2), v(cx + 0.4, RUG.3 + 3.4)] {
+        let top = s.deck_b - 0.5;
+        let a = Vec3::new(p.x, top - 0.7, p.y);
+        g.tube(black(), Vec3::new(p.x, top, p.y), a, 0.006, 5);
+        frustum(g, black(), a, a - Vec3::Y * 0.38, 0.1, 0.17, 16);
+        disc(g, black(), a, 0.1, 16);
     }
 }
 
@@ -423,53 +431,144 @@ fn tilt(up: Vec3, fwd: Vec3, deg: f32) -> (Vec3, Vec3) {
     (up * c - fwd * s, fwd * c + up * s)
 }
 
-#[allow(dead_code)]
-/// Lounge chair as in the photo: walnut side frames with a diamond-quilted cognac leather sling seat and back.
+/// Lounge chair as in the photo: a dark walnut frame (square corner posts, flat top rails for arms, low side and
+/// back rails) with a thick, puffy cognac leather sling hung inside it, quilted in large diamonds, its back rolling
+/// over the top rail.
 fn sling_chair(g: &mut Geo, c: Vec2, y: f32, face: Vec2) {
     let (sd, up, fw) = frame(face);
     let base = Vec3::new(c.x, y, c.y);
     let wood = walnut();
-    let leather = ins(Key::new(Mat::Surface("pt_quilted_leather"), [1.0, 1.0, 1.0]));
+    let leather = ins(Key::new(Mat::Surface("pt_quilted_leather"), [1.0, 1.0, 1.0]).tile(0.5));
     let p = |side: f32, h: f32, fwd: f32| base + sd * side + up * h + fw * fwd;
-    for side in [-0.37, 0.37] {
-        obox(g, wood, p(side, 0.3, 0.33), sd, up, fw, Vec3::new(0.028, 0.3, 0.028));
-        obox(g, wood, p(side, 0.34, -0.36), sd, up, fw, Vec3::new(0.028, 0.34, 0.028));
-        let (au, af) = tilt(up, fw, -4.0);
-        obox(g, wood, p(side, 0.62, -0.01), sd, au, af, Vec3::new(0.032, 0.03, 0.38));
-        obox(g, wood, p(side, 0.12, -0.01), sd, up, fw, Vec3::new(0.025, 0.025, 0.36));
+    let (hw, hd) = (0.4, 0.42); // half width and depth of the frame
+    for side in [-hw, hw] {
+        // corner posts, front and back
+        obox(g, wood, p(side, 0.29, hd - 0.03), sd, up, fw, Vec3::new(0.026, 0.29, 0.026));
+        obox(g, wood, p(side, 0.31, -hd + 0.03), sd, up, fw, Vec3::new(0.026, 0.31, 0.026));
+        // flat top rail (the arm), running a little past the front post
+        obox(g, wood, p(side, 0.6, 0.02), sd, up, fw, Vec3::new(0.03, 0.018, hd + 0.03));
+        // low side rail
+        obox(g, wood, p(side, 0.13, 0.0), sd, up, fw, Vec3::new(0.02, 0.022, hd - 0.03));
     }
-    let (su, sf) = tilt(up, fw, 7.0);
-    obox(g, leather, p(0.0, 0.36, 0.04), sd, su, sf, Vec3::new(0.33, 0.07, 0.31));
-    let (bu, bf) = tilt(up, fw, 20.0);
-    obox(g, leather, p(0.0, 0.62, -0.3), sd, bu, bf, Vec3::new(0.33, 0.25, 0.07));
-    obox(g, wood, p(0.0, 0.26, -0.01), sd, up, fw, Vec3::new(0.35, 0.02, 0.33));
-    g.block_aabb(Vec3::new(c.x - 0.42, y, c.y - 0.42), Vec3::new(c.x + 0.42, y + 0.7, c.y + 0.42));
+    // back top rail and low back stretcher
+    obox(g, wood, p(0.0, 0.62, -hd + 0.03), sd, up, fw, Vec3::new(hw, 0.02, 0.022));
+    obox(g, wood, p(0.0, 0.13, -hd + 0.03), sd, up, fw, Vec3::new(hw, 0.02, 0.02));
+    // the sling: seat, back and the roll over the top rail, soft and puffy
+    let (su, sf) = tilt(up, fw, 5.0);
+    soft_box(g, leather, p(0.0, 0.35, 0.05), sd, su, sf, Vec3::new(0.365, 0.12, 0.35), 0.11);
+    let (bu, bf) = tilt(up, fw, 16.0);
+    soft_box(g, leather, p(0.0, 0.58, -0.25), sd, bu, bf, Vec3::new(0.365, 0.24, 0.12), 0.11);
+    soft_box(g, leather, p(0.0, 0.74, -0.36), sd, up, fw, Vec3::new(0.37, 0.08, 0.1), 0.08);
+    g.block_aabb(Vec3::new(c.x - 0.45, y, c.y - 0.45), Vec3::new(c.x + 0.45, y + 0.7, c.y + 0.45));
 }
 
-/// The front sofa: biscuit-tufted cognac leather on a walnut plinth, back and arms the same height.
+/// A box with rounded edges and corners (radius `r`), smooth-shaded: puffy cushions. Centre `c`, unit axes `ax`,
+/// `ay`, `az`, half sizes `h`. Texture coordinates are metres across each face.
+fn soft_box(g: &mut Geo, k: Key, c: Vec3, ax: Vec3, ay: Vec3, az: Vec3, h: Vec3, r: f32) {
+    use render::TexVertex;
+    let n = 8usize;
+    let inner = (h - Vec3::splat(r)).max(Vec3::ZERO);
+    let to_world = |l: Vec3| c + ax * l.x + ay * l.y + az * l.z;
+    // the six faces of the cube [-1,1]^3 as (normal axis, sign, u axis, v axis)
+    let faces: [(usize, f32, usize, usize); 6] = [(0, 1.0, 2, 1), (0, -1.0, 1, 2), (1, 1.0, 0, 2), (1, -1.0, 2, 0), (2, 1.0, 1, 0), (2, -1.0, 0, 1)];
+    for (na, sign, ua, va) in faces {
+        let mut verts = vec![];
+        for j in 0..=n {
+            for i in 0..=n {
+                let mut q = [0f32; 3];
+                q[na] = sign;
+                q[ua] = i as f32 / n as f32 * 2.0 - 1.0;
+                q[va] = j as f32 / n as f32 * 2.0 - 1.0;
+                // point on the box surface, then pulled onto the rounded shape round the inner core
+                let pt = Vec3::new(q[0] * h.x, q[1] * h.y, q[2] * h.z);
+                let core = pt.clamp(-inner, inner);
+                let off = pt - core;
+                let nl = if off.length_squared() > 1e-10 { off.normalize() } else { Vec3::new(q[0], q[1], q[2]) * if na == 0 { Vec3::X } else if na == 1 { Vec3::Y } else { Vec3::Z } };
+                let lp = core + nl * r;
+                let wpos = g.world(to_world(lp));
+                let wn = (ax * nl.x + ay * nl.y + az * nl.z).normalize();
+                let wn = g.world(c + wn) - g.world(c);
+                let ua_v = [ax, ay, az][ua];
+                let u = lp.dot(Vec3::new((ua == 0) as i32 as f32, (ua == 1) as i32 as f32, (ua == 2) as i32 as f32));
+                let v = lp.dot(Vec3::new((va == 0) as i32 as f32, (va == 1) as i32 as f32, (va == 2) as i32 as f32));
+                let wt = (g.world(c + ua_v) - g.world(c)).normalize();
+                verts.push(TexVertex { pos: wpos.to_array(), nrm: wn.normalize().to_array(), uv: [u, -v], tan: [wt.x, wt.y, wt.z, 1.0], edge: [0.0; 4] });
+            }
+        }
+        // wind the face so it is front-facing from outside, whatever the handedness of the axes
+        let w = (n + 1) as usize;
+        let mid = (n / 2) * w + n / 2;
+        let (p0, p1, p2) = (Vec3::from(verts[mid].pos), Vec3::from(verts[mid + 1].pos), Vec3::from(verts[mid + w + 1].pos));
+        let flip = (p1 - p0).cross(p2 - p0).dot(Vec3::from(verts[mid].nrm)) < 0.0;
+        let grp = g.groups.entry(k).or_default();
+        let base = grp.0.len() as u32;
+        grp.0.extend(verts);
+        let w = w as u32;
+        for j in 0..n as u32 {
+            for i in 0..n as u32 {
+                let (a, b, cc, d) = (base + j * w + i, base + j * w + i + 1, base + (j + 1) * w + i + 1, base + (j + 1) * w + i);
+                if flip {
+                    grp.1.extend([a, cc, b, a, d, cc]);
+                } else {
+                    grp.1.extend([a, b, cc, a, cc, d]);
+                }
+            }
+        }
+    }
+}
+
+/// The front sofa, of a piece with the lounge chairs: a dark walnut frame (corner posts, flat top rails for arms,
+/// low rails) carrying soft biscuit-tufted cognac cushions, two seat cushions and two back cushions.
 fn biscuit_sofa(g: &mut Geo, c: Vec2, y: f32, face: Vec2) {
     let (sd, up, fw) = frame(face);
     let base = Vec3::new(c.x, y, c.y);
-    let leather = ins(Key::new(Mat::Surface("pt_biscuit_leather"), [1.0, 1.0, 1.0]));
+    let wood = walnut();
+    let leather = ins(Key::new(Mat::Surface("pt_biscuit_leather"), [1.0, 1.0, 1.0]).tile(0.45));
     let p = |side: f32, h: f32, fwd: f32| base + sd * side + up * h + fw * fwd;
-    obox(g, walnut(), p(0.0, 0.06, 0.0), sd, up, fw, Vec3::new(1.02, 0.06, 0.42));
-    obox(g, leather, p(0.0, 0.27, 0.06), sd, up, fw, Vec3::new(0.86, 0.15, 0.36));
-    let (bu, bf) = tilt(up, fw, 8.0);
-    obox(g, leather, p(0.0, 0.5, -0.33), sd, bu, bf, Vec3::new(0.86, 0.3, 0.1));
-    for side in [-0.94, 0.94] {
-        obox(g, leather, p(side, 0.36, 0.0), sd, up, fw, Vec3::new(0.09, 0.24, 0.43));
+    let (hw, hd) = (1.05, 0.44);
+    for side in [-hw, hw] {
+        obox(g, wood, p(side, 0.29, hd - 0.03), sd, up, fw, Vec3::new(0.028, 0.29, 0.028));
+        obox(g, wood, p(side, 0.31, -hd + 0.03), sd, up, fw, Vec3::new(0.028, 0.31, 0.028));
+        obox(g, wood, p(side, 0.6, 0.02), sd, up, fw, Vec3::new(0.032, 0.018, hd + 0.03));
+        obox(g, wood, p(side, 0.13, 0.0), sd, up, fw, Vec3::new(0.022, 0.022, hd - 0.03));
     }
-    let r = 1.05;
+    obox(g, wood, p(0.0, 0.13, hd - 0.03), sd, up, fw, Vec3::new(hw, 0.022, 0.02));
+    obox(g, wood, p(0.0, 0.13, -hd + 0.03), sd, up, fw, Vec3::new(hw, 0.022, 0.02));
+    obox(g, wood, p(0.0, 0.62, -hd + 0.03), sd, up, fw, Vec3::new(hw, 0.02, 0.022));
+    // a slatted deck under the cushions
+    obox(g, wood, p(0.0, 0.2, 0.0), sd, up, fw, Vec3::new(hw - 0.03, 0.015, hd - 0.04));
+    let (su, sf) = tilt(up, fw, 4.0);
+    let (bu, bf) = tilt(up, fw, 14.0);
+    for side in [-0.5, 0.5] {
+        soft_box(g, leather, p(side, 0.33, 0.06), sd, su, sf, Vec3::new(0.49, 0.11, 0.34), 0.1);
+        soft_box(g, leather, p(side, 0.6, -0.27), sd, bu, bf, Vec3::new(0.49, 0.22, 0.11), 0.1);
+    }
+    let r = 1.1;
     g.block_aabb(Vec3::new(c.x - r, y, c.y - r), Vec3::new(c.x + r, y + 0.7, c.y + r));
+}
+
+/// Truncated cone from `a` (radius `ra`) to `b` (radius `rb`), sides only.
+fn frustum(g: &mut Geo, k: Key, a: Vec3, b: Vec3, ra: f32, rb: f32, n: usize) {
+    let axis = (b - a).normalize();
+    let t1 = axis.cross(if axis.y.abs() > 0.9 { Vec3::X } else { Vec3::Y }).normalize();
+    let t2 = axis.cross(t1);
+    for i in 0..n {
+        let (a0, a1) = (i as f32 / n as f32 * std::f32::consts::TAU, (i + 1) as f32 / n as f32 * std::f32::consts::TAU);
+        let (d0, d1) = (t1 * a0.cos() + t2 * a0.sin(), t1 * a1.cos() + t2 * a1.sin());
+        let (p0, p1, p2, p3) = (a + d0 * ra, a + d1 * ra, b + d1 * rb, b + d0 * rb);
+        g.poly(k, &[p0, p3, p2, p1], (p1 - p0).normalize(), (p3 - p0).normalize());
+        g.poly(k, &[p0, p1, p2, p3], (p3 - p0).normalize(), (p1 - p0).normalize());
+    }
 }
 
 /// Drum coffee table: a black disc on a brass plinth.
 fn drum_table(g: &mut Geo, c: Vec2, y: f32, r: f32, h: f32) {
     let p = |dy: f32| Vec3::new(c.x, y + dy, c.y);
     g.tube(brass(), p(0.0), p(0.1), r * 0.82, 32);
-    g.tube(ins(Key::new(Mat::Plain(140), [0.035, 0.035, 0.037])), p(0.1), p(h - 0.03), r, 36);
-    g.tube(ins(Key::new(Mat::Plain(70), [0.03, 0.03, 0.032])), p(h - 0.03), p(h), r + 0.01, 36);
-    disc(g, ins(Key::new(Mat::Plain(70), [0.03, 0.03, 0.032])), p(h), r + 0.01, 36);
+    // matte black drum, a honed black stone top
+    g.tube(ins(Key::new(Mat::Plain(235), [0.03, 0.03, 0.032])), p(0.1), p(h - 0.03), r, 36);
+    g.tube(ins(Key::new(Mat::Plain(150), [0.028, 0.028, 0.03])), p(h - 0.03), p(h), r + 0.01, 36);
+    disc(g, ins(Key::new(Mat::Plain(150), [0.028, 0.028, 0.03])), p(h), r + 0.01, 36);
     g.block_aabb(Vec3::new(c.x - r, y, c.y - r), Vec3::new(c.x + r, y + h, c.y + r));
 }
 
@@ -490,21 +589,14 @@ fn disc(g: &mut Geo, k: Key, p: Vec3, r: f32, n: usize) {
     g.poly(k, &pts, Vec3::X, Vec3::NEG_Z);
 }
 
-/// Square woven pouf with softly rounded top (cream jute basket weave), turned `deg`.
+/// Knitted cube pouf in cream (soft rounded box with a fine weave), turned `deg`.
 fn pouf(g: &mut Geo, c: Vec2, y: f32, half: f32, deg: f32) {
-    let k = ins(Key::new(Mat::Surface("pt_basket_weave"), [1.02, 0.98, 0.92]));
-    let a = dir(deg) * half;
-    let b = v(-a.y, a.x);
-    let h = 0.42;
-    // body as a turned box: four sides and a top
-    let corners = [c - a - b, c + a - b, c + a + b, c - a + b];
-    for i in 0..4 {
-        let (p, q) = (corners[i], corners[(i + 1) % 4]);
-        g.beam(k, p + (q - p).normalize() * 0.0, q, 0.012, y, y + h);
-    }
-    let top: Vec<Vec3> = corners.iter().map(|p| Vec3::new(p.x, y + h, p.y)).collect();
-    g.poly(k, &[top[0], top[3], top[2], top[1]], Vec3::new(a.x, 0.0, a.y).normalize(), Vec3::new(-b.x, 0.0, -b.y).normalize());
-    g.block_aabb(Vec3::new(c.x - half * 1.4, y, c.y - half * 1.4), Vec3::new(c.x + half * 1.4, y + h, c.y + half * 1.4));
+    let k = ins(Key::new(Mat::Surface("pt_basket_weave"), [1.08, 1.04, 0.98]).tile(0.12));
+    let a = dir(deg);
+    let (ax, az) = (Vec3::new(a.x, 0.0, a.y), Vec3::new(-a.y, 0.0, a.x));
+    let h = 0.22;
+    soft_box(g, k, Vec3::new(c.x, y + h, c.y), ax, Vec3::Y, az, Vec3::new(half, h, half), 0.07);
+    g.block_aabb(Vec3::new(c.x - half * 1.4, y, c.y - half * 1.4), Vec3::new(c.x + half * 1.4, y + 2.0 * h, c.y + half * 1.4));
 }
 
 /// Cowhide-covered drum ottoman.
@@ -528,7 +620,7 @@ fn chandeliers(g: &mut Geo, s: &Site) {
 }
 
 fn chandelier(g: &mut Geo, c: Vec2, ceiling: f32, floor: f32, scale: f32) {
-    let n_for = |r: f32| (std::f32::consts::TAU * r / 0.12) as usize;
+    let n_for = |r: f32| (std::f32::consts::TAU * r / 0.15) as usize;
     // hung on long rods from the high deck: rings at about 3.5 m and 2.9 m above the floor
     let rings = [(1.2 * scale, floor + 3.45, n_for(1.2 * scale)), (0.78 * scale, floor + 2.85, n_for(0.78 * scale))];
     let rod = ins(Key::new(Mat::Plain(60), [0.5, 0.36, 0.17]));
@@ -563,14 +655,15 @@ fn chandelier(g: &mut Geo, c: Vec2, ceiling: f32, floor: f32, scale: f32) {
             let _ = p;
             g.tube(brass(), q, q + Vec3::Y * 0.02, 0.03, 8);
             // frosted glass lit from inside: the whole cylinder glows warm
-            g.tube(Key::new(Mat::Light, [0.62, 0.42, 0.22]), q + Vec3::Y * 0.02, q + Vec3::Y * 0.19, 0.036, 10);
-            g.tube(Key::new(Mat::Light, [2.2, 1.6, 0.85]), q + Vec3::Y * 0.11, q + Vec3::Y * 0.17, 0.02, 6);
-            disc(g, Key::new(Mat::Light, [1.0, 0.7, 0.36]), q + Vec3::Y * 0.19, 0.036, 10);
+            // a clear glass cylinder catching the light, a bright bulb standing in it
+            // clear glass: only its rim catches the eye; the bulb stands bright inside it
+            g.tube(brass(), q + Vec3::Y * 0.185, q + Vec3::Y * 0.2, 0.039, 10);
+            g.tube(Key::new(Mat::Light, [3.2, 2.3, 1.25]), q + Vec3::Y * 0.04, q + Vec3::Y * 0.16, 0.018, 8);
         }
         // the ring's light: a few warm points round it
         for k in 0..if ri == 0 { 4 } else { 2 } {
             let a = k as f32 / if ri == 0 { 4.0 } else { 2.0 } * std::f32::consts::TAU + 0.3;
-            g.downlight(Vec3::new(c.x + a.cos() * r * 0.6, ry - 0.45, c.y + a.sin() * r * 0.6), 7.0, [0.55, 0.38, 0.19]);
+            g.downlight(Vec3::new(c.x + a.cos() * r * 0.6, ry - 0.45, c.y + a.sin() * r * 0.6), 7.0, [0.55, 0.42, 0.27]);
         }
     }
 }
@@ -580,7 +673,8 @@ fn ducts(g: &mut Geo, s: &Site) {
     let rose = ins(Key::new(Mat::Surface("pht_corrugated_iron_02"), [5.0, 3.4, 4.6]).tile(0.35).rough(0.8));
     let y = s.deck_b - 0.5 - 0.62;
     let runs = [
-        (Vec3::new(BAR_WALL - 0.9, y, 1.5), Vec3::new(BAR_WALL - 0.9, y, 28.0), 0.48),
+        // the big one, hung low just over the bar wall's cap (as in the photo)
+        (Vec3::new(BAR_WALL - 0.25, s.y + WALL_H + 0.62, 1.5), Vec3::new(BAR_WALL - 0.25, s.y + WALL_H + 0.62, 28.0), 0.5),
         (Vec3::new(1.5, y + 0.05, RUG.3 + 4.2), Vec3::new(BAR_WALL - 1.3, y + 0.05, RUG.3 + 4.2), 0.36),
         (Vec3::new(1.5, y + 0.05, RUG.1 - 4.6), Vec3::new(BAR_WALL - 1.3, y + 0.05, RUG.1 - 4.6), 0.32),
     ];
@@ -617,10 +711,12 @@ fn track_lights(g: &mut Geo, s: &Site) {
 /// The stencilled concrete rug (an SVG decal) under the lounge: its long side across the room (along the bar),
 /// with a copy either side of it.
 fn rug(g: &mut Geo, s: &Site) {
-    let k = ins(Key::new(Mat::Surface("dcl_cement_rug"), [1.0, 1.0, 1.0]).tile(7.2).rough(0.7));
+    // the stain carries the floor's concrete maps: same tint and finish as the slabs (super::stone_slabs)
+    let k = ins(Key::new(Mat::Surface("dcl_cement_rug"), [3.05, 3.3, 3.25]).tile(7.2).rough(0.8));
     let (cx, cz) = ((RUG.0 + RUG.2) * 0.5, (RUG.1 + RUG.3) * 0.5);
     for i in -1..=1 {
-        let (x0, z0) = (cx - 2.7, cz - 3.6 + i as f32 * 7.2);
+        // clear concrete between the rugs
+        let (x0, z0) = (cx - 2.7, cz - 3.6 + i as f32 * 8.4);
         g.decal(k, Vec3::new(x0, s.y + 0.003, z0), Vec3::Z * 7.2, Vec3::X * 5.4, 7.2);
     }
 }
