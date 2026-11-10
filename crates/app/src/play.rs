@@ -171,7 +171,7 @@ impl ApplicationHandler for App {
                     batches.extend(crate::library::prefab_batches(&gpu, &renderer, lib, &pl));
             }
         }
-        let targets = Targets::new(&gpu, config.format, config.width, config.height);
+        let targets = Targets::new(&gpu, &renderer, config.width, config.height);
         self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches });
         self.last = Instant::now();
     }
@@ -184,7 +184,7 @@ impl ApplicationHandler for App {
                     g.config.width = s.width.max(1);
                     g.config.height = s.height.max(1);
                     g.surface.configure(&g.gpu.device, &g.config);
-                    g.targets = Targets::new(&g.gpu, g.config.format, g.config.width, g.config.height);
+                    g.targets = Targets::new(&g.gpu, &g.renderer, g.config.width, g.config.height);
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => self.grab(true),
@@ -223,7 +223,7 @@ impl ApplicationHandler for App {
                 let p = &self.player;
                 let cam = Camera::perspective(p.pos + Vec3::Y * EYE, p.yaw, p.pitch, 70.0, g.config.width as f32 / g.config.height as f32);
                 let mut enc = g.gpu.device.create_command_encoder(&Default::default());
-                g.renderer.render(&g.gpu, &mut enc, &g.scene, &g.batches.iter().collect::<Vec<_>>(), &cam, &g.targets.msaa, &view, &g.targets.depth);
+                g.renderer.render(&g.gpu, &mut enc, &g.scene, &g.batches.iter().collect::<Vec<_>>(), &cam, &g.targets, &view);
                 g.gpu.queue.submit([enc.finish()]);
                 g.gpu.queue.present(frame);
                 self.frames += 1;

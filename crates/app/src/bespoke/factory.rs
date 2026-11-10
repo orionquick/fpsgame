@@ -7,12 +7,12 @@
 //! - north: two windowed bays at the west end, the rest is a party wall; east: party wall.
 use super::geom::{Geo, Hole, Key, Mat};
 use super::plan::{self, Rect};
-use super::{furnish, interior, lift_doors, m, slab, stair, stair_hole, Building};
+use super::{furnish, interior, lift_doors, loft, m, slab, stair, stair_hole, Building};
 use glam::{Vec2, Vec3};
 
 pub const OSM: &str = "way/376480375";
 
-const T: f32 = 0.45; // exterior wall
+const T: f32 = 0.33; // exterior wall: 13 in. of brick
 const LEVELS: [(f32, f32); 3] = [(0.0, 4.6), (4.6, 3.9), (8.5, 3.9)];
 const ROOF: f32 = 12.4;
 const PARAPET: f32 = 13.3;
@@ -125,11 +125,18 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         Some(s) => Box::leak(s.to_string().into_boxed_str()),
         None => BRICK,
     };
-    let brick = Key::new(Mat::Surface(brick_id), BRICK_TINT);
+    let tint = match brick_id {
+        "ue3iaeifw" => [1.08, 0.92, 0.98],
+        "udlmfczo" => [0.88, 0.6, 0.56],
+        "scxriad" => [1.05, 1.05, 2.1],
+        _ => BRICK_TINT,
+    };
+    let brick = Key::new(Mat::Surface(brick_id), tint);
     // converted loft: the outer walls are exposed brick inside too
-    let brick_in = Key::new(Mat::Surface(brick_id), BRICK_TINT.map(|c| c * 1.25)).inside();
+    let brick_in = Key::new(Mat::Surface(brick_id), tint.map(|c| c * 1.2)).inside();
     let stone = Key::new(Mat::Surface(m::CONCRETE), [0.86, 0.8, 0.72]);
     let plinth = Key::new(Mat::Surface(m::CONCRETE), [0.42, 0.38, 0.35]);
+    let sill_in = Key::new(Mat::Plain(160), [0.75, 0.74, 0.71]).inside();
     let steel = Key::new(Mat::Plain(120), [0.03, 0.035, 0.035]);
     let green = Key::new(Mat::Plain(100), [0.05, 0.13, 0.09]);
     let alu = Key::new(Mat::Plain(80), [0.5, 0.51, 0.52]);
@@ -205,14 +212,36 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
             f.bx(&mut g, stone, p0 - 0.03, p1 + 0.03, GROUND_HEAD, GROUND_HEAD + 0.4, 0.0, 0.04);
             f.bx(&mut g, plinth, p0 - 0.01, p1 + 0.01, -1.5, 0.18, 0.0, 0.025);
         }
+        // downspouts at the ends of the decorated span, gooseneck lamps over the ground-floor openings
+        let pipe = Key::new(Mat::Plain(90), [0.1, 0.1, 0.1]);
+        for u in [e0 + 0.35, e1 - 0.35] {
+            let p = f.at(u, 0.12);
+            g.tube(pipe, Vec3::new(p.x, 0.05, p.y), Vec3::new(p.x, ROOF - 0.2, p.y), 0.055, 10);
+            f.bx(&mut g, pipe, u - 0.15, u + 0.15, ROOF - 0.5, ROOF - 0.1, 0.0, 0.25);
+            f.bx(&mut g, pipe, u - 0.12, u + 0.12, 0.0, 0.25, 0.0, 0.22);
+        }
+        for (i, &(u0, u1)) in f.bays.iter().enumerate() {
+            if f.ground[i].is_none() {
+                continue;
+            }
+            let u = (u0 + u1) / 2.0;
+            let (w0, w1) = (f.at(u, 0.0), f.at(u, 0.55));
+            let y = GROUND_HEAD + 0.75;
+            g.tube(pipe, Vec3::new(w0.x, y, w0.y), Vec3::new(w1.x, y, w1.y), 0.018, 6);
+            g.tube(pipe, Vec3::new(w1.x, y, w1.y), Vec3::new(w1.x, y - 0.18, w1.y), 0.018, 6);
+            g.tube(pipe, Vec3::new(w1.x, y - 0.32, w1.y), Vec3::new(w1.x, y - 0.18, w1.y), 0.2, 14);
+            f.bx(&mut g, pipe, u - 0.08, u + 0.08, y - 0.1, y + 0.1, 0.0, 0.03);
+        }
         // windows
         for (i, &(u0, u1)) in f.bays.iter().enumerate() {
             for (k, &(y, _)) in LEVELS[1..].iter().enumerate() {
                 let (y0, y1) = (y + SILL, y + SILL + WIN_H[k]);
-                let cols = if u1 - u0 > 3.0 { 6 } else { 4 };
-                sash(&mut g, f, u0, u1, y0, y1, cols, 5, steel, glass);
-                // stone sill
-                f.bx(&mut g, stone, u0 - 0.06, u1 + 0.06, y0 - 0.1, y0 + 0.01, -0.14, 0.06);
+                let cols = if u1 - u0 > 3.0 { 8 } else { 5 };
+                sash(&mut g, f, u0, u1, y0, y1, cols, 6, steel, glass);
+                // stone sill outside, a painted timber stool board inside
+                f.bx(&mut g, stone, u0 - 0.06, u1 + 0.06, y0 - 0.1, y0 + 0.01, -0.1, 0.06);
+                f.bx(&mut g, sill_in, u0 - 0.05, u1 + 0.05, y0 - 0.005, y0 + 0.03, -T - 0.035, -0.13);
+                f.bx(&mut g, sill_in, u0 - 0.05, u1 + 0.05, y0 - 0.12, y0 - 0.005, -T - 0.02, -T + 0.01);
             }
             match f.ground[i] {
                 Some(Ground::Garage) => garage(&mut g, f, u0, u1, alu, glass),
@@ -230,6 +259,8 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
             for u in [s0 - 1.1, s1 + 1.1] {
                 diamond(&mut g, f, u, (y0 + y1) / 2.0, 0.42, stone);
             }
+            let paint = Key::new(Mat::Plain(220), [0.8, 0.76, 0.64]);
+            sign(&mut g, f, "CANDY FACTORY", (s0 + s1) / 2.0, (y0 + y1) / 2.0, 0.105, paint);
         }
     }
 
@@ -252,32 +283,152 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         west: faces[0].bays.iter().map(|b| (b.0 + b.1) / 2.0).collect(),
     };
     let mut fur = furnish::Furnisher::new(cat, input.seed);
-    slab(&mut g, inner, 0.0, 0.3, &[]);
-    let gceil = LEVELS[0].1 - 0.31;
-    interior(&mut g, &ground, 0.0, gceil, 1, true);
-    // ground floor: a restaurant, the bar facing the dining room in front of the core
-    {
-        let mut dining = ground.clone();
-        for r in dining.rooms.iter_mut().filter(|r| r.r.x1 <= core.r.x0 + 0.01 && r.kind == plan::Use::Hall) {
-            r.r.x1 = core.r.x0 - 4.6;
-        }
-        furnish::floor(&mut fur, &mut g, &dining, 0.0, gceil, w, d, T, &win);
-        let bx = core.r.x0 - 3.2;
-        furnish::bar(&mut fur, &mut g, v(bx, core.r.z1 - 0.5), v(bx, d - T - 2.2), 0.0);
-    }
-    for (k, &(y, _)) in LEVELS.iter().enumerate().skip(1) {
-        let p = plan::office(&plan::Input { seed: input.seed + k as u64, ..input.clone() });
-        slab(&mut g, inner, y, 0.3, &[stair_hole(core.stair), core.elevator]);
-        let ceil = SILL + WIN_H[k - 1] + 0.12;
-        interior(&mut g, &p, y, ceil, 10 + k as u64, false);
-        furnish::floor(&mut fur, &mut g, &p, y, ceil, w, d, T, &win);
-    }
+    let _ = &win;
+    // structural grid: girders on the west front's interior piers, three column lines across
+    let piers = faces[0].piers();
+    let spec = loft::Spec {
+        w,
+        d,
+        t: T,
+        girders: piers[1..piers.len() - 1].iter().map(|p| (p.0 + p.1) / 2.0).collect(),
+        cols: vec![T + (w - 2.0 * T) * 0.25, T + (w - 2.0 * T) * 0.5, T + (w - 2.0 * T) * 0.75],
+        core: core.clone(),
+    };
     for (k, &(y, h)) in LEVELS.iter().enumerate() {
+        let top = if k + 1 < LEVELS.len() { LEVELS[k + 1].0 } else { ROOF };
+        let h = top - y;
+        let clear = loft::Spec::clear(h);
+        let holes = if k == 0 { vec![] } else { vec![stair_hole(core.stair), core.elevator] };
+        slab(&mut g, inner, y, if k == 0 { 0.3 } else { 0.09 }, &holes);
+        interior(&mut g, &ground, y, clear, 10 + k as u64, true);
+        loft::structure(&mut g, &spec, y, h, k as u64);
         if k + 1 < LEVELS.len() {
-            stair(&mut g, core.stair, y, h);
+            stair(&mut g, core.stair, y, LEVELS[k + 1].0 - y);
         }
         lift_doors(&mut g, core.elevator, y);
+        let _ = h;
+        // zones kept free of desks: meeting rooms, kitchen, lift lobby
+        let ne = Rect::new(w - T - 11.0, T, w - T, 6.0);
+        let se = Rect::new(w - T - 9.0, d - T - 7.2, w - T, d - T);
+        let kitchen = Rect::new(core.r.x0 - 0.5, 6.0, w - T, core.r.z0);
+        let lobby = Rect::new(core.r.x0 - 2.6, core.r.z0 - 0.5, core.r.x0, core.r.z1 + 0.5);
+        let mut reserved = vec![lobby];
+        let mut pads = vec![];
+        if k == 0 {
+            // ground floor: cafe by the garage doors, bar in front of the core, lounge at the north entry
+            let cafe = Rect::new(T + 0.9, T + 5.0, spec.cols[1] - 0.6, d - T - 1.0);
+            let mut p = ground.clone();
+            p.rooms = vec![plan::Room { r: cafe, kind: plan::Use::Hall }];
+            furnish::floor(&mut fur, &mut g, &p, y, clear, w, d, T, &win);
+            let bx = core.r.x0 - 3.2;
+            furnish::bar(&mut fur, &mut g, v(bx, core.r.z1 - 0.5), v(bx, d - T - 2.2), y);
+            reserved.push(cafe);
+            reserved.push(Rect::new(bx - 1.2, core.r.z1 - 1.0, core.r.x0, d - T));
+            fur.put(&mut g, "ph_sofa_03", v(4.6, 1.1), y, v(0.0, 1.0), true);
+            fur.put(&mut g, "ph_modern_coffee_table_02", v(4.5, 2.6), y, v(0.2, 1.0), true);
+            fur.put(&mut g, "ph_modern_arm_chair_01", v(2.4, 3.4), y, v(0.8, -0.6), true);
+            fur.put(&mut g, "ph_modern_arm_chair_01", v(6.7, 3.5), y, v(-0.7, -0.7), true);
+            fur.put(&mut g, "ph_potted_plant_01", v(1.0, 1.0), y, v(0.3, 1.0), false);
+        } else {
+            loft::glass_room(&mut g, ne, y, clear, &[3, 0]);
+            loft::meeting(&mut g, &mut fur, ne, y, clear, v(1.0, 0.0));
+            loft::glass_room(&mut g, se, y, clear, &[0, 1]);
+            loft::meeting(&mut g, &mut fur, se, y, clear, v(1.0, 0.0));
+            loft::kitchen(&mut g, &mut fur, v(core.r.x0, core.r.z0), v(w - T, core.r.z0), y);
+            reserved.extend([ne, se, kitchen]);
+        }
+        // desk benches in the bays between girders and column lines, clear of everything reserved
+        let mut zs = vec![T];
+        zs.extend(spec.girders.iter().copied());
+        zs.push(d - T);
+        let mut xs = vec![T];
+        xs.extend(spec.cols.iter().copied());
+        xs.push(core.r.x0 - 2.6);
+        for i in 0..xs.len() - 1 {
+            for j in 0..zs.len() - 1 {
+                let (xa, xb, za, zb) = (xs[i] + 0.5, xs[i + 1] - 0.5, zs[j], zs[j + 1]);
+                let pairs = ((xb - xa - 1.0) / 1.8).floor() as i32;
+                if pairs < 1 || zb - za < 4.2 {
+                    continue;
+                }
+                let c = v((xa + xb) / 2.0, (za + zb) / 2.0);
+                let half = v(pairs as f32 * 0.9 + 0.3, 2.3);
+                let r = Rect::new(c.x - half.x, c.y - half.y, c.x + half.x, c.y + half.y);
+                if reserved.iter().any(|q| q.x0 < r.x1 && q.x1 > r.x0 && q.z0 < r.z1 && q.z1 > r.z0) {
+                    continue;
+                }
+                // one bay per floor is a lounge by the windows instead
+                if i == 0 && j == 2 + k {
+                    fur.put(&mut g, "ph_sofa_02", c - v(0.0, 1.2), y, v(0.0, 1.0), true);
+                    fur.put(&mut g, "ph_mid_century_lounge_chair", c + v(1.3, 0.9), y, v(-0.7, -0.6), true);
+                    fur.put(&mut g, "ph_modern_arm_chair_01", c + v(-1.3, 0.9), y, v(0.7, -0.6), true);
+                    fur.put(&mut g, "ph_coffee_table_round_01", c, y, v(0.0, 1.0), true);
+                    fur.put(&mut g, "ph_potted_plant_01", c + v(-2.2, -1.3), y, v(1.0, 0.3), false);
+                    continue;
+                }
+                pads.push(loft::cubicles(&mut g, &mut fur, c, v(1.0, 0.0), pairs, y));
+            }
+        }
+        loft::floor(&mut g, &spec, y, &pads);
+        // framed prints, a clock and a fire alarm on the core's front wall
+        let cx = core.r.x0 - 0.1;
+        for (k2, z) in [core.r.z0 + 2.2, core.r.z0 + 6.6, core.r.z1 - 1.2].iter().enumerate() {
+            let id = ["ph_hanging_picture_frame_01", "ph_hanging_picture_frame_02", "ph_hanging_picture_frame_03"][(k2 + k) % 3];
+            fur.put(&mut g, id, v(cx - 0.02, *z), y + 1.3, v(-1.0, 0.0), false);
+        }
+        fur.put(&mut g, "ph_wall_clock", v(cx - 0.03, core.r.z0 + 4.4), y + 2.3, v(-1.0, 0.0), false);
+        fur.put(&mut g, "ph_fire_alarm", v(cx - 0.02, core.r.z0 + 1.6), y + 1.4, v(-1.0, 0.0), false);
+        // plants along the window walls
+        for z in [7.0f32, 16.0, 25.0] {
+            let turn = Vec2::from_angle(fur.rand() * 6.28);
+            fur.put(&mut g, ["sikoN", "siumT", "wfypejzha"][(z as usize / 7) % 3], v(T + 0.55, z), y, turn, false);
+        }
     }
+    // patio on the park side: cafe tables outside the garage doors, a row of planters, potted palms at the entries
+    fur.indoor = false;
+    let west = &faces[0];
+    for (i, &(u0, u1)) in west.bays.iter().enumerate() {
+        let u = (u0 + u1) / 2.0;
+        let at = |o: f32, du: f32| west.a + west.dir() * (u + du) + west.out() * o;
+        match west.ground[i] {
+            Some(Ground::Garage) | Some(Ground::Store) => {
+                for du in [-0.9f32, 0.9] {
+                    let c = at(2.3 + (fur.rand() - 0.5) * 0.4, du + (fur.rand() - 0.5) * 0.3);
+                    let tdir = west.dir().rotate(Vec2::from_angle((fur.rand() - 0.5) * 1.2));
+                    fur.put(&mut g, "ukphdffaw", c, 0.0, tdir, true);
+                    let n2 = Vec2::new(-tdir.y, tdir.x);
+                    for (k, side) in [tdir, -tdir, n2, -n2].iter().enumerate() {
+                        if fur.rand() < 0.7 || k < 2 {
+                            let pull = 0.5 + fur.rand() * 0.35;
+                            let face = (-*side).rotate(Vec2::from_angle((fur.rand() - 0.5) * 1.0));
+                            fur.put(&mut g, "uknkaffaw", c + *side * pull, 0.0, face, false);
+                        }
+                    }
+                }
+            }
+            Some(Ground::Entry) => {
+                for du in [-1.0f32, 1.0] {
+                    fur.put(&mut g, "shqke", at(0.45, du * 1.35), 0.0, west.out(), false);
+                }
+            }
+            None => {}
+        }
+        let c = at(4.0, 0.0);
+        let turn = Vec2::from_angle(fur.rand() * 6.28);
+        fur.put(&mut g, "vbljdakjw", c, 0.0, west.dir(), true);
+        fur.put(&mut g, "wfypfa3ha", c, 0.4, turn, false);
+    }
+    // street trees (jacarandas, as on the real plaza) and pedestrian lamps
+    for (k, u) in [5.0f32, 15.0, 25.0].iter().enumerate() {
+        let p = west.a + west.dir() * *u + west.out() * 8.5;
+        fur.put_scaled(&mut g, "ph_jacaranda_tree", p, -0.1, Vec2::from_angle(k as f32 * 2.1), 0.42, false);
+        let l = west.a + west.dir() * (*u + 5.0) + west.out() * 6.2;
+        fur.put(&mut g, "ph_street_lamp_01", l, 0.0, west.out(), true);
+    }
+    for (k, (x, z)) in [(23.0f32, 4.0f32), (23.0, 8.0), (27.0, 4.0), (27.0, 8.0)].iter().enumerate() {
+        fur.put(&mut g, "ph_exterior_aircon_unit", v(*x, *z + 14.0), ROOF + 0.02, if k % 2 == 0 { v(1.0, 0.0) } else { v(-1.0, 0.0) }, true);
+    }
+    fur.indoor = true;
     // roof: slab, gravel, a monitor skylight and two rooftop units
     slab(&mut g, inner, ROOF, 0.3, &[]);
     let gravel = Key::new(Mat::Surface(m::ROOF_GRAVEL), [0.75, 0.74, 0.72]);
@@ -296,28 +447,30 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         }
     }
     g.solid(metal, Vec3::new(mx0 - 0.2, ROOF + 1.15, mz0 - 0.2), Vec3::new(mx1 + 0.2, ROOF + 1.3, mz1 + 0.2));
-    for (x, z) in [(21.0, 5.0), (21.0, 24.0)] {
-        g.solid(metal, Vec3::new(x, ROOF, z), Vec3::new(x + 2.4, ROOF + 1.4, z + 1.6));
-    }
+
     Some(Building { osm: OSM, geo: g, furniture: fur.out })
 }
 
 /// Default facade brick (Megascans "Red Brick Wall") and tint matched to the reference's orange-red.
-pub const BRICK: &str = "scxriad";
+pub const BRICK: &str = "udlmfczo";
 pub const BRICK_TINT: [f32; 3] = [0.84, 0.76, 0.72];
 
 /// Industrial steel sash: heavy perimeter frame, thin glazing bars, clear lites, set back in the opening.
 fn sash(g: &mut Geo, f: &Face, u0: f32, u1: f32, y0: f32, y1: f32, cols: usize, rows: usize, steel: Key, glass: Key) {
-    let o = -0.13;
+    let o = -0.1;
     let fr = 0.06;
     f.bx(g, steel, u0, u1, y0, y0 + fr, o - 0.04, o + 0.04);
     f.bx(g, steel, u0, u1, y1 - fr, y1, o - 0.04, o + 0.04);
     f.bx(g, steel, u0, u0 + fr, y0, y1, o - 0.04, o + 0.04);
     f.bx(g, steel, u1 - fr, u1, y0, y1, o - 0.04, o + 0.04);
+    // window units split by heavy mullions, each a grid of small lites
+    let units = if cols >= 8 { 2 } else { 1 };
     for c in 1..cols {
         let u = u0 + (u1 - u0) * c as f32 / cols as f32;
-        let wdt = if c == cols / 2 { 0.05 } else { 0.024 };
-        f.bx(g, steel, u - wdt / 2.0, u + wdt / 2.0, y0, y1, o - 0.025, o + 0.025);
+        let heavy = units > 1 && c * units % cols == 0;
+        let wdt = if heavy { 0.07 } else { 0.022 };
+        let dep = if heavy { 0.045 } else { 0.022 };
+        f.bx(g, steel, u - wdt / 2.0, u + wdt / 2.0, y0, y1, o - dep, o + dep);
     }
     for r in 1..rows {
         let y = y0 + (y1 - y0) * r as f32 / rows as f32;
@@ -330,7 +483,7 @@ fn sash(g: &mut Geo, f: &Face, u0: f32, u1: f32, y0: f32, y1: f32, cols: usize, 
 
 /// Glazed sectional garage door (restaurant frontage): aluminium rails and stiles over clear panels.
 fn garage(g: &mut Geo, f: &Face, u0: f32, u1: f32, alu: Key, glass: Key) {
-    let o = -0.22;
+    let o = -0.19;
     let (y0, y1) = (0.0, GROUND_HEAD - 0.05);
     // guide channels and header
     f.bx(g, alu, u0, u0 + 0.09, y0, GROUND_HEAD, o - 0.06, o + 0.06);
@@ -352,7 +505,7 @@ fn garage(g: &mut Geo, f: &Face, u0: f32, u1: f32, alu: Key, glass: Key) {
 
 /// Storefront: painted steel mullions, transom, kick panels; a glazed door in the middle (`entry`: recessed pair).
 fn storefront(g: &mut Geo, f: &Face, u0: f32, u1: f32, green: Key, glass: Key, entry: bool) {
-    let o = if entry { -0.38 } else { -0.2 };
+    let o = if entry { -0.3 } else { -0.18 };
     let transom = 2.65;
     let wdt = u1 - u0;
     let (d0, d1) = if entry { (u0 + wdt * 0.2, u1 - wdt * 0.2) } else { (u0 + wdt / 2.0 - 0.55, u0 + wdt / 2.0 + 0.55) };
@@ -362,6 +515,13 @@ fn storefront(g: &mut Geo, f: &Face, u0: f32, u1: f32, green: Key, glass: Key, e
         f.bx(g, green, a, b, 0.0, GROUND_HEAD, o - 0.05, o + 0.05);
     }
     f.bx(g, green, u0, u1, transom - m / 2.0, transom + m / 2.0, o - 0.05, o + 0.05);
+    // small-paned transom band
+    let tn = ((u1 - u0) / 0.42).round().max(2.0) as i32;
+    for i in 1..tn {
+        let u = u0 + (u1 - u0) * i as f32 / tn as f32;
+        f.bx(g, green, u - 0.015, u + 0.015, transom, GROUND_HEAD, o - 0.025, o + 0.025);
+    }
+    f.bx(g, green, u0, u1, (transom + GROUND_HEAD) / 2.0 - 0.015, (transom + GROUND_HEAD) / 2.0 + 0.015, o - 0.025, o + 0.025);
     f.bx(g, green, u0, u1, GROUND_HEAD - m, GROUND_HEAD, o - 0.05, o + 0.05);
     // kick panels under the side lites
     f.bx(g, green, u0 + m, d0 - m, 0.0, 0.4, o - 0.03, o + 0.03);
@@ -414,5 +574,51 @@ fn diamond(g: &mut Geo, f: &Face, u: f32, y: f32, r: f32, k: Key) {
         let e = p1 - p0;
         let out = pt(0.0, 0.0, dep) - pt(0.0, 0.0, 0.0);
         g.quad(k, p0, e, out);
+    }
+}
+
+/// Painted sign lettering from a 5x7 pixel font, centred at `u`, `y` on the face; `px` is the pixel size.
+fn sign(g: &mut Geo, f: &Face, text: &str, u: f32, y: f32, px: f32, k: Key) {
+    let glyph = |c: char| -> [&'static str; 7] {
+        match c {
+            'A' => [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+            'C' => [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+            'D' => ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
+            'F' => ["#####", "#....", "#....", "####.", "#....", "#....", "#...."],
+            'N' => ["#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"],
+            'O' => [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+            'R' => ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
+            'T' => ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+            'Y' => ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
+            _ => ["....."; 7],
+        }
+    };
+    let n = text.chars().count() as f32;
+    let width = (n * 6.0 - 1.0) * px;
+    let u0 = u - width / 2.0;
+    let top = y + 3.5 * px;
+    for (i, ch) in text.chars().enumerate() {
+        let rows = glyph(ch);
+        for (r, row) in rows.iter().enumerate() {
+            // merge horizontal runs of pixels into one quad
+            let b = row.as_bytes();
+            let mut c = 0;
+            while c < 5 {
+                if b[c] != b'#' {
+                    c += 1;
+                    continue;
+                }
+                let start = c;
+                while c < 5 && b[c] == b'#' {
+                    c += 1;
+                }
+                let ua = u0 + (i as f32 * 6.0 + start as f32) * px;
+                let ub = u0 + (i as f32 * 6.0 + c as f32) * px;
+                let yb = top - r as f32 * px;
+                let p = f.at(ua, 0.056);
+                let q = f.at(ub, 0.056);
+                g.quad(k, Vec3::new(p.x, yb - px, p.y), Vec3::new(q.x - p.x, 0.0, q.y - p.y), Vec3::Y * px);
+            }
+        }
     }
 }

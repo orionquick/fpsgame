@@ -51,6 +51,19 @@ fn hash2(p: vec2f) -> f32 {
     return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
 }
 
+fn vnoise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i), hash2(i + vec2f(1.0, 0.0)), u.x), mix(hash2(i + vec2f(0.0, 1.0)), hash2(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+
+// Large-scale tonal variation in world space: breaks up visible texture tiling and uniform "CG" surfaces.
+fn macro_var(w: vec3f, n: vec3f) -> f32 {
+    let p = select(vec2f(w.x + w.z, w.y), w.xz, abs(n.y) > 0.7);
+    return 0.55 * vnoise(p / 1.4) + 0.45 * vnoise(p / 7.0 + 13.1);
+}
+
 fn ggx(n: vec3f, v: vec3f, l: vec3f, rough: f32, f0: vec3f) -> vec3f {
     let h = normalize(v + l);
     let ndl = max(dot(n, l), 0.0);
@@ -84,6 +97,7 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     var n = normalize(tv * tn.x + bv * tn.y + nv * tn.z);
 
     var glass = 0.0;
+    base *= mix(0.84, 1.1, macro_var(i.world, nv));
     if (i.params.x > 0.5 && i.params.x < 2.5 && abs(nv.y) < 0.5) {
         // window grid in world metres (u along the wall, v = -height); the material shows on frames and spandrels.
         // mode 1: curtain wall (wide glazing); mode 2: punched windows in masonry

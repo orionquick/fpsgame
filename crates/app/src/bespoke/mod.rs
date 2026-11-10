@@ -3,6 +3,7 @@
 pub mod factory;
 pub mod furnish;
 pub mod geom;
+pub mod loft;
 pub mod plan;
 
 use geom::{Geo, Hole, Key, Mat};
@@ -55,11 +56,12 @@ fn k(mat: &'static str, tint: [f32; 3]) -> Key {
 
 /// One floor of interior: partitions with doors, floor finishes, dropped ceiling with light panels, door leaves.
 /// `y` is the finished floor level, `ceil` the ceiling height above it.
-pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, ground: bool) {
+/// `loft`: open timber-ceilinged floor: painted core walls, polished concrete, ceilings only inside the core.
+pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool) {
     let white = [1.4, 1.4, 1.36];
     for (n, w) in p.walls.iter().enumerate() {
         let (mat, t, tint) = if w.core { (m::CORE_WALL, CORE_T, [1.05, 1.06, 1.08]) } else { (m::DRYWALL, PARTITION_T, white) };
-        let key = k(mat, tint);
+        let key = if loft && w.core { Key::new(Mat::Plain(215), [0.8, 0.79, 0.76]).inside() } else { k(mat, tint) };
         let d = w.b - w.a;
         let l = d.length();
         if l < 0.05 {
@@ -88,15 +90,18 @@ pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, ground: boo
             Use::Office | Use::Meeting => k(m::CARPET, if r.kind == Use::Meeting { [0.95, 1.0, 1.1] } else { [1.1, 1.1, 1.12] }),
             Use::Corridor | Use::Lobby => k(m::CORRIDOR_FLOOR, [1.0, 1.0, 1.0]),
             Use::Restroom => k(m::TILE_FLOOR, [1.0, 1.0, 1.0]),
-            Use::Hall => k(m::CONCRETE, [0.8, 0.78, 0.75]),
+            Use::Hall => k(m::CONCRETE, [0.58, 0.57, 0.55]),
             Use::Storage | Use::Riser => k(m::CONCRETE, [0.7, 0.7, 0.7]),
             Use::Stair | Use::Elevator => continue,
         };
         let rr = r.r;
         g.quad(floor, Vec3::new(rr.x0, y, rr.z1), Vec3::X * rr.w(), Vec3::NEG_Z * rr.d());
-        // ceiling (faces down)
-        let ck = k(m::ACOUSTIC_CEILING, [1.0, 1.0, 1.0]);
-        let _ = ground;
+        // ceiling (faces down); a loft only closes the rooms inside the core
+        let closed = matches!(r.kind, Use::Restroom | Use::Riser | Use::Storage);
+        if loft && !closed {
+            continue;
+        }
+        let ck = if loft { Key::new(Mat::Plain(220), [0.82, 0.82, 0.8]).inside() } else { k(m::ACOUSTIC_CEILING, [1.0, 1.0, 1.0]) };
         g.quad(ck, Vec3::new(rr.x0, y + ceil, rr.z0), Vec3::X * rr.w(), Vec3::Z * rr.d());
         // light panels on a grid, kept off the walls
         if matches!(r.kind, Use::Riser) {
@@ -237,7 +242,7 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library, g: &G
         let indoor = if key.indoor { [0.0, crate::library::INDOOR_AMBIENT, crate::library::INDOOR_LAMP, 0.0] } else { [0.0; 4] };
         let (mat, inst, transparent) = match key.mat {
             Mat::Surface(id) => {
-                let tile = lib.catalog.get(id).and_then(|a| a.tile_m).map_or(2.0, |t| t[0].max(0.05));
+                let tile = if key.tile_cm > 0 { key.tile_cm as f32 / 100.0 } else { lib.catalog.get(id).and_then(|a| a.tile_m).map_or(2.0, |t| t[0].max(0.05)) };
                 (lib.material(gpu, r, id), Instance::new(glam::Mat4::IDENTITY, tint, 1.0 / tile).with_params(indoor), false)
             }
             Mat::Plain(rough) => (plain.entry(rough).or_insert_with(|| Arc::new(Material::plain(gpu, r, rough))).clone(), Instance::new(glam::Mat4::IDENTITY, tint, 1.0).with_params(indoor), false),

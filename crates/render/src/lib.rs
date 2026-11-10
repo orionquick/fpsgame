@@ -10,6 +10,7 @@ pub use textured::{Batch, Instance, Material, TexVertex};
 
 pub const MSAA: u32 = 4;
 pub const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 const SHADOW_FAR_RES: u32 = 4096;
 const SHADOW_NEAR_RES: u32 = 4096;
 /// Half-size of the near shadow cascade around the camera, metres.
@@ -142,6 +143,9 @@ pub struct Renderer {
     glass_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     tex_shadow_pipeline: wgpu::RenderPipeline,
+    ao_pipeline: wgpu::RenderPipeline,
+    composite_pipeline: wgpu::RenderPipeline,
+    pub(crate) post_bgl: wgpu::BindGroupLayout,
     globals: wgpu::Buffer,
     bind: wgpu::BindGroup,
     far: Cascade,
@@ -170,6 +174,7 @@ impl Renderer {
         let module = |label, src: &str| d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(format!("{common}\n{src}").into()) });
         let flat_mod = module("flat", include_str!("shader.wgsl"));
         let tex_mod = module("tex", include_str!("tex.wgsl"));
+        let post_mod = module("post", include_str!("post.wgsl"));
         let shadow_mod = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("shadow"), source: wgpu::ShaderSource::Wgsl(include_str!("shadow.wgsl").into()) });
 
         let depth_tex = |binding| wgpu::BindGroupLayoutEntry {
@@ -198,6 +203,15 @@ impl Renderer {
         let mat_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("material"),
             entries: &[tex_entry(0), tex_entry(1), tex_entry(2), wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }],
+        });
+        let post_tex = |binding, sample_type, multisampled| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type, view_dimension: wgpu::TextureViewDimension::D2, multisampled }, count: None };
+        let post_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("post"),
+            entries: &[
+                post_tex(0, wgpu::TextureSampleType::Depth, true),
+                post_tex(1, wgpu::TextureSampleType::Float { filterable: false }, false),
+                post_tex(2, wgpu::TextureSampleType::Float { filterable: false }, false),
+            ],
         });
         let mat_sampler = d.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("material"),
@@ -304,7 +318,25 @@ impl Renderer {
             depth_state(true, wgpu::CompareFunction::Less, shadow_bias),
             Default::default(),
         );
-        Self { pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
+        let post_layout = layout("post", &[Some(&bgl), Some(&post_bgl)]);
+        let full = wgpu::VertexState { module: &post_mod, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] };
+        let ao_pipeline = pipe(
+            "ao",
+            &post_layout,
+            full.clone(),
+            Some(wgpu::FragmentState { module: &post_mod, entry_point: Some("fs_ao"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: AO_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+            None,
+            Default::default(),
+        );
+        let composite_pipeline = pipe(
+            "composite",
+            &post_layout,
+            full,
+            Some(wgpu::FragmentState { module: &post_mod, entry_point: Some("fs_composite"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+            None,
+            Default::default(),
+        );
+        Self { ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: sun_from(205.0, 52.0), color_format }
     }
 
     fn light_far(&self, scene: &Scene) -> Mat4 {
@@ -350,7 +382,8 @@ impl Renderer {
     }
 
     /// Records the shadow + main passes. `msaa` is the multisampled colour target, `resolve` the final one.
-    pub fn render(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, scene: &Scene, batches: &[&Batch], cam: &Camera, msaa: &wgpu::TextureView, resolve: &wgpu::TextureView, depth: &wgpu::TextureView) {
+    pub fn render(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, scene: &Scene, batches: &[&Batch], cam: &Camera, t: &Targets, out: &wgpu::TextureView) {
+        let (msaa, resolve, depth) = (&t.msaa, &t.scene, &t.depth);
         let (lf, ln) = (self.light_far(scene), self.light_near(cam.focus));
         let v4 = |r: f32, g: f32, b: f32, w: f32| [r, g, b, w];
         let gl = Globals {
@@ -379,7 +412,7 @@ impl Renderer {
                 resolve_target: Some(resolve),
                 ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Discard },
             })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }), stencil_ops: None }),
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
@@ -401,6 +434,22 @@ impl Renderer {
                 p.draw_indexed(0..b.n_idx, 0, 0..b.n_inst);
             }
         }
+        drop(p);
+        // ambient occlusion from the depth, then composite onto the output
+        for (pipe, view, group) in [(&self.ao_pipeline, &t.ao, &t.post_ao), (&self.composite_pipeline, out, &t.post)] {
+            let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("post"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            p.set_pipeline(pipe);
+            p.set_bind_group(0, &self.bind, &[]);
+            p.set_bind_group(1, group, &[]);
+            p.draw(0..3, 0..1);
+        }
     }
 }
 
@@ -408,34 +457,72 @@ impl Renderer {
 pub struct Targets {
     pub msaa: wgpu::TextureView,
     pub depth: wgpu::TextureView,
+    /// Resolved main pass, before ambient occlusion.
+    pub scene: wgpu::TextureView,
+    pub ao: wgpu::TextureView,
+    post: wgpu::BindGroup,
+    /// Same as `post` without the AO texture (the AO pass writes it).
+    post_ao: wgpu::BindGroup,
     pub w: u32,
     pub h: u32,
 }
 
 impl Targets {
-    pub fn new(gpu: &Gpu, format: wgpu::TextureFormat, w: u32, h: u32) -> Self {
-        let mk = |format, label| {
+    pub fn new(gpu: &Gpu, r: &Renderer, w: u32, h: u32) -> Self {
+        let mk = |format, label, samples, usage| {
             gpu.device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
                     size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                     mip_level_count: 1,
-                    sample_count: MSAA,
+                    sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    usage,
                     view_formats: &[],
                 })
                 .create_view(&Default::default())
         };
-        Self { msaa: mk(format, "msaa"), depth: mk(DEPTH, "depth"), w, h }
+        let rt = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let rtt = rt | wgpu::TextureUsages::TEXTURE_BINDING;
+        let msaa = mk(r.color_format, "msaa", MSAA, rt);
+        let depth = mk(DEPTH, "depth", MSAA, rtt);
+        let scene = mk(r.color_format, "scene", 1, rtt);
+        let ao = mk(AO_FORMAT, "ao", 1, rtt);
+        let bind = |ao: &wgpu::TextureView| {
+            gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("post"),
+                layout: &r.post_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&depth) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&scene) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(ao) },
+                ],
+            })
+        };
+        let dummy = gpu
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("ao dummy"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: AO_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let post = bind(&ao);
+        let post_ao = bind(&dummy);
+        Self { msaa, depth, scene, ao, post, post_ao, w, h }
     }
 }
 
 /// Renders one frame off-screen and reads it back as an RGBA image.
 pub fn render_image(gpu: &Gpu, r: &Renderer, scene: &Scene, batches: &[&Batch], cam: &Camera, w: u32, h: u32) -> image::RgbaImage {
     let format = r.color_format;
-    let t = Targets::new(gpu, format, w, h);
+    let t = Targets::new(gpu, r, w, h);
     let out = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("out"),
         size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -448,14 +535,21 @@ pub fn render_image(gpu: &Gpu, r: &Renderer, scene: &Scene, batches: &[&Batch], 
     });
     let row = (w * 4).div_ceil(256) * 256;
     let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let scope_oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let scope_val = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut enc = gpu.device.create_command_encoder(&Default::default());
-    r.render(gpu, &mut enc, scene, batches, cam, &t.msaa, &out.create_view(&Default::default()), &t.depth);
+    r.render(gpu, &mut enc, scene, batches, cam, &t, &out.create_view(&Default::default()));
     enc.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo { texture: &out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
         wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
     );
     gpu.queue.submit([enc.finish()]);
+    for (name, scope) in [("validation", scope_val), ("out of memory", scope_oom)] {
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            eprintln!("render_image: GPU {name} error: {e}");
+        }
+    }
     buf.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map failed"));
     gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).expect("poll failed");
     let data = buf.slice(..).get_mapped_range().expect("mapped range");

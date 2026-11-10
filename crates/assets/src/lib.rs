@@ -22,6 +22,9 @@ pub struct Part {
     pub min: [f32; 3],
     pub max: [f32; 3],
     pub tris: u32,
+    /// Index into `Asset::materials` (multi-material models).
+    #[serde(default)]
+    pub material: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -39,6 +42,16 @@ pub struct Maps {
     /// The packed map is occlusion/roughness/translucency (plants), not metalness.
     #[serde(default)]
     pub orm_is_ort: bool,
+    /// The packed map is glTF metallic-roughness only (R unused): take occlusion from `ao` or none.
+    #[serde(default)]
+    pub orm_no_ao: bool,
+    /// glTF material factors (multiply the textures, or stand in for missing ones).
+    #[serde(default)]
+    pub base_factor: Option<[f32; 4]>,
+    #[serde(default)]
+    pub rough_factor: Option<f32>,
+    #[serde(default)]
+    pub metal_factor: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -57,6 +70,9 @@ pub struct Asset {
     pub tile_m: Option<[f32; 2]>,
     /// Normal map uses the DirectX (green-down) convention: the "_ue_" glTF exports.
     pub normal_dx: bool,
+    /// Per-part materials for multi-material models (empty: the asset's single `maps`).
+    #[serde(default)]
+    pub materials: Vec<Maps>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -201,7 +217,7 @@ fn read_zip_file(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Res<Ve
 }
 
 /// Extracts every mesh node of a glTF in the zip, transformed by its node chain (cm Z-up → m Y-up).
-fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> Res<(Vec<MeshPart>, Vec<Part>)> {
+fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> Res<(Vec<MeshPart>, Vec<Part>, Vec<Maps>)> {
     let mut v: serde_json::Value = serde_json::from_slice(&read_zip_file(zip, gltf_name)?)?;
     // Unreal exports add custom "_..." vertex attributes the gltf crate rejects; we don't use them.
     for m in v["meshes"].as_array_mut().into_iter().flatten() {
@@ -232,6 +248,7 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> R
     }
     let mut parts = vec![];
     let mut infos = vec![];
+    let multi = doc.materials().len() > 1;
     fn walk<'a>(n: gltf::Node<'a>, parent: M4, out: &mut Vec<(gltf::Node<'a>, M4)>) {
         let m = mul(&parent, &n.transform().matrix());
         out.push((n.clone(), m));
@@ -253,9 +270,15 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> R
         // Only the centimetre Z-up exports (node scale 0.01) lack it; metre exports without a node scale are already Y-up.
         let zlen = (m[2][0].powi(2) + m[2][1].powi(2) + m[2][2].powi(2)).sqrt();
         let m = if zlen < 0.1 && m[2][1].abs() < 0.5 * zlen { mul(&to_y_up, &m) } else { m };
+        // multi-material models: one part per material so each gets its own textures
+        let mut groups: Vec<Option<usize>> = if multi { mesh.primitives().map(|p| p.material().index()).collect() } else { vec![None] };
+        groups.dedup();
+        groups.sort();
+        groups.dedup();
+        for group in groups {
         let mut verts = vec![];
         let mut idx = vec![];
-        for prim in mesh.primitives() {
+        for prim in mesh.primitives().filter(|p| !multi || p.material().index() == group) {
             let r = prim.reader(|b| buffers.get(b.index()).map(|v| v.as_slice()));
             let Some(pos) = r.read_positions() else { continue };
             let pos: Vec<[f32; 3]> = pos.collect();
@@ -277,11 +300,39 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str) -> R
         }
         let min = verts.iter().fold([f32::MAX; 3], |a, v| [a[0].min(v.pos[0]), a[1].min(v.pos[1]), a[2].min(v.pos[2])]);
         let max = verts.iter().fold([f32::MIN; 3], |a, v| [a[0].max(v.pos[0]), a[1].max(v.pos[1]), a[2].max(v.pos[2])]);
-        infos.push(Part { name: node.name().unwrap_or("").to_string(), min, max, tris: idx.len() as u32 / 3 });
+        infos.push(Part { name: node.name().unwrap_or("").to_string(), min, max, tris: idx.len() as u32 / 3, material: group });
         let lods = [simplify(&verts, &idx, 0.25, 0.02), simplify(&verts, &idx, 0.06, 0.08)];
         parts.push(MeshPart { verts, idx, lods });
+        }
     }
-    Ok((parts, infos))
+    // materials straight from the glTF (used for multi-material models from Poly Haven / Sketchfab)
+    let uri = |t: Option<gltf::texture::Texture>| -> Option<String> {
+        match t?.source().source() {
+            gltf::image::Source::Uri { uri, .. } => Some(format!("{dir}{}", uri.replace("%20", " "))),
+            _ => None,
+        }
+    };
+    let mats = doc
+        .materials()
+        .map(|mt| {
+            let pbr = mt.pbr_metallic_roughness();
+            let mr = uri(pbr.metallic_roughness_texture().map(|t| t.texture()));
+            let occ = uri(mt.occlusion_texture().map(|t| t.texture()));
+            let packed = mr.is_some() && mr == occ;
+            Maps {
+                base: uri(pbr.base_color_texture().map(|t| t.texture())),
+                normal: uri(mt.normal_texture().map(|t| t.texture())),
+                orm: mr.clone(),
+                ao: if packed { None } else { occ },
+                orm_no_ao: mr.is_some() && !packed,
+                base_factor: Some(pbr.base_color_factor()),
+                rough_factor: Some(pbr.roughness_factor()),
+                metal_factor: Some(pbr.metallic_factor()),
+                ..Default::default()
+            }
+        })
+        .collect();
+    Ok((parts, infos, mats))
 }
 
 /// Upright exports whose metadata "height" is really the depth, so the Z-up rule would knock them over
@@ -312,7 +363,7 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
     let title = title.map(String::from).or_else(|| meta["name"].as_str().map(String::from)).unwrap_or_else(|| id.clone());
     let tags: Vec<String> = meta["tags"].as_array().map_or(vec![], |a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect());
     if let Some(g) = names.iter().find(|n| n.ends_with(".gltf")).cloned() {
-        let (mut parts, mut infos) = extract_model(&mut zip, &g)?;
+        let (mut parts, mut infos, gmats) = extract_model(&mut zip, &g)?;
         // Some metre-scale exports are still Z-up: if the metadata height matches the Z extent, stand them up.
         let meta_h = meta["meta"].as_array().and_then(|m| m.iter().find(|x| x["key"] == "height")).and_then(|x| x["value"].as_str().map(String::from).or_else(|| x["value"].as_f64().map(|f| f.to_string()))).and_then(|s| s.trim_end_matches('m').trim().parse::<f32>().ok());
         let ext = |i: usize| infos.iter().map(|p| p.max[i]).fold(f32::MIN, f32::max) - infos.iter().map(|p| p.min[i]).fold(f32::MAX, f32::min);
@@ -342,7 +393,10 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
             orm_is_ort: suffix_map(&names, &["_orm"]).is_none() && ort.is_some(),
             ..Default::default()
         };
-        return Ok(Asset { id, title, group: group.into(), kind: AssetKind::Model, zip: rel.into(), tags, parts: infos, maps, tile_m: None, normal_dx: rel.contains("_ue_") });
+        // Poly Haven / Sketchfab models carry their materials in the glTF itself
+        let gltf_mats = group == "polyhaven" || group == "sketchfab" || (maps.base.is_none() && gmats.iter().any(|m| m.base.is_some()));
+        let (maps, materials) = if gltf_mats { (gmats.first().cloned().unwrap_or_default(), gmats) } else { (maps, vec![]) };
+        return Ok(Asset { id, title, group: group.into(), kind: AssetKind::Model, zip: rel.into(), tags, parts: infos, maps, tile_m: None, normal_dx: rel.contains("_ue_"), materials });
     }
     let tile = meta["maps"].as_array().and_then(|m| m.iter().find_map(|x| x["physicalSize"].as_str())).and_then(|s| {
         let (a, b) = s.split_once('x')?;
@@ -355,13 +409,12 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
         gloss: suffix_map(&names, &["_gloss"]),
         ao: suffix_map(&names, &["_ao"]),
         opacity: suffix_map(&names, &["_opacity"]),
-        orm: None,
-        orm_is_ort: false,
+        ..Default::default()
     };
     if maps.base.is_none() {
         return Err(format!("{rel}: no mesh and no base colour map").into());
     }
-    Ok(Asset { id, title, group: group.into(), kind: AssetKind::Surface, zip: rel.into(), tags, parts: vec![], maps, tile_m: tile.or(Some([2.0, 2.0])), normal_dx: false })
+    Ok(Asset { id, title, group: group.into(), kind: AssetKind::Surface, zip: rel.into(), tags, parts: vec![], maps, tile_m: tile.or(Some([2.0, 2.0])), normal_dx: false, materials: vec![] })
 }
 
 /// Compiles every zip under `inbox` (titles and groups from `manifest.jsonl` when present) into `out`.
@@ -435,29 +488,66 @@ fn decode(zip: &mut zip::ZipArchive<std::fs::File>, name: &Option<String>, size:
 
 /// Loads an asset's textures from its zip at `size` x `size`.
 pub fn load_material(inbox: &Path, a: &Asset, size: u32) -> Res<MaterialImages> {
+    load_material_n(inbox, a, None, size)
+}
+
+/// Loads material `n` of a multi-material asset (None: the asset's own maps).
+pub fn load_material_n(inbox: &Path, a: &Asset, n: Option<usize>, size: u32) -> Res<MaterialImages> {
+    let maps = n.and_then(|i| a.materials.get(i)).unwrap_or(&a.maps);
     let mut zip = zip::ZipArchive::new(std::fs::File::open(inbox.join(&a.zip))?)?;
-    let base = decode(&mut zip, &a.maps.base, size).unwrap_or_else(|| image::RgbaImage::from_pixel(size, size, image::Rgba([200, 200, 200, 255])));
-    let mut normal = decode(&mut zip, &a.maps.normal, size).unwrap_or_else(|| image::RgbaImage::from_pixel(size, size, image::Rgba([128, 128, 255, 255])));
+    let bf = maps.base_factor.unwrap_or([1.0; 4]);
+    let to8 = |v: f32| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+    let mut base = decode(&mut zip, &maps.base, size).unwrap_or_else(|| image::RgbaImage::from_pixel(size, size, if maps.base_factor.is_some() { image::Rgba([255, 255, 255, 255]) } else { image::Rgba([200, 200, 200, 255]) }));
+    if maps.base_factor.is_some() && bf != [1.0; 4] {
+        // factor is linear: apply in linear space
+        let lin = |c: u8| (c as f32 / 255.0).powf(2.2);
+        base.pixels_mut().for_each(|p| {
+            for k in 0..3 {
+                p[k] = to8(lin(p[k]) * bf[k]);
+            }
+            p[3] = (p[3] as f32 * bf[3]) as u8;
+        });
+    }
+    let base = base;
+    let mut normal = decode(&mut zip, &maps.normal, size).unwrap_or_else(|| image::RgbaImage::from_pixel(size, size, image::Rgba([128, 128, 255, 255])));
     if a.normal_dx {
         normal.pixels_mut().for_each(|p| p[1] = 255 - p[1]);
     }
     let mut base = base;
-    if let Some(op) = decode(&mut zip, &a.maps.opacity, size) {
+    if let Some(op) = decode(&mut zip, &maps.opacity, size) {
         for (p, o) in base.pixels_mut().zip(op.pixels()) {
             p[3] = o[0];
         }
     }
-    let orm = match decode(&mut zip, &a.maps.orm, size) {
+    let rf = maps.rough_factor.unwrap_or(1.0);
+    let mf = maps.metal_factor.unwrap_or(1.0);
+    let orm = match decode(&mut zip, &maps.orm, size) {
         Some(mut o) => {
-            if a.maps.orm_is_ort {
+            if maps.orm_is_ort {
                 o.pixels_mut().for_each(|p| p[2] = 0);
+            }
+            if maps.orm_no_ao {
+                let ao = decode(&mut zip, &maps.ao, size);
+                for (x, y, p) in o.enumerate_pixels_mut() {
+                    p[0] = ao.as_ref().map_or(255, |i| i.get_pixel(x, y)[0]);
+                }
+            }
+            if maps.rough_factor.is_some() {
+                o.pixels_mut().for_each(|p| {
+                    p[1] = (p[1] as f32 * rf) as u8;
+                    p[2] = (p[2] as f32 * mf) as u8;
+                });
             }
             o
         }
+        None if maps.rough_factor.is_some() => {
+            let ao = decode(&mut zip, &maps.ao, size);
+            image::RgbaImage::from_fn(size, size, |x, y| image::Rgba([ao.as_ref().map_or(255, |i| i.get_pixel(x, y)[0]), (rf * 255.0) as u8, (mf * 255.0) as u8, 255]))
+        }
         None => {
-            let ao = decode(&mut zip, &a.maps.ao, size);
-            let rough = decode(&mut zip, &a.maps.roughness, size);
-            let gloss = if rough.is_none() { decode(&mut zip, &a.maps.gloss, size) } else { None };
+            let ao = decode(&mut zip, &maps.ao, size);
+            let rough = decode(&mut zip, &maps.roughness, size);
+            let gloss = if rough.is_none() { decode(&mut zip, &maps.gloss, size) } else { None };
             image::RgbaImage::from_fn(size, size, |x, y| {
                 let o = ao.as_ref().map_or(255, |i| i.get_pixel(x, y)[0]);
                 let r = rough.as_ref().map(|i| i.get_pixel(x, y)[0]).or_else(|| gloss.as_ref().map(|i| 255 - i.get_pixel(x, y)[0])).unwrap_or(200);

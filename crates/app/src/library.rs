@@ -46,11 +46,29 @@ impl Library {
 
     /// Loads (in parallel) every material not yet cached.
     pub fn preload(&mut self, gpu: &Gpu, r: &Renderer, ids: &[String]) {
-        let todo: Vec<Asset> = ids.iter().filter(|id| !self.materials.contains_key(*id)).filter_map(|id| self.catalog.get(id).cloned()).collect();
+        // keys are an asset id, or "id#n" for material n of a multi-material model
+        let todo: Vec<(String, Asset, Option<usize>)> = ids
+            .iter()
+            .filter(|id| !self.materials.contains_key(*id))
+            .filter_map(|key| {
+                let (id, n) = match key.split_once('#') {
+                    Some((id, n)) => (id, n.parse().ok()),
+                    None => (key.as_str(), None),
+                };
+                self.catalog.get(id).cloned().map(|a| (key.clone(), a, n))
+            })
+            .collect();
         let inbox = self.inbox.clone();
         let imgs: Vec<(String, Option<assets::MaterialImages>)> = std::thread::scope(|s| {
             // small indoor props don't need big textures (and GPU memory runs out fast with dozens of them)
-            let hs: Vec<_> = todo.iter().map(|a| { let inbox = &inbox; let size = if a.group == "interior" { TEX / 2 } else { TEX }; s.spawn(move || (a.id.clone(), assets::load_material(inbox, a, size).ok())) }).collect();
+            let hs: Vec<_> = todo
+                .iter()
+                .map(|(key, a, n)| {
+                    let inbox = &inbox;
+                    let size = if a.group == "interior" || a.group == "polyhaven" { TEX / 2 } else { TEX };
+                    s.spawn(move || (key.clone(), assets::load_material_n(inbox, a, *n, size).ok()))
+                })
+                .collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (id, img) in imgs {
@@ -141,6 +159,7 @@ pub fn placement_matrix(a: &Asset, part: usize, p: &Placement) -> glam::Mat4 {
 /// Groups placements into one instanced batch per asset part.
 pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[Placement]) -> Vec<Batch> {
     let mut groups: HashMap<(String, usize, u8), Vec<Instance>> = HashMap::new();
+    let mut part_mat: HashMap<(String, usize), String> = HashMap::new();
     let indoor = |p: &Placement| if p.indoor { [0.0, INDOOR_AMBIENT, INDOOR_LAMP, 0.0] } else { [0.0; 4] };
     let mut glass = vec![];
     for p in placements {
@@ -156,6 +175,8 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
         let m = placement_matrix(&a, p.part, p);
         let parts: Vec<usize> = if p.part == ALL_PARTS { (0..a.parts.len()).collect() } else { vec![p.part.min(a.parts.len() - 1)] };
         for part in parts {
+            let key = a.parts[part].material.filter(|_| !a.materials.is_empty()).map_or(a.id.clone(), |m| format!("{}#{m}", a.id));
+            part_mat.insert((p.asset.clone(), part), key);
             groups.entry((p.asset.clone(), part, p.lod.min(2))).or_default().push(Instance::new(m, p.tint, 1.0).with_params(indoor(p)));
         }
     }
@@ -165,11 +186,11 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
         let mat = lib.glass(gpu, r);
         out.extend(Batch::new(gpu, &[q(-0.5, 0.0), q(0.5, 0.0), q(0.5, 1.0), q(-0.5, 1.0)], &[0, 1, 2, 0, 2, 3], &glass, mat));
     }
-    let ids: Vec<String> = groups.keys().map(|k| k.0.clone()).collect();
+    let ids: Vec<String> = part_mat.values().cloned().collect();
     lib.preload(gpu, r, &ids);
     for ((id, part, lod), inst) in groups {
         let Some(mesh) = lib.mesh(&id) else { continue };
-        let mat = lib.material(gpu, r, &id);
+        let mat = lib.material(gpu, r, part_mat.get(&(id.clone(), part)).unwrap_or(&id));
         if let Some((v, lists)) = mesh.get(part) {
             out.extend(Batch::new(gpu, v, &lists[lod as usize], &inst, mat));
         }

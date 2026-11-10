@@ -12,7 +12,7 @@ const DESKS: &[&str] = &["ygthdf3", "ygthdja", "yfpocft", "yfcmaaw", "yfuodjt", 
 const OFFICE_CHAIRS: &[&str] = &["ye3kddb", "yfhpbgs", "yfikegk", "yfknefw", "yfrhfcw", "yfrhfgb"];
 const GUEST_CHAIRS: &[&str] = &["yfinchh", "yfjjfhh"];
 const CABINETS: &[&str] = &["yf1fafl", "yfoobem", "yfpodb2", "yfpocj3"];
-const FLOOR_PLANTS: &[&str] = &["sikoN", "siumT", "wfypejzha", "wfypfebha"];
+const FLOOR_PLANTS: &[&str] = &["ph_potted_plant_01", "ph_potted_plant_02", "siumT", "wfypfebha"];
 const DESK_CLUTTER: &[&str] = &["yfkmajq", "yfnjcbs", "yghlfey", "yghlabs", "uchmfdyia", "rhDrj"];
 const RADIATOR: &str = "yf2fcdo";
 const PINBOARD: &str = "ye4pcby";
@@ -20,9 +20,9 @@ const COUCHES: &[&str] = &["yfwecht", "yfweceo"];
 const SHELF: &str = "yf5eajt";
 const BOXES: &[&str] = &["tfpsec2pa", "uevjedeva"];
 const MEETING_TABLES: &[&str] = &["viejdi1", "vghpabdga"];
-const DINING_TABLES: &[&str] = &["vl0jbem", "vghpabdga"];
+const DINING_TABLES: &[&str] = &["ph_round_wooden_table_02", "vl0jbem", "ph_round_wooden_table_02"];
 const DINING_CHAIRS: &[&str] = &["ukikajmaw", "ukipagtbw", "uknjbb2bw", "uknkaffaw", "uknqadhbw", "ukpgfbebw"];
-const STOOLS: &[&str] = &["ukmjfdkbw", "vmgiffj"];
+const STOOLS: &[&str] = &["ph_bar_chair_round_01", "ph_metal_stool_02"];
 const PENDANT: &str = "vgzledvaw";
 
 /// Which way the furniture models face, as a turn from their +Z axis (degrees clockwise).
@@ -33,11 +33,17 @@ pub struct Furnisher<'a> {
     pub out: Vec<Placement>,
     seed: u64,
     n: u64,
+    /// Placements get interior lighting (false for the patio and street).
+    pub indoor: bool,
 }
 
 impl<'a> Furnisher<'a> {
     pub fn new(cat: &'a Catalog, seed: u64) -> Self {
-        Self { cat, out: vec![], seed, n: 0 }
+        Self { cat, out: vec![], seed, n: 0, indoor: true }
+    }
+
+    pub fn rand(&mut self) -> f32 {
+        self.rnd()
     }
 
     fn rnd(&mut self) -> f32 {
@@ -64,7 +70,7 @@ impl<'a> Furnisher<'a> {
         let [x, z] = g.world_xz(c);
         // the model's +Z turns to heading rot + 90, so to face `face` its X runs at heading(face) - 90
         let rot = g.heading(face) - 90.0 + FRONT;
-        self.out.push(Placement { asset: id.to_string(), part: ALL_PARTS, x, z, y: g.world_y(y), rot, scale: [1.0; 3], tint: [1.0; 3], lod: 0, indoor: true });
+        self.out.push(Placement { asset: id.to_string(), part: ALL_PARTS, x, z, y: g.world_y(y), rot, scale: [1.0; 3], tint: [1.0; 3], lod: 0, indoor: self.indoor });
         if solid {
             let f = face.normalize();
             let r = Vec2::new(-f.y, f.x);
@@ -73,6 +79,15 @@ impl<'a> Furnisher<'a> {
             g.block_box(glam::Vec3::new(o.x, 0.0, o.y), glam::Vec3::new(r.x, 0.0, r.y) * s[0], glam::Vec3::new(f.x, 0.0, f.y) * s[2], y, y + s[1]);
         }
         Some(s)
+    }
+
+    /// `put` with a uniform scale.
+    pub fn put_scaled(&mut self, g: &mut Geo, id: &str, c: Vec2, y: f32, face: Vec2, scale: f32, solid: bool) {
+        let n = self.out.len();
+        self.put(g, id, c, y, face, solid);
+        if let Some(p) = self.out.get_mut(n) {
+            p.scale = [scale; 3];
+        }
     }
 
     /// A model hung on a wall: `c` on the wall face, facing into the room, bottom at `y`.
@@ -287,13 +302,18 @@ fn restaurant(f: &mut Furnisher, g: &mut Geo, r: &Rect, y: f32, ceil: f32) {
             if p.x > r.x1 - 1.2 || p.x < r.x0 + 1.2 {
                 continue;
             }
-            f.put(g, table, p, y, Vec2::Y, true);
+            // tables sit a little askew; chairs are pulled out by different amounts and turned
+            let p = p + Vec2::new(f.rnd() - 0.5, f.rnd() - 0.5) * 0.5;
+            let along = Vec2::X.rotate(Vec2::from_angle((f.rnd() - 0.5) * 0.35));
+            let across = Vec2::new(-along.y, along.x);
+            f.put(g, table, p, y, across, true);
             for s in [-1.0f32, 1.0] {
                 for k in [-0.25f32, 0.25] {
-                    if f.rnd() < 0.9 {
-                        let jitter = Vec2::from_angle((f.rnd() - 0.5) * 0.3);
-                        let face = Vec2::new(0.0, -s).rotate(jitter);
-                        f.put(g, chair, p + Vec2::new(k * ts[0], s * (ts[2] / 2.0 + 0.32)), y, face, false);
+                    if f.rnd() < 0.85 {
+                        let pull = 0.25 + f.rnd() * f.rnd() * 0.45;
+                        let face = (-across * s).rotate(Vec2::from_angle((f.rnd() - 0.5) * 0.9));
+                        let pos = p + along * (k * ts[0] + (f.rnd() - 0.5) * 0.12) + across * s * (ts[2] / 2.0 + pull);
+                        f.put(g, chair, pos, y, face, false);
                     }
                 }
             }
@@ -319,6 +339,8 @@ pub fn bar(f: &mut Furnisher, g: &mut Geo, a: Vec2, b: Vec2, y: f32) {
     for i in 0..n {
         let p = a + dir * ((i as f32 + 0.5) * l / n as f32) - back * 0.45;
         let s = f.pick(STOOLS);
-        f.put(g, s, p, y, back, false);
+        let jitter = Vec2::new(f.rnd() - 0.5, f.rnd() - 0.5) * 0.18;
+        let face = back.rotate(Vec2::from_angle(f.rnd() * 6.28));
+        f.put(g, s, p + jitter, y, face, false);
     }
 }

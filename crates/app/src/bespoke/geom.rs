@@ -25,14 +25,21 @@ pub struct Key {
     tint: [u16; 3],
     /// Indoor surfaces get dimmer sky light and lamp light.
     pub indoor: bool,
+    /// Texture tile size override in centimetres (0 = the surface's own size).
+    pub tile_cm: u16,
 }
 
 impl Key {
     pub fn new(mat: Mat, tint: [f32; 3]) -> Self {
-        Self { mat, tint: tint.map(|t| (t * 1000.0).round() as u16), indoor: false }
+        Self { mat, tint: tint.map(|t| (t * 1000.0).round() as u16), indoor: false, tile_cm: 0 }
     }
     pub fn inside(mut self) -> Self {
         self.indoor = true;
+        self
+    }
+    /// Stretch the texture so one tile covers `m` metres.
+    pub fn tile(mut self, m: f32) -> Self {
+        self.tile_cm = (m * 100.0).round() as u16;
         self
     }
     pub fn tint(&self) -> [f32; 3] {
@@ -139,6 +146,28 @@ impl Geo {
         self.quad(k, mn, x, z); // bottom
     }
 
+    /// Axis-aligned timber: like `cuboid`, but every face's texture V axis runs along the member's length,
+    /// so wood grain follows the beam (texture grain is along V in the Megascans wood sets).
+    pub fn timber(&mut self, k: Key, a: Vec3, b: Vec3) {
+        let (mn, mx) = (a.min(b), a.max(b));
+        let s = mx - mn;
+        if s.min_element() <= 1e-5 {
+            return;
+        }
+        let long = if s.x >= s.y && s.x >= s.z { Vec3::X } else if s.y >= s.z { Vec3::Y } else { Vec3::Z };
+        let c = (mn + mx) * 0.5;
+        for n in [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z] {
+            // up = the long axis when it lies in this face, else any in-plane axis
+            let up = if n.dot(long).abs() < 0.5 { long } else if n.y.abs() < 0.5 { Vec3::Y } else { Vec3::Z };
+            let right = up.cross(n);
+            let (hr, hu) = ((right.abs() * s).max_element() * 0.5, (up.abs() * s).max_element() * 0.5);
+            let fc = c + n * ((n.abs() * s).max_element() * 0.5);
+            let o = fc - right * hr - up * hu;
+            let (r, u) = (right * 2.0 * hr, up * 2.0 * hu);
+            self.poly(k, &[o, o + r, o + r + u, o + u], right, up);
+        }
+    }
+
     /// Box oriented along a direction in the ground plane: `a`/`b` are the ends of its centreline at height `y0`.
     pub fn beam(&mut self, k: Key, a: Vec2, b: Vec2, half_w: f32, y0: f32, y1: f32) {
         let d = b - a;
@@ -239,6 +268,38 @@ impl Geo {
         let slope = (r + Vec3::Y * hl).normalize();
         self.poly(out, &[y(pa, ya), y(pb, yb), y(ib, yb), y(ia, ya)], slope, inward);
         self.block_box(pa, r * l, inward * t, y0, ya.max(yb));
+    }
+
+    /// Round tube from `a` to `b` (local), smooth-shaded: ducts, pipes, cables.
+    pub fn tube(&mut self, k: Key, a: Vec3, b: Vec3, r: f32, seg: usize) {
+        let d = b - a;
+        let l = d.length();
+        if l < 1e-4 {
+            return;
+        }
+        let ax = d / l;
+        let up = if ax.y.abs() > 0.9 { Vec3::X } else { Vec3::Y };
+        let u = ax.cross(up).normalize();
+        let v = ax.cross(u);
+        let circ = std::f32::consts::TAU * r;
+        let wt = self.wdir(ax);
+        let mut verts = vec![];
+        for i in 0..=seg {
+            let t = i as f32 / seg as f32 * std::f32::consts::TAU;
+            let n = u * t.cos() + v * t.sin();
+            let wn = self.wdir(n);
+            for (end, along) in [(a, 0.0), (b, l)] {
+                let w = self.world(end + n * r);
+                verts.push(TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [along, -(i as f32 / seg as f32) * circ], tan: [wt.x, wt.y, wt.z, 1.0] });
+            }
+        }
+        let g = self.groups.entry(k).or_default();
+        let base = g.0.len() as u32;
+        g.0.extend(verts);
+        for i in 0..seg as u32 {
+            let (p0, p1, q0, q1) = (base + 2 * i, base + 2 * i + 1, base + 2 * i + 2, base + 2 * i + 3);
+            g.1.extend([p0, q0, p1, p1, q0, q1]);
+        }
     }
 
     /// Collision prism for a box given by a corner, its length and depth vectors (local), and a height span.
