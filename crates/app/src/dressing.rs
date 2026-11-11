@@ -245,7 +245,7 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         for (k, a0) in [-13.4f64, -1.85, 11.8, 23.9].into_iter().enumerate() {
             let a = [66.0 + 0.70711 * a0 + 0.70711 * 9.5, 74.0 - 0.70711 * a0 + 0.70711 * 9.5];
             let rot = 45.0 + k as f64 * 70.0;
-            let (sx, sy, sz) = (2.2f64, 2.8f64, 3.9f64);
+            let (sx, sy, sz) = (2.2f64, 2.6f64, 3.9f64);
             let r = rot.to_radians();
             let (ux, uz, zx, zz) = (r.sin(), -r.cos(), r.cos(), r.sin());
             // the trunk's base is the model's origin

@@ -2980,7 +2980,7 @@ fn vines(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, drop: f32, see
     let r = (right - left) / len;
     let r3 = Vec3::new(r.x, 0.0, r.y);
     let r3 = if r3.cross(Vec3::Y).dot(Vec3::new(out.x, 0.0, out.y)) > 0.0 { r3 } else { -r3 };
-    let greens = if dry { [[0.2, 0.15, 0.07], [0.13, 0.12, 0.05], [0.09, 0.1, 0.04]] } else { [[0.035, 0.085, 0.03], [0.05, 0.11, 0.035], [0.028, 0.065, 0.028]] };
+    let greens = if dry { [[0.3, 0.24, 0.13], [0.2, 0.18, 0.09], [0.12, 0.13, 0.06]] } else { [[0.035, 0.085, 0.03], [0.05, 0.11, 0.035], [0.028, 0.065, 0.028]] };
     let n = (len / 0.055) as i32;
     for i in 0..n {
         let h = mix(seed, i as u64, 17);
@@ -2988,8 +2988,9 @@ fn vines(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, drop: f32, see
         // clumps: long in some stretches, short between
         let clump = 0.5 + 0.5 * ((i as f32 * 0.055 * 2.1 + (seed % 7) as f32).sin() * 0.5 + 0.5);
         let l = drop * clump * (0.35 + 0.65 * f * f);
-        let w = if dry { 0.02 + 0.02 * ((h >> 10) % 100) as f32 / 100.0 } else { 0.05 + 0.05 * ((h >> 10) % 100) as f32 / 100.0 };
-        if dry && (h >> 50) % 3 != 0 {
+        // dry mats hang as a dense curtain of thin strands, thinning toward the bottom
+        let w = if dry { 0.035 + 0.035 * ((h >> 10) % 100) as f32 / 100.0 } else { 0.05 + 0.05 * ((h >> 10) % 100) as f32 / 100.0 };
+        if dry && (h >> 50) % 3 == 0 {
             continue;
         }
         let p = left + r * (i as f32 * 0.055) + out * (0.05 + 0.12 * ((h >> 20) % 100) as f32 / 100.0);
@@ -3002,24 +3003,34 @@ fn vines(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, drop: f32, see
 fn bougainvillea(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, drop: f32, seed: u64, red: bool) {
     let len = (right - left).length();
     let r = (right - left) / len;
-    let n = (len / 0.018) as i32;
-    for i in 0..n {
-        let h = mix(seed, i as u64, 29);
-        let f = (h % 1000) as f32 / 1000.0;
-        let sz = 0.02 + 0.035 * ((h >> 10) % 100) as f32 / 100.0;
-        let c = left + r * (i as f32 * 0.018) + out * (0.3 * ((h >> 20) % 100) as f32 / 100.0 - 0.12);
-        // a low ragged mound on the edge, strands spilling over in places
-        let spill = ((i as f32 * 0.018 * 1.7 + seed as f32).sin() * 0.5 + 0.5).powi(3);
-        let yy = y + 0.3 * f * f - drop * spill * ((h >> 34) % 1000) as f32 / 1000.0;
-        let col = match ((h >> 44) % 6, red) {
-            (0 | 1, true) => [0.3, 0.02, 0.03],
-            (2, true) => [0.2, 0.03, 0.03],
-            (0, false) => [0.11, 0.09, 0.04],
-            (1, false) => [0.085, 0.1, 0.04],
-            (2 | 3, _) => [0.07, 0.085, 0.035],
-            _ => [0.04, 0.075, 0.03],
-        };
-        g.cuboid(Key::new(Mat::Plain(215), col), Vec3::new(c.x - sz, yy - sz, c.y - sz), Vec3::new(c.x + sz, yy + sz, c.y + sz));
+    let step = 0.018;
+    let n = (len / step) as i32;
+    // heavy runs (a long drop) are a mound two or three clumps deep, as on the terrace parapet in the photos
+    let layers = if drop > 0.8 { 3 } else { 1 };
+    for layer in 0..layers {
+        for i in 0..n {
+            let h = mix(seed + layer as u64 * 977, i as u64, 29);
+            let f = (h % 1000) as f32 / 1000.0;
+            let u = ((h >> 10) % 100) as f32 / 100.0;
+            let v = ((h >> 20) % 100) as f32 / 100.0;
+            // a low ragged line on the edge, strands spilling over in places; the mound's upper layers sit on top
+            let spill = ((i as f32 * step * 1.7 + seed as f32).sin() * 0.5 + 0.5).powi(3);
+            let (sz, c, yy) = if layer == 0 {
+                (0.02 + 0.035 * u, left + r * (i as f32 * step) + out * (0.3 * v - 0.12), y + 0.3 * f * f - drop * spill * ((h >> 34) % 1000) as f32 / 1000.0)
+            } else {
+                (0.05 + 0.07 * u, left + r * (i as f32 * step) + out * (0.45 * v - 0.3), y + 0.05 + (0.22 + 0.2 * layer as f32) * f - 0.35 * spill * v)
+            };
+            let col = match ((h >> 44) % 6, red, layer) {
+                (0..=3, true, 1..) => [0.3 + 0.1 * u, 0.02, 0.035],
+                (0 | 1, true, 0) => [0.3, 0.02, 0.03],
+                (2, true, 0) => [0.2, 0.03, 0.03],
+                (0, false, _) => [0.11, 0.09, 0.04],
+                (1, false, _) => [0.085, 0.1, 0.04],
+                (2 | 3, _, _) => [0.07, 0.085, 0.035],
+                _ => [0.04, 0.075, 0.03],
+            };
+            g.cuboid(Key::new(Mat::Plain(215), col), Vec3::new(c.x - sz, yy - sz, c.y - sz), Vec3::new(c.x + sz, yy + sz, c.y + sz));
+        }
     }
 }
 
@@ -3153,7 +3164,7 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
     let rows = [(18.6f32, 19.8f32), (13.1, 14.3)];
     // (the slot runs on to the right past the hall, open onto the podium's terrace)
     let s1 = 16.2f32;
-    let mut holes: Vec<[f32; 4]> = vec![[su(h0), su(h1), 0.0, hh], [su(s0), su(s1), sy0, sy1]];
+    let mut holes: Vec<[f32; 4]> = vec![[su(h0), su(h1), 0.0, hh], [su(s0), su(s1), sy0, sy1], [su(h1), su(s1), 7.7, sy0]];
     for &(w0, w1) in &bays {
         for &(y0, y1) in &rows {
             holes.push([su(w0), su(w1), y0, y1]);
@@ -3392,48 +3403,97 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
     }
     prism(g, m, &uv, pale, &[(a1, 3.5), (58.0, 3.5), (58.0, 20.0), (a1, 20.0)], 0.0, &flat(22.0), false);
 
-    // --- the stone podium right of the hall, 4.3 m in front of the face and 8.76 m high: a kiosk panel on its side,
-    // a sign and five poster panels on its front, red bougainvillea along its top, a terrace canopy, a hut, a screen
-    let (pf, ptop) = (fb - 4.3, 8.76f32);
-    prism(g, m, &uv, m.sandstone, &[(h1, pf), (56.0, pf), (56.0, fb), (h1, fb)], 0.0, &flat(ptop), false);
+    // --- the stone podium right of the hall (measured on a zoomed street photo, on its front plane 4.3 m out from
+    // the face): 8.76 m high; its left 11 m is a terrace sunk behind a parapet (floor at the slot's level) with a
+    // canopy, a gabled hut and a white counter; its front has poster panels, two small barred windows and a wide
+    // dark opening over a planter; bougainvillea along the top
+    let (pf, ptop, tf, te, pw) = (fb - 4.3, 8.76f32, 7.7f32, 19.0f32, 0.4f32);
+    let pu = |a: f32| a - h1;
+    let (open, win1, win2) = ([pu(19.1), pu(23.9), 4.92, 6.06], [pu(11.8), pu(12.9), 4.63, 5.12], [pu(15.8), pu(17.0), 4.63, 5.12]);
+    let (fl, fr) = (uv(h1, pf), uv(56.0, pf));
+    wall_holes(g, m.sandstone, fl, fr, 0.0, ptop, &[open, win1, win2]);
+    wall_holes(g, m.sandstone, uv(h1, fb), uv(h1, pf), 0.0, ptop, &[]);
+    wall_holes(g, m.sandstone, uv(56.0, pf), uv(56.0, fb), 0.0, ptop, &[]);
+    // the opening: a deep dark recess under a pale lintel; the windows: shallow, barred
+    reveal(g, m.sandstone, fl, fr, open, 1.6);
+    g.quad(dark, v3(uv(19.1, pf + 1.6), 4.92), t3 * 4.8, Vec3::Y * 1.14);
+    g.quad(pale, v3(uv(19.1, pf) + out * 0.02, 6.06), t3 * 4.8, Vec3::Y * 0.22);
+    for w in [win1, win2] {
+        reveal(g, m.sandstone, fl, fr, w, 0.3);
+        let (wa, wb) = (w[0] + h1, w[1] + h1);
+        g.quad(pane, v3(uv(wa, pf + 0.3), w[2]), t3 * (wb - wa), Vec3::Y * (w[3] - w[2]));
+        let bars = ((wb - wa) / 0.14) as i32;
+        for k in 1..bars {
+            let q = uv(wa + (wb - wa) * k as f32 / bars as f32, pf + 0.12);
+            g.member(frame, v3(q, w[2]), v3(q, w[3]), 0.02, 0.02, o3);
+        }
+    }
+    // the terrace: floor, parapet (inner faces and tops), the raised part's end and top
+    poly_up(g, m.concrete, &[v3(uv(h1 + pw, pf + pw), tf), v3(uv(te, pf + pw), tf), v3(uv(te, fb), tf), v3(uv(h1 + pw, fb), tf)]);
+    wall_holes(g, m.sandstone, uv(te, pf + pw), uv(h1 + pw, pf + pw), tf, ptop, &[]);
+    wall_holes(g, m.sandstone, uv(h1 + pw, pf + pw), uv(h1 + pw, fb), tf, ptop, &[]);
+    wall_holes(g, m.sandstone, uv(te, fb), uv(te, pf + pw), tf, ptop, &[]);
+    poly_up(g, stone_flat(), &[v3(uv(h1, pf), ptop), v3(uv(te, pf), ptop), v3(uv(te, pf + pw), ptop), v3(uv(h1, pf + pw), ptop)]);
+    poly_up(g, stone_flat(), &[v3(uv(h1, pf + pw), ptop), v3(uv(h1 + pw, pf + pw), ptop), v3(uv(h1 + pw, fb), ptop), v3(uv(h1, fb), ptop)]);
+    poly_up(g, m.concrete, &[v3(uv(te, pf), ptop), v3(uv(56.0, pf), ptop), v3(uv(56.0, fb), ptop), v3(uv(te, fb), ptop)]);
+    for (r, y0, y1) in [
+        ([(h1, pf), (56.0, pf), (56.0, fb), (h1, fb)], 0.0, tf),
+        ([(te, pf), (56.0, pf), (56.0, fb), (te, fb)], tf, ptop),
+        ([(h1, pf), (te, pf), (te, pf + pw), (h1, pf + pw)], tf, ptop),
+        ([(h1, pf + pw), (h1 + pw, pf + pw), (h1 + pw, fb), (h1, fb)], tf, ptop),
+    ] {
+        g.block_ring(&r.map(|(a, b)| uv(a, b)), y0, y1);
+    }
+    // on the front: a small white sign and five poster panels on a ledge
     g.quad(Key::new(Mat::Plain(150), [0.7, 0.7, 0.68]), v3(uv(8.47, pf) + out * 0.03, 1.19), t3 * 0.58, Vec3::Y * 0.75);
     for k in 0..5 {
         let a = 9.32 + k as f32 * 1.8;
         let q = uv(a, pf) + out * 0.03;
-        g.quad(Key::new(Mat::Plain(150), [0.035, 0.035, 0.035]), v3(q, 1.01), t3 * 1.63, Vec3::Y * 1.52);
+        g.quad(Key::new(Mat::Plain(150), [0.035, 0.035, 0.035]), v3(q, 1.01), t3 * 1.63, Vec3::Y * 1.5);
         let pic = if k == 2 { [0.68, 0.63, 0.5] } else { [0.36, 0.29, 0.21] };
-        g.quad(Key::new(Mat::Plain(170), pic), v3(q + t * 0.1 + out * 0.01, 1.11), t3 * 1.43, Vec3::Y * 1.32);
+        g.quad(Key::new(Mat::Plain(170), pic), v3(q + t * 0.1 + out * 0.01, 1.11), t3 * 1.43, Vec3::Y * 1.3);
     }
     g.member(m.concrete, v3(uv(9.2, pf) + out * 0.12, 0.96), v3(uv(18.3, pf) + out * 0.12, 0.96), 0.24, 0.1, Vec3::Y);
-    vines(g, uv(h1 + 0.1, pf), uv(14.0, pf), out, ptop, 2.3, 21, true);
+    // planting: heavy red bougainvillea with dry strands over the terrace's parapet, a lighter line beyond, and
+    // the planter under the opening
+    vines(g, uv(h1 + 0.1, pf), uv(13.2, pf), out, ptop, 2.3, 21, true);
     vines(g, uv(h1, pf + 0.1), uv(h1, fb - 0.1), -t, ptop, 2.0, 22, true);
-    bougainvillea(g, uv(h1 + 0.1, pf), uv(21.0, pf), out, ptop, 1.1, 9, true);
-    bougainvillea(g, uv(24.0, pf), uv(40.0, pf), out, ptop, 0.8, 10, true);
+    bougainvillea(g, uv(h1 + 0.1, pf), uv(13.4, pf), out, ptop, 1.1, 9, true);
     bougainvillea(g, uv(h1, pf + 0.2), uv(h1, fb - 0.2), -t, ptop, 0.9, 11, true);
+    bougainvillea(g, uv(14.5, pf), uv(40.0, pf), out, ptop, 0.6, 10, true);
+    bougainvillea(g, uv(19.3, pf), uv(23.7, pf), out, 4.92, 0.7, 12, true);
+    // the canopy over the terrace's left part: a thin dark roof from the parapet back to the face, on thin posts
     let canopy = Key::new(Mat::Plain(225), [0.035, 0.035, 0.035]);
-    g.member(canopy, v3(uv(8.4, pf + 0.95), 10.0), v3(uv(14.5, pf + 0.95), 10.0), 1.6, 0.14, Vec3::Y);
-    for a in [8.5f32, 11.4, 14.4] {
-        g.member(canopy, v3(uv(a, pf + 0.3), ptop - 1.0), v3(uv(a, pf + 0.3), 9.85), 0.08, 0.08, o3);
+    let (c0, c1, cy) = (8.2f32, 13.1f32, 9.62f32);
+    g.member(canopy, v3(uv(c0, (pf + 0.2 + fb) / 2.0), cy), v3(uv(c1, (pf + 0.2 + fb) / 2.0), cy), fb - pf - 0.2, 0.3, Vec3::Y);
+    g.member(Key::new(Mat::Plain(200), [0.1, 0.1, 0.1]), v3(uv(c0, pf + 0.2), cy + 0.12), v3(uv(c1, pf + 0.2), cy + 0.12), 0.05, 0.08, Vec3::Y);
+    for a in [c0 + 0.1, (c0 + c1) / 2.0, c1 - 0.1] {
+        g.member(canopy, v3(uv(a, pf + 0.3), tf), v3(uv(a, pf + 0.3), cy - 0.15), 0.07, 0.07, o3);
     }
-    // the hut beside it: white walls, a dark gabled roof
+    // the hut beside it: a white kiosk under a dark gabled roof, gable to the street
     {
-        let (x0, x1, z0, z1) = (14.7f32, 15.9f32, pf + 0.5, pf + 1.9);
-        prism(g, m, &uv, m.white, &[(x0, z0), (x1, z0), (x1, z1), (x0, z1)], ptop - 1.0, &flat(10.0), false);
-        let (e0, e1, rg) = (10.0f32, 10.7f32, (x0 + x1) / 2.0);
-        for (xa, xb) in [(x0 - 0.15, rg), (x1 + 0.15, rg)] {
-            let quad = [v3(uv(xa, z0 - 0.15), e0), v3(uv(xb, z0 - 0.15), e1), v3(uv(xb, z1 + 0.15), e1), v3(uv(xa, z1 + 0.15), e0)];
+        let (x0, x1, z0, z1) = (13.1f32, 14.7f32, pf + 0.7, pf + 2.3);
+        let (eave, apex, rg) = (9.7f32, 10.3f32, (x0 + x1) / 2.0);
+        prism(g, m, &uv, m.white, &[(x0 + 0.4, z0 + 0.1), (x1 - 0.4, z0 + 0.1), (x1 - 0.4, z1), (x0 + 0.4, z1)], tf, &flat(eave), false);
+        for (xa, xb) in [(x0, rg), (x1, rg)] {
+            let quad = [v3(uv(xa, z0 - 0.1), eave), v3(uv(xb, z0 - 0.1), apex), v3(uv(xb, z1 + 0.1), apex), v3(uv(xa, z1 + 0.1), eave)];
             let nn = (quad[1] - quad[0]).cross(quad[2] - quad[0]);
             let quad = if nn.y < 0.0 { [quad[0], quad[3], quad[2], quad[1]] } else { quad };
             let nn = (quad[1] - quad[0]).cross(quad[2] - quad[0]).normalize();
             let r = Vec3::Y.cross(nn).normalize();
             g.poly(canopy, &quad, r, nn.cross(r));
+            // its underside, so the roof is not see-through from the street
+            g.poly(canopy, &[quad[0], quad[3], quad[2], quad[1]], -r, nn.cross(r));
         }
-        g.poly(m.white, &[v3(uv(x0, z0), 10.0), v3(uv(x1, z0), 10.0), v3(uv(rg, z0), e1)], t3, Vec3::Y);
+        g.poly(canopy, &[v3(uv(x0, z0 - 0.1), eave), v3(uv(x1, z0 - 0.1), eave), v3(uv(rg, z0 - 0.1), apex)], t3, Vec3::Y);
     }
-    // the white screen along the terrace edge: a panel with four dark openings
-    g.quad(m.white, v3(uv(16.3, pf + 0.15), ptop + 0.75), t3 * 4.4, Vec3::Y * 0.6);
-    for k in 0..4 {
-        g.quad(dark, v3(uv(16.55 + k as f32 * 1.07, pf + 0.15) + out * 0.02, ptop + 0.87), t3 * 0.82, Vec3::Y * 0.36);
+    // the white counter along the parapet: a long box with four dark openings
+    {
+        let (x0, x1, z0) = (14.76f32, 18.13f32, pf + 1.0);
+        prism(g, m, &uv, m.white, &[(x0, z0), (x1, z0), (x1, z0 + 0.7), (x0, z0 + 0.7)], tf, &flat(9.45), false);
+        for k in 0..4 {
+            g.quad(dark, v3(uv(x0 + 0.15 + k as f32 * 0.83, z0) + out * 0.02, 9.02), t3 * 0.63, Vec3::Y * 0.3);
+        }
     }
     // cream concrete bollards 7 m out from the face, 1.8 m apart (close street photo)
     let bollard = Key::new(Mat::Plain(175), [0.62, 0.57, 0.47]);
