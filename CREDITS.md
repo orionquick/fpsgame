@@ -79,3 +79,4 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Industiral Wooden Table with Metal Legs" by uniboxtrade, CC Attribution, https://sketchfab.com/3d-models/8caa3c4cecd24c0a80f467110d7e0dcb
 - "1920s Gooseneck Desk Lamps Type A" by Mad_Lobster_Workshop, CC Attribution, https://sketchfab.com/3d-models/aa7b0e009926415e91b0323612298b30
 - "Low poly stadium/sports arena seats" by anDDDres, CC Attribution, https://sketchfab.com/3d-models/6bbe4c85d2a4489dbe5918831be5d886
+- "Sandstone Blocks 08" by Rob Tuytel, Poly Haven, CC0 (base of the ballpark ashlar cladding, retinted per panel), https://polyhaven.com/a/sandstone_blocks_08

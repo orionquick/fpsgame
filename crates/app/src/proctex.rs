@@ -206,7 +206,149 @@ fn flex_duct() -> std::io::Result<()> {
     write_surface("procedural", "pt_flex_duct", &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nm)), ("Roughness", png_gray(&rough))], (0.5, 0.5), "fps proctex")
 }
 
+/// Sawn sandstone cladding as on the ballpark's towers: Poly Haven's "Sandstone Blocks 08" scan (CC0, Rob Tuytel;
+/// sawn panels in 0.6 m courses, 3 m repeat) with its own grain, normals and roughness, each panel retinted to one of
+/// the tones measured off the reference photos (gold, rose, ochre, buff) as the real cladding varies panel to panel.
+/// The panels are found from the scan's height map (joints are its low lines).
+fn ashlar() -> std::io::Result<()> {
+    let dir = crate::root().join("data/megascans_inbox/polyhaven_src/sandstone_blocks_08");
+    let load = |m: &str| image::open(dir.join(format!("sandstone_blocks_08_{m}_2k.jpg"))).map_err(|e| std::io::Error::other(e.to_string()));
+    let diff = load("diff")?.to_rgb8();
+    let disp = load("disp")?.to_luma8();
+    let nor = load("nor_gl")?.to_rgb8();
+    let rough = load("rough")?.to_luma8();
+    let (w, h) = (diff.width() as usize, diff.height() as usize);
+    // joints: pixels well below the local maximum (panels sit at different heights, so no global threshold works)
+    let d: Vec<f32> = disp.pixels().map(|p| p[0] as f32).collect();
+    let r = 5isize;
+    let maxf = |src: &[f32], horiz: bool| -> Vec<f32> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as isize, (i / w) as isize);
+                (-r..=r)
+                    .map(|k| {
+                        let (nx, ny) = if horiz { ((x + k).rem_euclid(w as isize), y) } else { (x, (y + k).rem_euclid(h as isize)) };
+                        src[ny as usize * w + nx as usize]
+                    })
+                    .fold(f32::MIN, f32::max)
+            })
+            .collect()
+    };
+    let local_max = maxf(&maxf(&d, true), false);
+    // ...or where the scan's normals tilt hard (the joints' edges); then grow by a pixel to close hairline gaps
+    let tilt = |i: usize| {
+        let p = nor.get_pixel((i % w) as u32, (i / w) as u32);
+        let (nx, ny) = (p[0] as f32 / 127.5 - 1.0, p[1] as f32 / 127.5 - 1.0);
+        (nx * nx + ny * ny).sqrt()
+    };
+    let raw: Vec<bool> = (0..w * h).map(|i| local_max[i] - d[i] > 5.0 || tilt(i) > 0.3).collect();
+    let joint: Vec<bool> = (0..w * h)
+        .map(|i| {
+            let (x, y) = ((i % w) as isize, (i / w) as isize);
+            (-1..=1).any(|dy| (-1..=1).any(|dx| raw[((y + dy).rem_euclid(h as isize) as usize) * w + (x + dx).rem_euclid(w as isize) as usize]))
+        })
+        .collect();
+    if std::env::var("FPS_ASHLAR_MASK").is_ok() {
+        let m = image::GrayImage::from_fn(w as u32, h as u32, |x, y| image::Luma([if joint[y as usize * w + x as usize] { 0 } else { 255 }]));
+        m.save(crate::root().join("out/ashlar_mask.png")).ok();
+    }
+    // the panels: courses between the horizontal joint lines, then panels between the vertical joints in each
+    // course (a joint column is mostly joint pixels over the course's height)
+    let row_frac: Vec<f32> = (0..h).map(|y| (0..w).filter(|&x| joint[y * w + x]).count() as f32 / w as f32).collect();
+    let bands = |frac: &[f32], thr: f32| -> Vec<(usize, usize)> {
+        // runs of non-joint positions, wrapping (a run crossing the edge is reported with end > len)
+        let n = frac.len();
+        let start = (0..n).find(|&i| frac[i] > thr).unwrap_or(0);
+        let mut out = vec![];
+        let mut run: Option<usize> = None;
+        for k in 0..=n {
+            let i = (start + k) % n;
+            let j = frac[i] > thr || k == n;
+            match (run, j) {
+                (None, false) => run = Some(start + k),
+                (Some(r), true) => {
+                    out.push((r, start + k));
+                    run = None;
+                }
+                _ => {}
+            }
+        }
+        out.into_iter().filter(|(a, b)| b - a > 8).collect()
+    };
+    let courses = bands(&row_frac, 0.45);
+    let mut label = vec![u32::MAX; w * h];
+    let mut sizes: Vec<usize> = vec![];
+    for &(y0, y1) in &courses {
+        let inner = (y0 + 4, y1.saturating_sub(4).max(y0 + 5));
+        let col_frac: Vec<f32> = (0..w).map(|x| (inner.0..inner.1).filter(|&y| joint[(y % h) * w + x]).count() as f32 / (inner.1 - inner.0) as f32).collect();
+        for (x0, x1) in bands(&col_frac, 0.55) {
+            let id = sizes.len() as u32;
+            let mut n = 0;
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    let i = (yy % h) * w + (xx % w);
+                    if !joint[i] {
+                        label[i] = id;
+                        n += 1;
+                    }
+                }
+            }
+            sizes.push(n);
+        }
+    }
+    // source mean colour (linear), and the target tones (sRGB, from the photos)
+    let lin = |c: u8| (c as f32 / 255.0).powf(2.2);
+    let mut mean = [0f32; 3];
+    for p in diff.pixels() {
+        for c in 0..3 {
+            mean[c] += lin(p[c]);
+        }
+    }
+    mean = mean.map(|m| m / (w * h) as f32);
+    let pal: [[f32; 3]; 5] = [[196.0, 152.0, 100.0], [190.0, 136.0, 104.0], [182.0, 140.0, 90.0], [206.0, 176.0, 132.0], [200.0, 150.0, 108.0]];
+    let gains: Vec<[f32; 3]> = (0..sizes.len())
+        .map(|k| {
+            if sizes[k] < 3000 {
+                return [1.0; 3];
+            }
+            let t = hash(k as i64, 3, 91);
+            let (a, b) = (pal[(t * 5.0) as usize % 5], pal[(hash(k as i64, 4, 92) * 5.0) as usize % 5]);
+            let mix = hash(k as i64, 5, 93) * 0.4;
+            let bright = 0.93 + hash(k as i64, 6, 94) * 0.14;
+            let mut g = [0f32; 3];
+            for c in 0..3 {
+                let target = (a[c] * (1.0 - mix) + b[c] * mix) / 255.0;
+                g[c] = target.powf(2.2) / mean[c] * bright;
+            }
+            // the photos read softer than the raw tones: pull a third of the way to a grey gain
+            let l = (g[0] + g[1] + g[2]) / 3.0;
+            g.map(|v| v + (l - v) * 0.35)
+        })
+        .collect();
+    // joints and tiny chips take the average gain so they sit between their neighbours
+    let avg: [f32; 3] = {
+        let mut s = [0f32; 3];
+        for g in &gains {
+            for c in 0..3 {
+                s[c] += g[c];
+            }
+        }
+        s.map(|v| v / gains.len().max(1) as f32)
+    };
+    let to8 = |v: f32| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+    let base = image::RgbImage::from_fn(w as u32, h as u32, |x, y| {
+        let i = y as usize * w + x as usize;
+        let g = if label[i] == u32::MAX { avg } else { gains[label[i] as usize] };
+        let p = diff.get_pixel(x, y);
+        image::Rgb([to8(lin(p[0]) * g[0]), to8(lin(p[1]) * g[1]), to8(lin(p[2]) * g[2])])
+    });
+    let rough_g = image::GrayImage::from_fn(w as u32, h as u32, |x, y| image::Luma([rough.get_pixel(x, y)[0]]));
+    println!("ashlar: {} panels from the scan", sizes.iter().filter(|&&n| n >= 3000).count());
+    write_surface("procedural", "pt_ashlar_sandstone", &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nor)), ("Roughness", png_gray(&rough_g))], (3.0, 3.0), "Poly Haven sandstone_blocks_08 (CC0), retinted by fps proctex")
+}
+
 pub fn all() -> std::io::Result<()> {
+    ashlar()?;
     flex_duct()?;
     subway()?;
     cowhide()?;
