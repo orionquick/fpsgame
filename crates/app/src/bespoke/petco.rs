@@ -750,7 +750,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let up_top = UP_Y + u_rows as f32 * UP_RISE;
         // soffit under the upper deck (from the facia's foot back and up, parallel to the rake)
         if home_gate(a.bearing) && home_gate(b.bearing) {
-            let under_rows = Key::new(Mat::Surface("sg0tbcya"), [0.78, 0.78, 0.77]).tile(2.0);
+            let under_rows = Key::new(Mat::Plain(215), [0.42, 0.43, 0.44]);
             // behind the open frame the precast rows show from below as a staircase: each row's underside, and a
             // step up at its outer edge to the next
             for j in 0..u_rows {
@@ -2273,22 +2273,33 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
     // truss bands (bottom chord, top chord, diagonal pattern: true = six panels leaning in with verticals, false = a
     // twelve-panel zig-zag) and V levels (foot, head, reach of each arm as a fraction of the bay)
     // (bottom chord, top chord, panels whose diagonal is a big arm running through the band)
-    let bands: [(f32, f32, &[usize]); 4] = [(13.0, d1 - 1.35, &[2, 3]), (18.9, GZ_UPPER_CONCOURSE - 1.4, &[1, 4]), (31.5, 33.4, &[]), (top_row + 1.15, roof, &[])];
+    // (bottom chord, top chord, panels whose diagonal rises from a big arm's head: a heavier member, as in the photos)
+    let bands: [(f32, f32, &[usize]); 4] = [(13.0, d1 - 1.35, &[2, 3]), (18.9, GZ_UPPER_CONCOURSE - 1.4, &[1, 4]), (31.5, 33.4, &[2, 3]), (top_row + 1.15, roof, &[])];
     // the big arms, left half of the bay (mirrored for the right): (fraction, height) to (fraction, height), section.
     // From the photos: at the bottom, arms from near the bay's middle under the terrace deck down through the truss
     // to the street-level deck's edge by the columns, crossed by legs from each column's foot of the truss; under
     // the upper concourse, arms from the terrace deck by the column up through the truss to the fascia; the tall
     // bay's from the upper concourse by the column to the letter truss. Where an arm crosses a truss it is that
     // panel's diagonal.
-    let (mid_lo, mid_hi) = (18.9, GZ_UPPER_CONCOURSE - 1.4);
-    let mid_foot = mid_lo - (mid_hi - mid_lo);
-    let _ = mid_foot;
+    let mid_lo = 18.9;
     // each reaches the floor of the level below; steep (about 60 degrees), not 45
+    // every arm hangs from the bottom chord of the truss above its level down to that level's floor; the trusses
+    // keep their own diagonals
+    // at the bottom a leg from each column's top corner runs down to meet the big arm (a Y, not a cross)
+    let big = ((2.0f32 / 6.0, 13.0f32), (0.04f32, CONCOURSE_Y));
+    let leg_dir = (0.36f32, CONCOURSE_Y - 13.0);
+    let leg_end = {
+        // solve (0, 13) + t * leg_dir = big.0 + s * (big.1 - big.0)
+        let (ax, ay) = (big.1 .0 - big.0 .0, big.1 .1 - big.0 .1);
+        let den = leg_dir.0 * ay - leg_dir.1 * ax;
+        let t = ((big.0 .0) * ay - (big.0 .1 - 13.0) * ax) / den;
+        (leg_dir.0 * t, 13.0 + leg_dir.1 * t)
+    };
     let arms = [
-        (0.42, d1 - 1.35, 0.04, CONCOURSE_Y, 0.6),
-        (0.0, 13.0, 0.36, CONCOURSE_Y, 0.42),
-        (0.07, d1, 0.29, mid_hi, 0.5),
-        (0.05, GZ_UPPER_CONCOURSE, 0.33, 31.5, 0.55),
+        (big.0 .0, big.0 .1, big.1 .0, big.1 .1, 0.6),
+        (0.0, 13.0, leg_end.0, leg_end.1, 0.42),
+        (1.0 / 6.0, mid_lo, 0.06, d1, 0.5),
+        (2.0 / 6.0, 31.5, 0.05, GZ_UPPER_CONCOURSE, 0.55),
     ];
     for w in cols.windows(2) {
         let ((pa, na), (pb, nb)) = (place(w[0]), place(w[1]));
@@ -2335,13 +2346,11 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
                 if i > 0 {
                     member(g, at(f0), y0, at(f0), y1, 0.26, 0.26);
                 }
-                if arm_panels.contains(&i) {
-                    continue;
-                }
+                let sz = if arm_panels.contains(&i) { 0.46 } else { 0.26 };
                 if i < 3 {
-                    member(g, at(f0), y0, at(f1), y1, 0.26, 0.26);
+                    member(g, at(f0), y0, at(f1), y1, sz, sz);
                 } else {
-                    member(g, at(f0), y1, at(f1), y0, 0.26, 0.26);
+                    member(g, at(f0), y1, at(f1), y0, sz, sz);
                 }
             }
         }
@@ -2421,21 +2430,22 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
             let plane = |r: f32| under_rows(r) - 0.22 - depth;
             let rake_dir = (Vec3::new(-nrm.x, 0.0, -nrm.y) + Vec3::new(0.0, -UP_RISE / UP_PITCH, 0.0)).normalize();
             let pn = side.cross(rake_dir).normalize();
-            let reach = 0.35;
-            let r_top = (top_row - 0.22 - depth - 31.5) * UP_PITCH / UP_RISE;
-            let drop = reach * (pb - pa).length();
-            let r_apex = r_top + drop * UP_PITCH / UP_RISE;
-            for (f0, r0, f1, r1, sz) in [(0.0, r_apex, 1.0, r_apex, 0.42), (0.5 - reach, r_top, 0.5, r_apex, 0.4), (0.5 + reach, r_top, 0.5, r_apex, 0.4)] {
+            // arms leave each raker's bottom chord at the column and fall at 45 degrees (seen from the street) to the
+            // gusset at mid-bay, just short of the rakers' ends, where the horizontal joins the two rakers
+            let drop = 0.5 * (pb - pa).length();
+            let r_apex = r_end - 0.5;
+            let r_top = (r_apex - drop * UP_PITCH / UP_RISE).max(0.3);
+            for (f0, r0, f1, r1, sz) in [(0.0, r_apex, 1.0, r_apex, 0.42), (0.0, r_top, 0.5, r_apex, 0.4), (1.0, r_top, 0.5, r_apex, 0.4)] {
                 let (p, q) = (pt(f0, r0), pt(f1, r1));
                 if blocked(p) || blocked(q) {
                     continue;
                 }
-                g.member(k, v(p, plane(r0) - 0.2), v(q, plane(r1) - 0.2), sz, sz * 0.9, pn);
+                g.member(k, v(p, plane(r0)), v(q, plane(r1)), sz, sz * 0.9, pn);
             }
             let c = pt(0.5, r_apex);
             if !blocked(c) {
                 let up_rake = -rake_dir;
-                let cp = v(c, plane(r_apex) - 0.2);
+                let cp = v(c, plane(r_apex));
                 g.member(k, cp - up_rake * 0.1, cp + up_rake * 0.9, 1.0, 0.5, pn);
             }
         }
