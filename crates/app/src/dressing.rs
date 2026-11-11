@@ -210,7 +210,7 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
             let hs = hash(i as u64, 977);
             let hgt = c.tree_h.get(i).copied().unwrap_or(8.0).clamp(6.5, 9.5);
             let sc = (hgt / extent(j)[1] as f64) as f32;
-            out.push(Placement { asset: j.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: (hs % 360) as f64, scale: [sc * 1.25, sc * 0.9, sc * 1.25], tint: [1.35, 1.6, 1.0], lod: 0, indoor: false });
+            out.push(Placement { asset: j.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: (hs % 360) as f64, scale: [sc * 1.25, sc * 0.9, sc * 1.25], tint: [2.2, 2.6, 1.3], lod: 0, indoor: false });
             continue;
         }
         let h = c.tree_h.get(i).copied().unwrap_or(8.0).clamp(4.0, 22.0);
