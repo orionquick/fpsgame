@@ -186,7 +186,33 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
     }
     let near = [area[0] - 120.0, area[1] - 120.0, area[2] + 120.0, area[3] + 120.0];
     let mut out = vec![];
+    // Hand-built ballpark buildings: the lidar tree finder took their awnings, planters and roof gardens for tree
+    // tops. (origin x, z; unit u; u0, u1, v0, v1) boxes in each building's own frame; v is u turned 90 degrees.
+    let solids: [([f64; 2], [f64; 2], [f64; 4]); 2] = [
+        ([66.0, 74.0], [0.70711, -0.70711], [-15.0, 60.0, -22.0, 4.5]),
+        ([-95.0, 48.0], [0.84805, 0.52992], [2.0, 110.0, -20.0, 26.0]),
+    ];
+    // the sidewalk in front of the east building has broadleaf street trees, not palms (street photos)
+    let jacaranda = lib.catalog.get("ph_jacaranda_tree").filter(|a| !a.parts.is_empty());
     for (i, p) in c.trees.iter().enumerate() {
+        let local = |s: &([f64; 2], [f64; 2], [f64; 4])| {
+            let (dx, dz) = (p[0] - s.0[0], p[1] - s.0[1]);
+            (dx * s.1[0] + dz * s.1[1], -dx * s.1[1] + dz * s.1[0])
+        };
+        if solids.iter().any(|s| {
+            let (u, v) = local(s);
+            u > s.2[0] && u < s.2[1] && v > s.2[2] && v < s.2[3]
+        }) {
+            continue;
+        }
+        let (eu, ev) = local(&solids[0]);
+        if let (Some(j), true) = (jacaranda, eu > -16.0 && eu < 45.0 && ev >= 4.5 && ev < 15.0) {
+            let hs = hash(i as u64, 977);
+            let hgt = c.tree_h.get(i).copied().unwrap_or(8.0).clamp(6.5, 9.5);
+            let sc = (hgt / extent(j)[1] as f64) as f32;
+            out.push(Placement { asset: j.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: (hs % 360) as f64, scale: [sc * 1.25, sc * 0.9, sc * 1.25], tint: [1.35, 1.6, 1.0], lod: 0, indoor: false });
+            continue;
+        }
         let h = c.tree_h.get(i).copied().unwrap_or(8.0).clamp(4.0, 22.0);
         let hs = hash(i as u64, 4242);
         let y0 = c.terrain.at(p[0], p[1]);

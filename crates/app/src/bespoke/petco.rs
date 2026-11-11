@@ -2128,13 +2128,19 @@ fn mix(a: u64, b: u64, c: u64) -> u64 {
     x ^ (x >> 29)
 }
 
-/// A wall face. Sandstone is clad panel by panel instead of tiling one texture: 0.6 m courses on a grid shared by
-/// every wall, running-bond joints jittered course by course, each panel showing one whole scanned stone (its own
-/// grain, chips, normals and roughness; sometimes turned over) with its own tone and roughness. Anything else, or
-/// a face that is not upright, is a plain polygon.
+/// Course heights of the cladding, bottom up, repeating: measured on a rectified street photo of the east
+/// building's face (joints at 0.30, 0.45-0.47 and 0.57-0.60 m spacings in an irregular sequence).
+const COURSES: [f32; 12] = [0.45, 0.6, 0.3, 0.45, 0.3, 0.6, 0.6, 0.3, 0.6, 0.3, 0.45, 0.3];
+
+/// The cladding's overall colour (linear albedo), set against sunlit and shaded photos.
+const STONE_TONE: [f32; 3] = [0.9, 0.68, 0.47];
+
+/// A wall face. Sandstone is laid stone by stone as on the building: uneven courses on a grid shared by every wall,
+/// stones of varying length (some tall ones split into two), each a different piece of a scanned cleft sandstone
+/// face (its own grain, normals and roughness; sometimes turned over) with its own tone, set in recessed dark
+/// joints. Anything else, or a face that is not upright, is a plain polygon.
 fn wall_poly(g: &mut Geo, k: Key, pts: &[Vec3], right: Vec3, up: Vec3) {
-    let win = ashlar_windows();
-    if k != mats().sandstone || win.is_empty() || up.y < 0.99 || right.y.abs() > 0.01 {
+    if k != mats().sandstone || up.y < 0.99 || right.y.abs() > 0.01 {
         g.poly(k, pts, right, up);
         return;
     }
@@ -2146,95 +2152,108 @@ fn wall_poly(g: &mut Geo, k: Key, pts: &[Vec3], right: Vec3, up: Vec3) {
     let ccw = area > 0.0;
     let (umin, umax) = q.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)));
     let (ymin, ymax) = q.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+    // the joints: a dark backing just behind the stones
+    let joint = Key::new(Mat::Plain(230), [0.24, 0.18, 0.125]);
+    let back: Vec<Vec3> = pts.iter().map(|&p| p - n * 0.012).collect();
+    g.poly(joint, &back, right, Vec3::Y);
     // one bond per wall plane
     let seed = mix((right.x * 997.0).round() as i64 as u64, (right.z * 997.0).round() as i64 as u64, (d * 7.0).round() as i64 as u64);
-    let rnd = |a: i64, b: i64, c: u64| (mix(seed, a as u64, b as u64 ^ c) % 100_000) as f32 / 100_000.0;
+    let rnd = |a: i64, b: i64, c: u64| (mix(seed, a as u64, b as u64 ^ c.wrapping_mul(0x9E37)) % 100_000) as f32 / 100_000.0;
     let total: u32 = ASHLAR_TONES.iter().map(|t| t.1).sum();
-    let cell = 1.45;
-    for kc in (ymin / COURSE).floor() as i64..=(ymax / COURSE).floor() as i64 {
-        let (c0, c1) = (kc as f32 * COURSE, (kc + 1) as f32 * COURSE);
-        if c1 <= ymin + 1e-3 || c0 >= ymax - 1e-3 {
-            continue;
-        }
-        let off = rnd(kc, -1, 1) * cell;
-        let edge = |j: i64| off + j as f32 * cell + (rnd(kc, j, 2) - 0.5) * 0.6;
-        let (j0, j1) = (((umin - off) / cell).floor() as i64 - 1, ((umax - off) / cell).ceil() as i64 + 1);
-        for j in j0..j1 {
-            let (a, b) = (edge(j), edge(j + 1));
-            if b <= umin || a >= umax {
-                continue;
-            }
-            // the panel's rectangle clipped to the face
-            let mut poly = vec![Vec2::new(a, c0), Vec2::new(b, c0), Vec2::new(b, c1), Vec2::new(a, c1)];
-            for i in 0..q.len() {
-                let (e0, e1) = if ccw { (q[i], q[(i + 1) % q.len()]) } else { (q[(i + 1) % q.len()], q[i]) };
-                let inside = |p: Vec2| (e1 - e0).perp_dot(p - e0) >= -1e-5;
-                let mut out = vec![];
-                for m in 0..poly.len() {
-                    let (p0, p1) = (poly[m], poly[(m + 1) % poly.len()]);
-                    let (i0, i1) = (inside(p0), inside(p1));
-                    if i0 {
-                        out.push(p0);
-                    }
-                    if i0 != i1 {
-                        let (s0, s1) = ((e1 - e0).perp_dot(p0 - e0), (e1 - e0).perp_dot(p1 - e0));
-                        out.push(p0 + (p1 - p0) * (s0 / (s0 - s1)));
-                    }
+    let cycle: f32 = COURSES.iter().sum();
+    let gap = 0.007;
+    let mut emit = |g: &mut Geo, a: f32, b: f32, c0: f32, c1: f32, id: (i64, i64, u64)| {
+        // the stone's rectangle, less the joint, clipped to the face
+        let mut poly = vec![Vec2::new(a + gap, c0 + gap), Vec2::new(b - gap, c0 + gap), Vec2::new(b - gap, c1 - gap), Vec2::new(a + gap, c1 - gap)];
+        for i in 0..q.len() {
+            let (e0, e1) = if ccw { (q[i], q[(i + 1) % q.len()]) } else { (q[(i + 1) % q.len()], q[i]) };
+            let inside = |p: Vec2| (e1 - e0).perp_dot(p - e0) >= -1e-5;
+            let mut out = vec![];
+            for m in 0..poly.len() {
+                let (p0, p1) = (poly[m], poly[(m + 1) % poly.len()]);
+                let (i0, i1) = (inside(p0), inside(p1));
+                if i0 {
+                    out.push(p0);
                 }
-                poly = out;
-                if poly.len() < 3 {
-                    break;
+                if i0 != i1 {
+                    let (s0, s1) = ((e1 - e0).perp_dot(p0 - e0), (e1 - e0).perp_dot(p1 - e0));
+                    out.push(p0 + (p1 - p0) * (s0 / (s0 - s1)));
                 }
             }
+            poly = out;
             if poly.len() < 3 {
-                continue;
-            }
-            // a scanned stone of about the panel's proportions, a tone, sometimes turned over
-            let h = mix(seed, kc as u64, j as u64);
-            let want = (b - a) / COURSE;
-            let w = (0..3u64)
-                .map(|t| win[(mix(h, t, 7) % win.len() as u64) as usize])
-                .min_by(|x, y| (((x[2] - x[0]) / (x[3] - x[1])) - want).abs().total_cmp(&(((y[2] - y[0]) / (y[3] - y[1])) - want).abs()))
-                .unwrap();
-            let turned = h & 1 == 1;
-            let mut pick = (mix(h, 11, 13) % total as u64) as u32;
-            let mut ti = 0;
-            for (i, t) in ASHLAR_TONES.iter().enumerate() {
-                if pick < t.1 {
-                    ti = i;
-                    break;
-                }
-                pick -= t.1;
-            }
-            let t = ASHLAR_TONES[ti].0;
-            let l = (t[0] + t[1] + t[2]) / 3.0;
-            // weathering: the bottom course a little darker
-            let dim = if kc == 0 { 0.88 } else { 1.0 };
-            // hue spread widened against the photo's haze, brightness spread kept and pushed a little further
-            // overall tone set against sunlit photos of the cladding (the scan's neutral mean rendered far too pale)
-            let base = [0.345, 0.26, 0.175];
-            let tint = [0, 1, 2].map(|c| (l + (t[c] - l) * 1.4) * (1.0 + (l - 1.0) * 0.4) * dim * base[c]);
-            // sawn sandstone is matte: rougher than the scan's average, each tone a touch different
-            let key = Key::new(Mat::Surface("pt_ashlar_neutral"), tint).tile(3.0).rough(1.3 + 0.04 * ti as f32);
-            let uvs: Vec<[f32; 2]> = poly
-                .iter()
-                .map(|p| {
-                    let (mut s, mut tt) = ((p.x - a) / (b - a), (p.y - c0) / (c1 - c0));
-                    if turned {
-                        s = 1.0 - s;
-                        tt = 1.0 - tt;
-                    }
-                    [w[0] + s * (w[2] - w[0]), w[3] - tt * (w[3] - w[1])]
-                })
-                .collect();
-            let p3: Vec<Vec3> = poly.iter().map(|p| right * p.x + Vec3::Y * p.y + n * d).collect();
-            if ccw {
-                g.poly_mapped(key, &p3, &uvs, right, Vec3::Y, turned);
-            } else {
-                let (r3, ruv): (Vec<Vec3>, Vec<[f32; 2]>) = (p3.iter().rev().copied().collect(), uvs.iter().rev().copied().collect());
-                g.poly_mapped(key, &r3, &ruv, right, Vec3::Y, turned);
+                return;
             }
         }
+        let h = mix(seed ^ id.2, id.0 as u64, id.1 as u64);
+        let turned = h & 1 == 1;
+        let mut pick = (mix(h, 11, 13) % total as u64) as u32;
+        let mut ti = 0;
+        for (i, t) in ASHLAR_TONES.iter().enumerate() {
+            if pick < t.1 {
+                ti = i;
+                break;
+            }
+            pick -= t.1;
+        }
+        let t = ASHLAR_TONES[ti].0;
+        let l = (t[0] + t[1] + t[2]) / 3.0;
+        // weathering: the bottom course a little darker
+        let dim = if c0 < 0.5 { 0.9 } else { 1.0 };
+        // stone-to-stone spread as measured on the sunlit face: about 6-10% in brightness, a little in hue
+        let lv = 1.0 + (l - 1.0) * 0.6;
+        let tint = [0, 1, 2].map(|c| (lv + (t[c] - l) * 0.8) * dim * STONE_TONE[c]);
+        let key = Key::new(Mat::Surface("pt_cleft_sandstone"), tint).tile(2.0).rough(1.15 + 0.04 * ti as f32).wear(wear::STONE);
+        // a piece of the 2 m scan at true scale, anywhere in it
+        let (ou, ov) = ((mix(h, 3, 5) % 2000) as f32 / 1000.0, (mix(h, 5, 7) % 2000) as f32 / 1000.0);
+        let uvs: Vec<[f32; 2]> = poly
+            .iter()
+            .map(|p| {
+                let (mut s, mut tt) = (p.x - a, p.y - c0);
+                if turned {
+                    s = (b - a) - s;
+                    tt = (c1 - c0) - tt;
+                }
+                [ou + s, ov - tt]
+            })
+            .collect();
+        let p3: Vec<Vec3> = poly.iter().map(|p| right * p.x + Vec3::Y * p.y + n * d).collect();
+        if ccw {
+            g.poly_mapped(key, &p3, &uvs, right, Vec3::Y, turned);
+        } else {
+            let (r3, ruv): (Vec<Vec3>, Vec<[f32; 2]>) = (p3.iter().rev().copied().collect(), uvs.iter().rev().copied().collect());
+            g.poly_mapped(key, &r3, &ruv, right, Vec3::Y, turned);
+        }
+    };
+    // courses by absolute height, so they line up round every corner
+    let mut kc = (ymin / cycle).floor() as i64 * COURSES.len() as i64;
+    let mut c0 = (ymin / cycle).floor() * cycle;
+    while c0 < ymax {
+        let hgt = COURSES[kc.rem_euclid(COURSES.len() as i64) as usize];
+        let c1 = c0 + hgt;
+        if c1 > ymin + 1e-3 {
+            // stone lengths: longer in the tall courses; cut on a jittered grid so both ends of a wall agree
+            let cell = if hgt > 0.55 { 1.15 } else if hgt > 0.4 { 0.95 } else { 0.8 };
+            let off = rnd(kc, -1, 1) * cell;
+            let edge = |j: i64| off + j as f32 * cell + (rnd(kc, j, 2) - 0.5) * cell * 0.55;
+            let (j0, j1) = (((umin - off) / cell).floor() as i64 - 1, ((umax - off) / cell).ceil() as i64 + 1);
+            for j in j0..j1 {
+                let (a, b) = (edge(j), edge(j + 1));
+                if b <= umin || a >= umax {
+                    continue;
+                }
+                // now and then a tall stone is two stacked
+                if hgt > 0.55 && rnd(kc, j, 3) < 0.16 {
+                    let mid = c0 + hgt * (0.42 + 0.16 * rnd(kc, j, 4));
+                    emit(g, a, b, c0, mid, (kc, j, 1));
+                    emit(g, a, b, mid, c1, (kc, j, 2));
+                } else {
+                    emit(g, a, b, c0, c1, (kc, j, 0));
+                }
+            }
+        }
+        c0 = c1;
+        kc += 1;
     }
 }
 
@@ -2704,7 +2723,7 @@ let dark = Key::new(Mat::Plain(200), [0.05, 0.05, 0.055]);
 
 /// The pale peach precast of the light towers and the office block (photos: about 0.8 of the white steel's value).
 fn pale_precast() -> Key {
-    Key::new(Mat::Surface("tjeneevfw"), [0.62, 0.47, 0.35]).tile(2.0)
+    Key::new(Mat::Surface("tjeneevfw"), [1.15, 0.95, 0.74]).tile(2.0)
 }
 
 /// The office block along the street south-west of the bowl, between the left-field side and the lantern tower
@@ -2790,85 +2809,301 @@ fn sw_offices(g: &mut Geo, m: &Mats) {
 
 // ---------------------------------------------------------------- east building
 
-/// Rows of wide windows on a wall from `a` to `b` facing `out`: dark glossy panes `bay` wide between `pier` wide
-/// piers, each row (sill, head) with a projecting dark sunshade over it.
-fn window_rows(g: &mut Geo, a: Vec2, b: Vec2, out: Vec2, rows: &[(f32, f32)], bay: f32, pier: f32, shade: bool) {
-    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
-    let pane = Key::new(Mat::Plain(185), [0.028, 0.036, 0.045]);
-    let spandrel = Key::new(Mat::Plain(200), [0.2, 0.215, 0.22]);
-    let frame = Key::new(Mat::Plain(140), [0.5, 0.52, 0.53]);
-    let len = (b - a).length();
-    let e = (b - a) / len;
-    let o3 = Vec3::new(out.x, 0.0, out.y);
-    let mut r3 = Vec3::new(e.x, 0.0, e.y);
-    let flip = r3.cross(Vec3::Y).dot(o3) < 0.0;
-    if flip {
-        r3 = -r3;
+/// A flat stone-coloured key for the cladding's returns that are not upright (heads and sills of openings).
+fn stone_flat() -> Key {
+    Key::new(Mat::Surface("pt_cleft_sandstone"), STONE_TONE).tile(2.0).rough(1.2)
+}
+
+/// An upright wall seen from outside: from `left` to `right` (plan points as seen from the front), y0..y1, with
+/// rectangular holes (u0, u1, v0, v1; u metres from `left`, v height). Sandstone is laid stone by stone.
+fn wall_holes(g: &mut Geo, k: Key, left: Vec2, right: Vec2, y0: f32, y1: f32, holes: &[[f32; 4]]) {
+    let len = (right - left).length();
+    let r = (right - left) / len;
+    let r3 = Vec3::new(r.x, 0.0, r.y);
+    let (mut us, mut vs) = (vec![0.0, len], vec![y0, y1]);
+    for h in holes {
+        us.extend([h[0].clamp(0.0, len), h[1].clamp(0.0, len)]);
+        vs.extend([h[2].clamp(y0, y1), h[3].clamp(y0, y1)]);
     }
-    let n = ((len - pier) / (bay + pier)).floor().max(1.0);
-    let pad = (len - n * bay - (n - 1.0) * pier) / 2.0;
-    for &(y0, y1) in rows {
-        for i in 0..n as i32 {
-            let u = pad + i as f32 * (bay + pier);
-            let q = a + e * if flip { u + bay } else { u } + out * 0.04;
-            let split = y0 + (y1 - y0) * 0.34;
-            g.quad(spandrel, v3(q, y0), r3 * bay, Vec3::Y * (split - y0));
-            g.quad(pane, v3(q, split), r3 * bay, Vec3::Y * (y1 - split));
-            // mullions at the thirds
-            for k in 1..3 {
-                let p = a + e * (u + bay * k as f32 / 3.0) + out * 0.07;
-                g.member(frame, v3(p, y0), v3(p, y1), 0.07, 0.06, o3);
-            }
-            if shade {
-                let (p0, p1) = (a + e * (u - 0.15) + out * 0.45, a + e * (u + bay + 0.15) + out * 0.45);
-                g.member(frame, v3(p0, y1 + 0.12), v3(p1, y1 + 0.12), 0.9, 0.1, Vec3::Y);
+    us.sort_by(f32::total_cmp);
+    vs.sort_by(f32::total_cmp);
+    us.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+    vs.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+    // merge cells along u into runs so stones are not cut at every hole edge
+    for w in vs.windows(2) {
+        let vm = (w[0] + w[1]) / 2.0;
+        let mut run: Option<f32> = None;
+        for i in 0..us.len() {
+            let open = i + 1 < us.len() && {
+                let um = (us[i] + us[i + 1]) / 2.0;
+                !holes.iter().any(|h| um > h[0] && um < h[1] && vm > h[2] && vm < h[3])
+            };
+            match (run, open) {
+                (None, true) => run = Some(us[i]),
+                (Some(u0), false) => {
+                    let (p, q) = (left + r * u0, left + r * us[i]);
+                    wall_poly(g, k, &[Vec3::new(p.x, w[0], p.y), Vec3::new(q.x, w[0], q.y), Vec3::new(q.x, w[1], q.y), Vec3::new(p.x, w[1], p.y)], r3, Vec3::Y);
+                    run = None;
+                }
+                _ => {}
             }
         }
     }
 }
 
-/// The sandstone building along the street east of the home plate gate (lidar massing; photos from the plaza and
-/// from across the tracks): a slab 18 m deep parallel to the street, 24 m high at its south-west end stepping to 28
-/// and 31 m, then 22 m; a low arcade along the street; rows of wide shaded windows; planters along the roof edge.
-/// Frame: a runs north-east along the street from (66, 74), b in toward the bowl.
+/// The returns of an opening `depth` deep in a wall (see `wall_holes`): jambs in the wall's material, head and sill flat.
+fn reveal(g: &mut Geo, k: Key, left: Vec2, right: Vec2, h: [f32; 4], depth: f32) {
+    let r = (right - left).normalize();
+    let out = Vec2::new(-r.y, r.x) * -1.0;
+    // right x up = out: check and flip
+    let out = if Vec3::new(r.x, 0.0, r.y).cross(Vec3::Y).dot(Vec3::new(out.x, 0.0, out.y)) > 0.0 { out } else { -out };
+    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let (a, b) = (left + r * h[0], left + r * h[1]);
+    let inw = -out * depth;
+    let i3 = Vec3::new(-out.x, 0.0, -out.y);
+    // left jamb faces +r, right jamb faces -r
+    wall_poly(g, k, &[v3(a, h[2]), v3(a + inw, h[2]), v3(a + inw, h[3]), v3(a, h[3])], i3, Vec3::Y);
+    wall_poly(g, k, &[v3(b + inw, h[2]), v3(b, h[2]), v3(b, h[3]), v3(b + inw, h[3])], -i3, Vec3::Y);
+    let flat = if k == mats().sandstone { stone_flat() } else { k };
+    poly_down(g, flat, &[v3(a, h[3]), v3(b, h[3]), v3(b + inw, h[3]), v3(a + inw, h[3])]);
+    if h[2] > 0.05 {
+        poly_up(g, flat, &[v3(a, h[2]), v3(b, h[2]), v3(b + inw, h[2]), v3(a + inw, h[2])]);
+    }
+}
+
+/// A sunshade fixed at an opening's head, as on the east building: a flat frame of plain rectangular bars in one
+/// light metal - five bars running the opening's length, tied by cross bars at the ends and the thirds. `y` is its top.
+fn louvre(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, proj: f32) {
+    let k = Key::new(Mat::Plain(110), [0.7, 0.7, 0.69]).wear(wear::METAL);
+    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let len = (right - left).length();
+    let r = (right - left) / len;
+    let bars = 5;
+    for j in 0..bars {
+        let q = out * (0.07 + (proj - 0.07) * j as f32 / (bars - 1) as f32);
+        g.member(k, v3(left + q, y - 0.06), v3(right + q, y - 0.06), 0.14, 0.12, Vec3::Y);
+    }
+    let panels = (len / 2.8).round().max(1.0) as i32;
+    for i in 0..=panels {
+        let p = left + r * ((len - 0.12) * i as f32 / panels as f32 + 0.06);
+        g.member(k, v3(p, y - 0.06), v3(p + out * proj, y - 0.06), 0.12, 0.12, Vec3::Y);
+    }
+}
+
+/// Trailing plants hanging from `y` along a ledge: thin leaf strips of uneven length in three greens.
+fn vines(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, drop: f32, seed: u64) {
+    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let len = (right - left).length();
+    let r = (right - left) / len;
+    let r3 = Vec3::new(r.x, 0.0, r.y);
+    let r3 = if r3.cross(Vec3::Y).dot(Vec3::new(out.x, 0.0, out.y)) > 0.0 { r3 } else { -r3 };
+    let greens = [[0.035, 0.085, 0.03], [0.05, 0.11, 0.035], [0.028, 0.065, 0.028]];
+    let n = (len / 0.055) as i32;
+    for i in 0..n {
+        let h = mix(seed, i as u64, 17);
+        let f = (h % 1000) as f32 / 1000.0;
+        // clumps: long in some stretches, short between
+        let clump = 0.5 + 0.5 * ((i as f32 * 0.055 * 2.1 + (seed % 7) as f32).sin() * 0.5 + 0.5);
+        let l = drop * clump * (0.35 + 0.65 * f * f);
+        let w = 0.05 + 0.05 * ((h >> 10) % 100) as f32 / 100.0;
+        let p = left + r * (i as f32 * 0.055) + out * (0.05 + 0.12 * ((h >> 20) % 100) as f32 / 100.0);
+        let o = if r3.dot(Vec3::new(r.x, 0.0, r.y)) > 0.0 { p } else { p + r * w };
+        g.quad(Key::new(Mat::Plain(215), greens[(h >> 30) as usize % 3]), v3(o, y - l), r3 * w, Vec3::Y * l);
+    }
+}
+
+/// Bougainvillea along a roof or terrace edge: a ragged line of small leaf and bract clumps, some spilling over.
+fn bougainvillea(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, drop: f32, seed: u64) {
+    let len = (right - left).length();
+    let r = (right - left) / len;
+    let n = (len / 0.035) as i32;
+    for i in 0..n {
+        let h = mix(seed, i as u64, 29);
+        let f = (h % 1000) as f32 / 1000.0;
+        let sz = 0.035 + 0.05 * ((h >> 10) % 100) as f32 / 100.0;
+        let c = left + r * (i as f32 * 0.035) + out * (0.3 * ((h >> 20) % 100) as f32 / 100.0 - 0.12);
+        // a low ragged mound on the edge, strands spilling over in places
+        let spill = ((i as f32 * 0.035 * 1.7 + seed as f32).sin() * 0.5 + 0.5).powi(3);
+        let yy = y + 0.3 * f * f - drop * spill * ((h >> 34) % 1000) as f32 / 1000.0;
+        let col = match (h >> 44) % 6 {
+            0 => [0.2, 0.045, 0.04],
+            1 => [0.16, 0.06, 0.035],
+            2 | 3 => [0.07, 0.085, 0.035],
+            _ => [0.04, 0.075, 0.03],
+        };
+        g.cuboid(Key::new(Mat::Plain(215), col), Vec3::new(c.x - sz, yy - sz, c.y - sz), Vec3::new(c.x + sz, yy + sz, c.y + sz));
+    }
+}
+
+/// The sandstone building along the street east of the home plate gate, built from measurement: its footprint and
+/// heights from the lidar; its street face and south-west end face from street photos rectified onto a metre grid
+/// (camera solved against the lidar corners; heights cross-checked between two photos to 0.5 m).
+/// Frame: a runs north-east along the street from (66, 74), b in toward the bowl; the street face is the plane b = 0.5.
 fn east_building(g: &mut Geo, m: &Mats) {
     let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let (t, n) = (Vec2::new(1.0, -1.0).normalize(), Vec2::new(-1.0, -1.0).normalize());
     let uv = |a: f32, b: f32| Vec2::new(66.0, 74.0) + t * a + n * b - HOME;
     let flat = |h: f32| move |_u: f32| h;
     let pale = pale_precast();
-    // the masses (a0, a1, b0, b1, height)
-    let blocks = [(-12.0, 5.0, 2.0, 20.0, 24.0), (5.0, 12.0, 2.0, 20.0, 28.0), (12.0, 41.0, 2.0, 13.0, 31.0), (12.0, 41.0, 13.0, 20.0, 23.0), (41.0, 56.0, 4.0, 20.0, 22.0)];
-    for &(a0, a1, b0, b1, h) in &blocks {
-        prism(g, m, &uv, m.sandstone, &[(a0, b0), (a1, b0), (a1, b1), (a0, b1)], 0.0, &flat(h), false);
-    }
-    // the arcade along the street: a pale canopy slab on square piers
-    prism(g, m, &uv, pale, &[(-6.0, -2.5), (38.0, -2.5), (38.0, 2.0), (-6.0, 2.0)], 7.6, &flat(8.6), false);
-    let mut a = -5.0;
-    while a <= 37.0 {
-        g.member(pale, v3(uv(a, -2.0), 0.0), v3(uv(a, -2.0), 7.6), 0.7, 0.7, Vec3::new(n.x, 0.0, n.y));
-        a += 6.0;
-    }
-    // windows: the street face and the south-west end, floor by floor above the arcade
-    let out_street = -n;
-    for &(a0, a1, b0, _b1, h) in &blocks {
-        let rows: Vec<(f32, f32)> = (0..8).map(|k| 9.9 + k as f32 * 5.3).filter(|&y| y + 3.6 < h - 2.0).map(|y| (y, y + 3.6)).collect();
-        window_rows(g, uv(a0, b0), uv(a1, b0), out_street, &rows, 4.6, 1.5, true);
-    }
-    let rows = [(9.9, 13.5), (15.2, 18.8)];
-    window_rows(g, uv(-12.0, 3.0), uv(-12.0, 19.0), -t, &rows, 4.2, 1.2, true);
-    // planters along the roof edges spilling bougainvillea, as in the photos
-    let leaf = Key::new(Mat::Plain(220), [0.05, 0.13, 0.04]);
-    for &(a0, a1, b0, _b1, h) in &blocks {
-        let cnt = ((a1 - a0) / 0.5) as i32;
-        for j in 0..cnt {
-            let hsh = mix(j as u64, (a0 * 10.0) as i64 as u64, 311);
-            let drop = (hsh % 1000) as f32 / 1000.0;
-            let c = uv(a0 + (j as f32 + 0.5) * 0.5, b0 - 0.15);
-            let sz = 0.16 + 0.14 * drop;
-            let col = if hsh % 2 == 0 { leaf } else { Key::new(Mat::Plain(220), [0.3 + 0.12 * drop, 0.015, 0.06]) };
-            let y = h - 0.15 - drop * 0.5;
-            g.cuboid(col, Vec3::new(c.x - sz, y, c.y - sz), Vec3::new(c.x + sz, y + sz * 1.5, c.y + sz));
+    let tan = Key::new(Mat::Surface("tjeneevfw"), [0.8, 0.62, 0.44]).tile(2.0);
+    let pane = Key::new(Mat::Plain(235), [0.016, 0.018, 0.016]);
+    let frost = Key::new(Mat::Plain(200), [0.26, 0.3, 0.32]);
+    let frame = Key::new(Mat::Plain(150), [0.3, 0.31, 0.32]);
+    let sill = Key::new(Mat::Plain(160), [0.62, 0.6, 0.56]);
+    let dark = Key::new(Mat::Plain(230), [0.035, 0.03, 0.028]);
+    let (top, fb, back) = (24.1, 0.5, 20.0);
+    let (a0, a1, stone_end) = (-13.0, 25.7, 20.5);
+
+    // --- the street face: two rows of three strip windows under louvres, the entrance notch, a tan pier at its end
+    let (sl, sr) = (uv(a0, fb), uv(a1, fb));
+    let su = |a: f32| a - a0;
+    let bays = [(-7.0f32, 1.5f32), (2.8, 11.2), (12.5, 21.0)];
+    let rows = [(18.6f32, 19.8f32), (13.1, 14.3)];
+    let mut holes: Vec<[f32; 4]> = vec![[su(-9.0), su(9.0), 0.0, 6.0], [su(-3.7), su(9.0), 8.8, 10.6]];
+    for &(w0, w1) in &bays {
+        for &(y0, y1) in &rows {
+            holes.push([su(w0), su(w1), y0, y1]);
         }
     }
+    wall_holes(g, m.sandstone, sl, sr, 0.0, top, &holes);
+    let out = -n;
+    let o3 = Vec3::new(out.x, 0.0, out.y);
+    let t3 = Vec3::new(t.x, 0.0, t.y);
+    // the tan pier over the stone at the face's north-east end
+    g.quad(tan, v3(uv(stone_end, fb) + out * 0.03, 9.0), t3 * (a1 - stone_end), Vec3::Y * (top - 9.0));
+    for (bi, &(w0, w1)) in bays.iter().enumerate() {
+        for (ri, &(y0, y1)) in rows.iter().enumerate() {
+            reveal(g, m.sandstone, sl, sr, [su(w0), su(w1), y0, y1], 1.0);
+            let q = uv(w0, fb) - out * 1.0;
+            g.quad(pane, v3(q, y0), t3 * (w1 - w0), Vec3::Y * (y1 - y0));
+            for k in 1..3 {
+                let p = uv(w0 + (w1 - w0) * k as f32 / 3.0, fb) - out * 0.96;
+                g.member(dark, v3(p, y0), v3(p, y1), 0.07, 0.07, o3);
+            }
+            // a pale sill ledge, and the awning at the head
+            g.member(sill, v3(uv(w0, fb) + out * 0.04, y0 - 0.04), v3(uv(w1, fb) + out * 0.04, y0 - 0.04), 0.1, 0.16, o3);
+            louvre(g, uv(w0, fb), uv(w1, fb), out, y1, 1.6);
+            let _ = (bi, ri);
+        }
+    }
+    // the ticket hall, 6 m deep under a full ceiling: stone sides, a dark brown back wall, a band of small
+    // white-framed ticket windows over a counter, a screen; above it the stone carries on to a low loggia slot
+    let nd = 6.0;
+    reveal(g, m.sandstone, sl, sr, [su(-9.0), su(9.0), 0.0, 6.0], nd);
+    reveal(g, m.sandstone, sl, sr, [su(-3.7), su(9.0), 8.8, 10.6], 4.0);
+    let nb = fb + nd;
+    let brown = Key::new(Mat::Plain(200), [0.085, 0.055, 0.04]);
+    let tglass = Key::new(Mat::Plain(110), [0.2, 0.24, 0.28]);
+    let cream = Key::new(Mat::Plain(170), [0.7, 0.66, 0.56]);
+    g.quad(brown, v3(uv(-9.0, nb), 0.0), t3 * 18.0, Vec3::Y * 6.0);
+    g.quad(tglass, v3(uv(-8.4, nb) + out * 0.03, 1.05), t3 * 17.0, Vec3::Y * 1.4);
+    let nwin = 18;
+    for k in 0..=nwin {
+        let p = uv(-8.4 + 17.0 * k as f32 / nwin as f32, nb) + out * 0.06;
+        g.member(m.white, v3(p, 1.05), v3(p, 2.45), 0.07, 0.06, o3);
+    }
+    for y in [1.05f32, 1.75, 2.45] {
+        g.member(m.white, v3(uv(-8.4, nb) + out * 0.06, y), v3(uv(8.6, nb) + out * 0.06, y), 0.06, 0.07, o3);
+    }
+    g.member(cream, v3(uv(-8.4, nb) + out * 0.22, 0.98), v3(uv(8.6, nb) + out * 0.22, 0.98), 0.45, 0.1, Vec3::Y);
+    // the right side wall's windows (it faces -a), and a blue kiosk panel at its street end
+    {
+        let n3 = Vec3::new(n.x, 0.0, n.y);
+        let q = uv(9.0, fb + 1.6) - t * 0.03;
+        g.quad(tglass, v3(q, 1.05), n3 * 3.8, Vec3::Y * 1.4);
+        for k in 0..=4 {
+            let p = uv(9.0, fb + 1.6 + 3.8 * k as f32 / 4.0) - t * 0.06;
+            g.member(m.white, v3(p, 1.05), v3(p, 2.45), 0.07, 0.06, -t3);
+        }
+        g.quad(Key::new(Mat::Plain(120), [0.03, 0.07, 0.3]), v3(uv(9.0, fb + 0.3) - t * 0.03, 0.9), n3 * 0.8, Vec3::Y * 1.7);
+    }
+    g.quad(Key::new(Mat::Plain(60), [0.03, 0.035, 0.04]), v3(uv(5.2, nb) + out * 0.05, 3.2), t3 * 1.3, Vec3::Y * 0.75);
+    g.light(v3(uv(-3.0, fb + 3.0), 5.2), 9.0, [1.1, 1.0, 0.85]);
+    g.light(v3(uv(5.0, fb + 3.0), 5.2), 9.0, [1.1, 1.0, 0.85]);
+    // the loggia slot's back wall, with a small window
+    g.quad(pale, v3(uv(-3.7, fb + 4.0), 8.8), t3 * 12.7, Vec3::Y * 1.8);
+    g.quad(pane, v3(uv(2.6, fb + 4.0) + out * 0.03, 9.1), t3 * 1.2, Vec3::Y * 0.9);
+
+    // --- the south-west end face: three glazed bays (dark glass over a frosted band), louvres, a planter strip below
+    let (el, er) = (uv(a0, back), uv(a0, fb));
+    let eu = |b: f32| back - b;
+    let eout = -t;
+    let e3 = Vec3::new(-n.x, 0.0, -n.y);
+    let ebays = [(18.75f32, 14.0f32), (12.6, 8.0), (6.5, 2.0)];
+    let eholes: Vec<[f32; 4]> = ebays.iter().map(|&(b0, b1)| [eu(b0), eu(b1), 12.8, 19.5]).collect();
+    wall_holes(g, m.sandstone, el, er, 0.0, top, &eholes);
+    for (bi, &(b0, b1)) in ebays.iter().enumerate() {
+        reveal(g, m.sandstone, el, er, [eu(b0), eu(b1), 12.8, 19.5], 0.5);
+        let w = b0 - b1;
+        let q = uv(a0, b0) - eout * 0.5;
+        for (y0, y1, k) in [(12.8f32, 14.0f32, pane), (14.0, 14.4, frame), (14.4, 16.5, frost), (16.5, 16.9, frame), (16.9, 19.5, pane)] {
+            g.quad(k, v3(q, y0), e3 * w, Vec3::Y * (y1 - y0));
+        }
+        for k in 1..4 {
+            let p = uv(a0, b0 - w * k as f32 / 4.0) - eout * 0.46;
+            g.member(frame, v3(p, 14.4), v3(p, 19.5), 0.06, 0.06, Vec3::new(eout.x, 0.0, eout.y));
+        }
+        louvre(g, uv(a0, b0), uv(a0, b1), eout, 19.7, 1.5);
+        louvre(g, uv(a0, b0), uv(a0, b1), eout, 14.3, 1.5);
+        vines(g, uv(a0, b0 - 0.15), uv(a0, b1 + 0.15), eout, 13.0, 1.3, bi as u64 + 40);
+    }
+    // --- the other two faces, the roof, collision (the notch stays open to walk into)
+    wall_holes(g, m.sandstone, uv(a1, fb), uv(a1, back), 0.0, top, &[]);
+    wall_holes(g, m.sandstone, uv(a1, back), uv(a0, back), 0.0, top, &[]);
+    poly_up(g, m.concrete, &[v3(uv(a0, fb), top - 0.3), v3(uv(a1, fb), top - 0.3), v3(uv(a1, back), top - 0.3), v3(uv(a0, back), top - 0.3)]);
+    for (r, y0, y1) in [
+        ([(a0, fb), (-9.0, fb), (-9.0, back), (a0, back)], 0.0, top),
+        ([(9.0, fb), (a1, fb), (a1, back), (9.0, back)], 0.0, top),
+        ([(-9.0, nb), (9.0, nb), (9.0, back), (-9.0, back)], 0.0, top),
+        ([(-9.0, fb), (9.0, fb), (9.0, nb), (-9.0, nb)], 6.0, top),
+    ] {
+        g.block_ring(&r.map(|(a, b)| uv(a, b)), y0, y1);
+    }
+    // roof edge planting: a heavy clump over the notch's left, a line along the right half
+    bougainvillea(g, uv(-0.5, fb), uv(3.0, fb), out, top, 1.6, 5);
+    bougainvillea(g, uv(9.8, fb), uv(24.8, fb), out, top, 0.5, 6);
+    bougainvillea(g, uv(a0, 3.0), uv(a0, 17.0), eout, top, 0.4, 7);
+
+    // --- the taller pale volumes set back behind the face, and the block beyond
+    for &(p0, p1, q0, q1, h) in &[(5.0f32, 8.0f32, 3.5f32, 13.0f32, 26.0f32), (8.0, 16.0, 3.5, 13.0, 28.5), (16.0, 40.0, 3.5, 13.0, 31.0), (16.0, 40.0, 13.0, 20.0, 23.0), (40.0, 58.0, 4.0, 20.0, 22.0)] {
+        prism(g, m, &uv, pale, &[(p0, q0), (p1, q0), (p1, q1), (p0, q1)], top.min(h) - 0.2, &flat(h), false);
+    }
+    prism(g, m, &uv, pale, &[(a1, 3.5), (58.0, 3.5), (58.0, 20.0), (a1, 20.0)], 0.0, &flat(22.0), false);
+
+    // --- the stone podium in front, right of the notch: posters, a terrace with a canopy and a white rail, bougainvillea
+    let pf = -3.0;
+    prism(g, m, &uv, m.sandstone, &[(8.4, pf), (56.0, pf), (56.0, fb), (8.4, fb)], 0.0, &flat(8.9), false);
+    for k in 0..5 {
+        let a = 9.4 + k as f32 * 1.8;
+        let q = uv(a, pf) + out * 0.03;
+        g.quad(Key::new(Mat::Plain(150), [0.035, 0.035, 0.035]), v3(q, 1.2), t3 * 1.62, Vec3::Y * 1.75);
+        let pic = if k == 2 { [0.68, 0.63, 0.5] } else { [0.36, 0.29, 0.21] };
+        g.quad(Key::new(Mat::Plain(170), pic), v3(q + t * 0.1 + out * 0.01, 1.3), t3 * 1.42, Vec3::Y * 1.55);
+    }
+    g.member(m.concrete, v3(uv(9.3, pf) + out * 0.12, 1.14), v3(uv(18.3, pf) + out * 0.12, 1.14), 0.24, 0.1, Vec3::Y);
+    // G. cream concrete bollards along the sidewalk in front
+    let bollard = Key::new(Mat::Plain(175), [0.7, 0.66, 0.56]);
+    let mut a = -10.0f32;
+    while a <= 24.0 {
+        let p = uv(a, pf - 5.5);
+        g.tube(bollard, v3(p, -0.6), v3(p, 0.95), 0.16, 10);
+        g.tube(bollard, v3(p, 0.95), v3(p, 1.02), 0.11, 10);
+        g.block_box(Vec3::new(p.x - 0.16, 0.0, p.y - 0.16), Vec3::X * 0.32, Vec3::Z * 0.32, -0.6, 1.0);
+        a += 2.2;
+    }
+    let canopy = Key::new(Mat::Plain(160), [0.06, 0.06, 0.065]);
+    g.member(canopy, v3(uv(9.3, pf + 1.2), 10.45), v3(uv(16.0, pf + 1.2), 10.45), 2.4, 0.1, Vec3::Y);
+    for a in [9.4f32, 12.6, 15.9] {
+        g.member(canopy, v3(uv(a, pf + 0.15), 8.9), v3(uv(a, pf + 0.15), 10.4), 0.08, 0.08, o3);
+    }
+    let white = m.white;
+    for y in [9.3f32, 9.9] {
+        g.member(white, v3(uv(16.5, pf + 0.1), y), v3(uv(21.0, pf + 0.1), y), 0.05, 0.05, Vec3::Y);
+    }
+    for k in 0..=9 {
+        let p = uv(16.5 + k as f32 * 0.5, pf + 0.1);
+        g.member(white, v3(p, 8.9), v3(p, 9.9), 0.03, 0.03, o3);
+    }
+    bougainvillea(g, uv(8.6, pf), uv(21.0, pf), out, 8.9, 1.0, 9);
+    bougainvillea(g, uv(24.0, pf), uv(40.0, pf), out, 8.9, 0.8, 10);
 }

@@ -396,8 +396,38 @@ fn ashlar() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Split-face sandstone for stone-by-stone cladding: Poly Haven's "Sandstone Cracks" (CC0, a 2 m cleft sandstone
+/// face) with its colour brought to a neutral mid grey mean - its grain, veins and stains kept - so each stone's
+/// tint sets its tone; the scan's normals and roughness unchanged.
+fn cleft() -> std::io::Result<()> {
+    let dir = crate::root().join("data/megascans_inbox/polyhaven_src/sandstone_cracks");
+    let load = |m: &str| image::open(dir.join(format!("sandstone_cracks_{m}_2k.jpg"))).map_err(|e| std::io::Error::other(e.to_string()));
+    let diff = load("diff")?.to_rgb8();
+    let nor = load("nor_gl")?.to_rgb8();
+    let rough = load("rough")?.to_luma8();
+    let lin = |c: u8| (c as f32 / 255.0).powf(2.2);
+    let mut mean = [0f64; 3];
+    for p in diff.pixels() {
+        for c in 0..3 {
+            mean[c] += lin(p[c]) as f64;
+        }
+    }
+    let n = (diff.width() * diff.height()) as f64;
+    let gain = [0, 1, 2].map(|c| 0.5 / (mean[c] / n) as f32);
+    let to8 = |v: f32| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+    let base = image::RgbImage::from_fn(diff.width(), diff.height(), |x, y| {
+        let p = diff.get_pixel(x, y);
+        image::Rgb([to8(lin(p[0]) * gain[0]), to8(lin(p[1]) * gain[1]), to8(lin(p[2]) * gain[2])])
+    });
+    let rough_g = image::GrayImage::from_fn(rough.width(), rough.height(), |x, y| image::Luma([rough.get_pixel(x, y)[0]]));
+    write_surface("procedural", "pt_cleft_sandstone", &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nor)), ("Roughness", png_gray(&rough_g))], (2.0, 2.0), "Poly Haven sandstone_cracks (CC0), colour neutralised by fps proctex")?;
+    println!("cleft sandstone: neutral 2 m face");
+    Ok(())
+}
+
 pub fn all() -> std::io::Result<()> {
     ashlar()?;
+    cleft()?;
     flex_duct()?;
     subway()?;
     cowhide()?;
