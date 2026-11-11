@@ -934,6 +934,8 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
     gate_frame(g, m, &gz_line, cores);
     footbridge(g, m, &gz_line);
     home_towers(g, m);
+    sw_offices(g, m);
+    east_building(g, m);
     // end walls closing the bowl at both foul poles
     for s in [st[0], st[st.len() - 1]] {
         let e = s.n.perp();
@@ -1183,7 +1185,8 @@ fn tower(g: &mut Geo, m: &Mats, t: (f32, f32, f32, f32)) {
     let (r, top) = (t.2, t.3);
     let shaft_top = top - 15.0;
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
-    g.solid(m.sandstone, v(c - Vec2::splat(r * 0.8), 0.0), v(c + Vec2::splat(r * 0.8), shaft_top));
+    // the shafts are pale precast, not sandstone (photos)
+    g.solid(pale_precast(), v(c - Vec2::splat(r * 0.8), 0.0), v(c + Vec2::splat(r * 0.8), shaft_top));
     // lattice crown: four legs and rings
     let aim = (Vec2::new(0.0, -50.0) - c).normalize();
     let side = aim.perp();
@@ -1656,7 +1659,7 @@ fn home_gate_front(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)]) {
 
 /// The footbridge from the terrace concourse out to the tower (satellite): its tower end on the tower's north face,
 /// and a point toward the bowl along its axis (world); it starts where the axis crosses the frame.
-const BRIDGE_TOWER: (f32, f32) = (-11.5, 104.0);
+const BRIDGE_TOWER: (f32, f32) = (-11.0, 103.4);
 const BRIDGE_BOWL: (f32, f32) = (1.9, 73.4);
 const BRIDGE_W: f32 = 4.4;
 
@@ -1672,7 +1675,13 @@ fn bridge_ring() -> Vec<Vec2> {
 
 /// The tall tower at the link's far end (42 m with its mesh lantern), world plan from the lidar.
 fn tower_ring() -> Vec<Vec2> {
-    [(-15.0, 104.0), (-4.0, 104.0), (-4.0, 118.0), (-15.0, 118.0)].iter().map(|&(x, z)| Vec2::new(x, z) - HOME).collect()
+    // turned about 32 degrees with the street, as the lidar and the map's building outline both show
+    [(-15.0, 101.0), (0.0, 110.0), (-6.0, 121.0), (-21.0, 112.0)].iter().map(|&(x, z)| Vec2::new(x, z) - HOME).collect()
+}
+
+/// The lantern's footprint on the tower (map outline of its upper part; the lidar puts its top at 42 m).
+fn lantern_ring() -> Vec<Vec2> {
+    [(-11.0, 108.0), (-2.0, 113.0), (-6.0, 121.0), (-16.0, 115.0)].iter().map(|&(x, z)| Vec2::new(x, z) - HOME).collect()
 }
 
 /// A ring pushed out by `d` along its corner bisectors (convex rings).
@@ -1723,10 +1732,12 @@ fn home_towers(g: &mut Geo, m: &Mats) {
         g.block_ring(&pts, 0.0, h);
     };
     let tr = tower_ring();
-    clad(g, &tr, 35.0, &[(0, 0.5), (1, 0.5), (2, 0.5), (3, 0.5)]);
-    // the lantern: a dark steel mesh cage on top of the tower
+    clad(g, &tr, 32.4, &[(1, 0.5), (2, 0.3)]);
+    // the lantern: a dark steel mesh cage on the tower's upper part
     let mesh = Key::new(Mat::Plain(100), [0.16, 0.16, 0.15]).wear(wear::METAL);
-    let (y0, y1) = (35.0, 42.0);
+    let (y0, y1) = (32.4, 42.0);
+    let tr = lantern_ring();
+    clad(g, &tr, 33.4, &[]);
     for i in 0..4 {
         let (a, b) = (tr[i], tr[(i + 1) % 4]);
         let len = (b - a).length();
@@ -1925,16 +1936,18 @@ fn home_plaza(g: &mut Geo, f: &mut Furnisher, m: &Mats, city: &city::City, st: &
         let (_, _, z0, z1) = plaza_row(i);
         let y = r.iter().map(|&p| terr(p)).fold(f32::MIN, f32::max) + 0.03;
         let top = y + 0.42;
+        // the walls go down to the lowest ground round the bed, so it never floats where the plaza falls away
+        let foot = r.iter().map(|&p| terr(p)).fold(f32::MAX, f32::min) - 0.4;
         for k in 0..4 {
             let (a, b) = (r[k], r[(k + 1) % 4]);
             let e = (b - a).normalize();
             let out = Vec2::new(e.y, -e.x);
             let out = if out.dot(a - (r[0] + r[2]) / 2.0) < 0.0 { -out } else { out };
-            g.poly(curb, &[v(a, y - 0.3), v(b, y - 0.3), v(b, top), v(a, top)], Vec3::new(e.x, 0.0, e.y) * if out.dot(Vec2::new(-e.y, e.x)) > 0.0 { -1.0 } else { 1.0 }, Vec3::Y);
+            g.poly(curb, &[v(a, foot), v(b, foot), v(b, top), v(a, top)], Vec3::new(e.x, 0.0, e.y) * if out.dot(Vec2::new(-e.y, e.x)) > 0.0 { -1.0 } else { 1.0 }, Vec3::Y);
             poly_up(g, curb, &[v(a, top), v(b, top), v(b - out * 0.18, top), v(a - out * 0.18, top)]);
         }
         poly_up(g, gravel, &r.iter().map(|&p| v(p, top - 0.1)).collect::<Vec<_>>());
-        g.block_ring(r, y - 0.3, top);
+        g.block_ring(r, foot, top);
         // plants down the bed, clear of the palms; flowers at the outer (south) end
         let (a, b, _, _) = plaza_row(i);
         let len = z1 - z0;
@@ -2198,7 +2211,9 @@ fn wall_poly(g: &mut Geo, k: Key, pts: &[Vec3], right: Vec3, up: Vec3) {
             // weathering: the bottom course a little darker
             let dim = if kc == 0 { 0.88 } else { 1.0 };
             // hue spread widened against the photo's haze, brightness spread kept and pushed a little further
-            let tint = t.map(|c| (l + (c - l) * 1.4) * (1.0 + (l - 1.0) * 0.4) * dim);
+            // overall tone set against sunlit photos of the cladding (the scan's neutral mean rendered far too pale)
+            let base = [0.345, 0.26, 0.175];
+            let tint = [0, 1, 2].map(|c| (l + (t[c] - l) * 1.4) * (1.0 + (l - 1.0) * 0.4) * dim * base[c]);
             // sawn sandstone is matte: rougher than the scan's average, each tone a touch different
             let key = Key::new(Mat::Surface("pt_ashlar_neutral"), tint).tile(3.0).rough(1.3 + 0.04 * ti as f32);
             let uvs: Vec<[f32; 2]> = poly
@@ -2263,6 +2278,10 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
     }
     if cols.last().map_or(true, |&c| c < total - 2.0) {
         cols.push(total);
+    }
+    if std::env::var("FPS_GZ_DEBUG").is_ok() {
+        let w: Vec<String> = cols.iter().map(|&c| { let (p, n) = place(c); format!("({:.0},{:.0} n {:.2},{:.2})", p.x + HOME.x, p.y + HOME.y, n.x, n.y) }).collect();
+        eprintln!("frame cols: {}", w.join(" "));
     }
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let k = m.white;
@@ -2435,12 +2454,13 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
             let plane = |r: f32| under_rows(r) - 0.22 - depth;
             let rake_dir = (Vec3::new(-nrm.x, 0.0, -nrm.y) + Vec3::new(0.0, -UP_RISE / UP_PITCH, 0.0)).normalize();
             let pn = side.cross(rake_dir).normalize();
-            // arms leave each raker's bottom chord at the column and fall at 45 degrees (seen from the street) to the
-            // gusset at mid-bay, just short of the rakers' ends, where the horizontal joins the two rakers
-            let drop = 0.5 * (pb - pa).length();
-            let r_apex = r_end - 0.5;
-            let r_top = (r_apex - drop * UP_PITCH / UP_RISE).max(0.3);
-            for (f0, r0, f1, r1, sz) in [(0.0, r_apex, 1.0, r_apex, 0.42), (0.0, r_top, 0.5, r_apex, 0.4), (1.0, r_top, 0.5, r_apex, 0.4)] {
+            // the horizontal runs raker to raker about mid-height of the tall bay (seen from the street); the arms
+            // rise from its gusset at 45 degrees to a tie along the top of the plane, just inside each raker
+            let r_apex = 8.5;
+            let r_top = 0.6;
+            let drop = (r_apex - r_top) * UP_RISE / UP_PITCH;
+            let reach = (drop / (pb - pa).length()).min(0.5);
+            for (f0, r0, f1, r1, sz) in [(0.0, r_apex, 1.0, r_apex, 0.42), (0.0, r_top, 1.0, r_top, 0.36), (0.5 - reach, r_top, 0.5, r_apex, 0.4), (0.5 + reach, r_top, 0.5, r_apex, 0.4)] {
                 let (p, q) = (pt(f0, r0), pt(f1, r1));
                 if blocked(p) || blocked(q) {
                     continue;
@@ -2556,7 +2576,7 @@ fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
             let jitter = ((hsh % 1000) as f32 / 1000.0 - 0.5) * 0.3;
             let drop = ((hsh >> 10) % 1000) as f32 / 1000.0;
             let c = pa.lerp(pz, f) + side * (sg * (0.15 + jitter));
-            let col = [0.55 + 0.25 * drop, 0.02, 0.12 + 0.08 * drop];
+            let col = [0.32 + 0.14 * drop, 0.015, 0.07];
             let blob = Key::new(Mat::Plain(200), col);
             let leaf = Key::new(Mat::Plain(220), [0.04, 0.12, 0.03]);
             let y0 = deck + h + 0.3 - drop * 0.9;
@@ -2572,4 +2592,283 @@ fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
     // the tower's door at the far end
     let d0 = z + dir * 0.02;
     g.poly(glass, &[v(d0 + side * 1.2, deck), v(d0 - side * 1.2, deck), v(d0 - side * 1.2, deck + 2.6), v(d0 + side * 1.2, deck + 2.6)], -sv, Vec3::Y);
+}
+
+// ---------------------------------------------------------------- south-west offices
+
+/// A building mass: a prism over a ring of plan points (u, v) in a street-aligned frame `uv`, from `y0` up to
+/// top(u) (flat, or sloped). Walls face out; sandstone is clad panel by panel; `slits` scatters the dark slit
+/// windows the ballpark's sandstone blocks have. Collides.
+fn prism(g: &mut Geo, m: &Mats, uv: &dyn Fn(f32, f32) -> Vec2, k: Key, ring: &[(f32, f32)], y0: f32, top: &dyn Fn(f32) -> f32, slits: bool) {
+let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+let dark = Key::new(Mat::Plain(200), [0.05, 0.05, 0.055]);
+    let n = ring.len();
+    let area: f32 = (0..n).map(|i| {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        a.0 * b.1 - b.0 * a.1
+    }).sum();
+    let ring: Vec<(f32, f32)> = if area > 0.0 { ring.to_vec() } else { ring.iter().rev().copied().collect() };
+    let pts: Vec<Vec2> = ring.iter().map(|&(u, v)| uv(u, v)).collect();
+    let c = pts.iter().copied().sum::<Vec2>() / n as f32;
+    for i in 0..n {
+        let (ra, rb) = (ring[i], ring[(i + 1) % n]);
+        let (pa, pb) = (pts[i], pts[(i + 1) % n]);
+        // split where the top's slope changes so each piece is a convex quad
+        let mut cuts = vec![0.0f32, 1.0];
+        for s in 1..40 {
+            let f = s as f32 / 40.0;
+            let u = ra.0 + (rb.0 - ra.0) * f;
+            let (u0, u1) = (ra.0 + (rb.0 - ra.0) * (s - 1) as f32 / 40.0, u);
+            let d0 = top(u0 + 1e-3) - top(u0);
+            let d1 = top(u1 + 1e-3) - top(u1);
+            if (d0 - d1).abs() > 1e-4 {
+                cuts.push(f);
+            }
+        }
+        cuts.sort_by(f32::total_cmp);
+        let e = (pb - pa).normalize_or_zero();
+        let (mut p0, mut p1) = (pa, pb);
+        let mut right = Vec3::new(e.x, 0.0, e.y);
+        if e.perp().dot((pa + pb) / 2.0 - c) < 0.0 {
+            right = -right;
+            std::mem::swap(&mut p0, &mut p1);
+        }
+        let _ = (p0, p1);
+        for w in cuts.windows(2) {
+            let (f0, f1) = (w[0], w[1]);
+            let (q0, q1) = (pa.lerp(pb, f0), pa.lerp(pb, f1));
+            let (t0, t1) = (top(ra.0 + (rb.0 - ra.0) * f0), top(ra.0 + (rb.0 - ra.0) * f1));
+            if t0 - y0 < 0.05 && t1 - y0 < 0.05 {
+                continue;
+            }
+            let quad = [v3(q0, y0), v3(q1, y0), v3(q1, t1.max(y0)), v3(q0, t0.max(y0))];
+            let quad: Vec<Vec3> = if right.dot(Vec3::new(e.x, 0.0, e.y)) > 0.0 { quad.to_vec() } else { quad.iter().rev().copied().collect() };
+            wall_poly(g, k, &quad, right, Vec3::Y);
+        }
+        // slit windows in the sandstone: rows every 3.6 m, a few per bay, below the wall's top
+        if slits {
+            let len = (pb - pa).length();
+            let out = Vec3::new(right.z, 0.0, -right.x) * if right.dot(Vec3::new(e.x, 0.0, e.y)) > 0.0 { -1.0 } else { 1.0 };
+            let _ = out;
+            let nrm2 = e.perp() * if e.perp().dot((pa + pb) / 2.0 - c) < 0.0 { -1.0 } else { 1.0 };
+            let mut row = 0;
+            let mut y = y0 + 3.0;
+            while y < 40.0 {
+                let cnt = (len / 4.2) as i32;
+                for j in 0..cnt {
+                    let hsh = mix(i as u64 * 131 + row, j as u64, (pa.x * 10.0) as i64 as u64);
+                    if hsh % 100 < 45 {
+                        continue;
+                    }
+                    let f = (j as f32 + 0.3 + ((hsh >> 8) % 40) as f32 / 100.0) / cnt as f32;
+                    let u = ra.0 + (rb.0 - ra.0) * f;
+                    if y + 1.2 > top(u) {
+                        continue;
+                    }
+                    let p = pa.lerp(pb, f) + nrm2 * 0.03;
+                    let wdt = 1.2 + ((hsh >> 16) % 3) as f32 * 0.4;
+                    let q0 = p - e * (wdt / 2.0);
+                    let face = Vec3::new(nrm2.x, 0.0, nrm2.y);
+                    let r3 = Vec3::Y.cross(face) * -1.0;
+                    let r3 = if r3.dot(Vec3::new(e.x, 0.0, e.y)) >= 0.0 { Vec3::new(e.x, 0.0, e.y) } else { -Vec3::new(e.x, 0.0, e.y) };
+                    let o = if r3.dot(Vec3::new(e.x, 0.0, e.y)) >= 0.0 { q0 } else { q0 + e * wdt };
+                    g.quad(dark, v3(o, y), r3 * wdt, Vec3::Y * 0.4);
+                }
+                y += 3.6;
+                row += 1;
+            }
+        }
+    }
+    // roof: flat parts flat, sloped parts sloped (fan over the ring at the top heights)
+    let tops: Vec<Vec3> = ring.iter().map(|&(u, v)| v3(uv(u, v), top(u))).collect();
+    let flat = ring.iter().all(|r| (top(r.0) - top(ring[0].0)).abs() < 1e-3);
+    if flat {
+        poly_up(g, m.concrete, &tops);
+    } else {
+        for i in 1..n - 1 {
+            let tri = [tops[0], tops[i], tops[i + 1]];
+            let nn = (tri[1] - tri[0]).cross(tri[2] - tri[0]);
+            let tri = if nn.y < 0.0 { [tri[0], tri[2], tri[1]] } else { tri };
+            let nn = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
+            if nn.length_squared() < 0.5 {
+                continue;
+            }
+            let r = Vec3::Y.cross(nn).normalize_or(Vec3::X);
+            let up = nn.cross(r);
+            g.poly(k, &tri, r, up);
+        }
+    }
+    let hmax = ring.iter().map(|r| top(r.0)).fold(0.0f32, f32::max);
+    g.block_ring(&pts, y0, hmax);
+}
+
+/// The pale peach precast of the light towers and the office block (photos: about 0.8 of the white steel's value).
+fn pale_precast() -> Key {
+    Key::new(Mat::Surface("tjeneevfw"), [0.62, 0.47, 0.35]).tile(2.0)
+}
+
+/// The office block along the street south-west of the bowl, between the left-field side and the lantern tower
+/// (lidar massing; photos from across the trolley tracks). Laid out on a grid along the street: u runs east-south-east
+/// along it from (-95, 48), v toward it. A sandstone podium with planted roof terraces runs along the street; on it
+/// a pale office block with ribbon windows; at the west end a sandstone mesa whose west face slopes up to a 31 m top;
+/// a sandstone block steps up to the tower at the east end; terraces and a stair spine face the bowl. The sandstone
+/// is pierced by slit windows.
+fn sw_offices(g: &mut Geo, m: &Mats) {
+    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let a = 32f32.to_radians();
+    let (eu, ev) = (Vec2::new(a.cos(), a.sin()), Vec2::new(-a.sin(), a.cos()));
+    let uv = |u: f32, v: f32| Vec2::new(-95.0, 48.0) + eu * u + ev * v - HOME;
+    let pale = pale_precast();
+    // office glazing reads dark from the street: a dark glossy pane rather than see-through glass
+    let glass = Key::new(Mat::Plain(185), [0.028, 0.036, 0.045]);
+    let dark = Key::new(Mat::Plain(200), [0.05, 0.05, 0.055]);
+    let mull = Key::new(Mat::Plain(120), [0.55, 0.56, 0.56]);
+    // a prism over a ring of (u, v) with its top at height top(u) (flat, or sloped up to a ridge); walls face out
+    let flat = |h: f32| move |_u: f32| h;
+    // the west mesa and the mass behind it: their west faces slope up from the street
+    prism(g, m, &uv, m.sandstone, &[(6.0, -3.0), (42.0, -3.0), (42.0, 13.0), (37.0, 13.0), (26.0, 6.0), (18.0, 2.0), (6.0, 0.0)], 0.0, &|u| ((u - 6.0) * 1.55).clamp(0.5, 24.5), true);
+    // the higher box at the mesa's east corner (lidar: 31 m)
+    prism(g, m, &uv, m.sandstone, &[(27.0, 0.0), (40.0, 0.0), (40.0, 10.0), (27.0, 10.0)], 24.5, &flat(31.0), false);
+    prism(g, m, &uv, m.sandstone, &[(4.0, -12.0), (34.0, -12.0), (34.0, -3.0), (6.0, -3.0)], 0.0, &|u| ((u - 4.0) * 1.4).clamp(0.5, 25.0), true);
+    // the podium along the street
+    prism(g, m, &uv, m.sandstone, &[(42.0, 12.5), (108.0, 12.5), (108.0, 25.0), (72.0, 25.0), (60.0, 22.5), (48.0, 17.5), (42.0, 17.5)], 0.0, &flat(8.5), false);
+    // the pale office block on it, and its terraces toward the bowl
+    prism(g, m, &uv, pale, &[(42.0, 2.5), (93.0, 2.5), (93.0, 12.5), (42.0, 12.5)], 8.5, &flat(22.0), false);
+    // (kept clear of the stair cores that stand between the offices and the bowl)
+    prism(g, m, &uv, pale, &[(42.0, -8.0), (90.0, -8.0), (90.0, 2.5), (42.0, 2.5)], 0.0, &flat(8.5), false);
+    prism(g, m, &uv, pale, &[(45.0, -6.0), (90.0, -6.0), (90.0, 2.5), (45.0, 2.5)], 8.5, &flat(17.5), false);
+    prism(g, m, &uv, pale, &[(42.0, 2.5), (93.0, 2.5), (93.0, 12.5), (42.0, 12.5)], 0.0, &flat(8.5), false);
+    // the stair spine and the sandstone block stepping up to the tower
+    prism(g, m, &uv, m.sandstone, &[(90.0, -8.0), (94.0, -8.0), (94.0, 2.0), (90.0, 2.0)], 0.0, &flat(24.0), true);
+    prism(g, m, &uv, m.sandstone, &[(93.0, 0.0), (104.0, 0.0), (104.0, 12.5), (93.0, 12.5)], 0.0, &flat(26.0), true);
+    // the lantern tower's street face: a column of slit windows near its east end, and one tall slit at the top
+    {
+        let tr = tower_ring();
+        let (a, b) = (Vec2::new(-21.0, 112.0) - HOME, Vec2::new(-6.0, 121.0) - HOME);
+        let _ = tr;
+        let e = (b - a).normalize();
+        let n = Vec2::new(-e.y, e.x) * if Vec2::new(-e.y, e.x).dot(a - (Vec2::new(-10.0, 111.0) - HOME)) > 0.0 { 1.0 } else { -1.0 };
+        let r3 = Vec3::new(e.x, 0.0, e.y);
+        let r3 = if r3.cross(Vec3::Y).dot(Vec3::new(n.x, 0.0, n.y)) > 0.0 { r3 } else { -r3 };
+        let len = (b - a).length();
+        for (f, y, w, h) in [(0.78, 7.5, 2.4, 0.5), (0.78, 11.5, 2.4, 0.5), (0.78, 15.5, 2.4, 0.5), (0.78, 19.5, 2.4, 0.5), (0.78, 23.5, 2.4, 0.5), (0.86, 27.0, 0.7, 3.0)] {
+            let c = a + e * (len * f) + n * 0.03;
+            let o = if r3.dot(Vec3::new(e.x, 0.0, e.y)) > 0.0 { c - e * (w / 2.0) } else { c + e * (w / 2.0) };
+            g.quad(dark, v3(o, y), r3 * w, Vec3::Y * h);
+        }
+    }
+    // the office block's street face: a recessed loggia floor on the podium, then ribbon windows floor by floor
+    let (fa, fb) = (uv(42.0, 12.5), uv(93.0, 12.5));
+    let out = ev * 0.03;
+    let along = (fb - fa).normalize();
+    let len = (fb - fa).length();
+    let face_r = Vec3::new(along.x, 0.0, along.y);
+    // the face points +v (toward the street): right x up must point there
+    let face_r = if face_r.cross(Vec3::Y).dot(Vec3::new(ev.x, 0.0, ev.y)) > 0.0 { face_r } else { -face_r };
+    let o = if face_r.dot(Vec3::new(along.x, 0.0, along.y)) > 0.0 { fa } else { fb };
+    g.quad(dark, v3(o + out, 9.1), face_r * len, Vec3::Y * 2.6);
+    let mut u = 3.0;
+    while u < len - 1.0 {
+        let p = fa + along * u + ev * 0.6;
+        g.member(pale, v3(p, 8.5), v3(p, 12.0), 0.6, 0.6, Vec3::new(ev.x, 0.0, ev.y));
+        u += 6.0;
+    }
+    for (y0, y1) in [(12.6, 14.7), (16.1, 18.2), (19.5, 21.1)] {
+        // wide windows between piers: 5.2 m of glass in three lights, 1.4 m piers
+        let mut u = 0.9;
+        while u + 5.2 < len {
+            let q = if face_r.dot(Vec3::new(along.x, 0.0, along.y)) > 0.0 { fa + along * u } else { fa + along * (u + 5.2) };
+            g.quad(glass, v3(q + out, y0), face_r * 5.2, Vec3::Y * (y1 - y0));
+            for k in 1..3 {
+                let p = fa + along * (u + 5.2 * k as f32 / 3.0) + ev * 0.06;
+                g.member(mull, v3(p, y0), v3(p, y1), 0.08, 0.06, Vec3::new(ev.x, 0.0, ev.y));
+            }
+            u += 6.6;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- east building
+
+/// Rows of wide windows on a wall from `a` to `b` facing `out`: dark glossy panes `bay` wide between `pier` wide
+/// piers, each row (sill, head) with a projecting dark sunshade over it.
+fn window_rows(g: &mut Geo, a: Vec2, b: Vec2, out: Vec2, rows: &[(f32, f32)], bay: f32, pier: f32, shade: bool) {
+    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let pane = Key::new(Mat::Plain(185), [0.028, 0.036, 0.045]);
+    let spandrel = Key::new(Mat::Plain(200), [0.2, 0.215, 0.22]);
+    let frame = Key::new(Mat::Plain(140), [0.5, 0.52, 0.53]);
+    let len = (b - a).length();
+    let e = (b - a) / len;
+    let o3 = Vec3::new(out.x, 0.0, out.y);
+    let mut r3 = Vec3::new(e.x, 0.0, e.y);
+    let flip = r3.cross(Vec3::Y).dot(o3) < 0.0;
+    if flip {
+        r3 = -r3;
+    }
+    let n = ((len - pier) / (bay + pier)).floor().max(1.0);
+    let pad = (len - n * bay - (n - 1.0) * pier) / 2.0;
+    for &(y0, y1) in rows {
+        for i in 0..n as i32 {
+            let u = pad + i as f32 * (bay + pier);
+            let q = a + e * if flip { u + bay } else { u } + out * 0.04;
+            let split = y0 + (y1 - y0) * 0.34;
+            g.quad(spandrel, v3(q, y0), r3 * bay, Vec3::Y * (split - y0));
+            g.quad(pane, v3(q, split), r3 * bay, Vec3::Y * (y1 - split));
+            // mullions at the thirds
+            for k in 1..3 {
+                let p = a + e * (u + bay * k as f32 / 3.0) + out * 0.07;
+                g.member(frame, v3(p, y0), v3(p, y1), 0.07, 0.06, o3);
+            }
+            if shade {
+                let (p0, p1) = (a + e * (u - 0.15) + out * 0.45, a + e * (u + bay + 0.15) + out * 0.45);
+                g.member(frame, v3(p0, y1 + 0.12), v3(p1, y1 + 0.12), 0.9, 0.1, Vec3::Y);
+            }
+        }
+    }
+}
+
+/// The sandstone building along the street east of the home plate gate (lidar massing; photos from the plaza and
+/// from across the tracks): a slab 18 m deep parallel to the street, 24 m high at its south-west end stepping to 28
+/// and 31 m, then 22 m; a low arcade along the street; rows of wide shaded windows; planters along the roof edge.
+/// Frame: a runs north-east along the street from (66, 74), b in toward the bowl.
+fn east_building(g: &mut Geo, m: &Mats) {
+    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let (t, n) = (Vec2::new(1.0, -1.0).normalize(), Vec2::new(-1.0, -1.0).normalize());
+    let uv = |a: f32, b: f32| Vec2::new(66.0, 74.0) + t * a + n * b - HOME;
+    let flat = |h: f32| move |_u: f32| h;
+    let pale = pale_precast();
+    // the masses (a0, a1, b0, b1, height)
+    let blocks = [(-12.0, 5.0, 2.0, 20.0, 24.0), (5.0, 12.0, 2.0, 20.0, 28.0), (12.0, 41.0, 2.0, 13.0, 31.0), (12.0, 41.0, 13.0, 20.0, 23.0), (41.0, 56.0, 4.0, 20.0, 22.0)];
+    for &(a0, a1, b0, b1, h) in &blocks {
+        prism(g, m, &uv, m.sandstone, &[(a0, b0), (a1, b0), (a1, b1), (a0, b1)], 0.0, &flat(h), false);
+    }
+    // the arcade along the street: a pale canopy slab on square piers
+    prism(g, m, &uv, pale, &[(-6.0, -2.5), (38.0, -2.5), (38.0, 2.0), (-6.0, 2.0)], 7.6, &flat(8.6), false);
+    let mut a = -5.0;
+    while a <= 37.0 {
+        g.member(pale, v3(uv(a, -2.0), 0.0), v3(uv(a, -2.0), 7.6), 0.7, 0.7, Vec3::new(n.x, 0.0, n.y));
+        a += 6.0;
+    }
+    // windows: the street face and the south-west end, floor by floor above the arcade
+    let out_street = -n;
+    for &(a0, a1, b0, _b1, h) in &blocks {
+        let rows: Vec<(f32, f32)> = (0..8).map(|k| 9.9 + k as f32 * 5.3).filter(|&y| y + 3.6 < h - 2.0).map(|y| (y, y + 3.6)).collect();
+        window_rows(g, uv(a0, b0), uv(a1, b0), out_street, &rows, 4.6, 1.5, true);
+    }
+    let rows = [(9.9, 13.5), (15.2, 18.8)];
+    window_rows(g, uv(-12.0, 3.0), uv(-12.0, 19.0), -t, &rows, 4.2, 1.2, true);
+    // planters along the roof edges spilling bougainvillea, as in the photos
+    let leaf = Key::new(Mat::Plain(220), [0.05, 0.13, 0.04]);
+    for &(a0, a1, b0, _b1, h) in &blocks {
+        let cnt = ((a1 - a0) / 0.5) as i32;
+        for j in 0..cnt {
+            let hsh = mix(j as u64, (a0 * 10.0) as i64 as u64, 311);
+            let drop = (hsh % 1000) as f32 / 1000.0;
+            let c = uv(a0 + (j as f32 + 0.5) * 0.5, b0 - 0.15);
+            let sz = 0.16 + 0.14 * drop;
+            let col = if hsh % 2 == 0 { leaf } else { Key::new(Mat::Plain(220), [0.3 + 0.12 * drop, 0.015, 0.06]) };
+            let y = h - 0.15 - drop * 0.5;
+            g.cuboid(col, Vec3::new(c.x - sz, y, c.y - sz), Vec3::new(c.x + sz, y + sz * 1.5, c.y + sz));
+        }
+    }
 }
