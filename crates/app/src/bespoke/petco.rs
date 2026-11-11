@@ -243,8 +243,11 @@ fn mats() -> Mats {
         stucco: s("tjeneevfw", [1.1, 0.92, 0.7]).tile(2.0),
         sandstone: s("pt_ashlar_sandstone", [1.0, 1.0, 1.0]).tile(3.0),
         steel: Key::new(Mat::Plain(110), [0.86, 0.87, 0.87]).wear(wear::METAL),
-        navy: Key::new(Mat::Plain(150), [0.035, 0.055, 0.12]),
-        pad: Key::new(Mat::Plain(190), [0.03, 0.06, 0.15]),
+        // the park's navy, about half as light again as the seats (measured on a banner beside them in an overcast
+        // photo). Dark paints are kept matt: with any gloss the sun's highlight outweighs so dark a colour, and the
+        // fascia and the wall turn pale grey whenever the sun is behind the viewer
+        navy: Key::new(Mat::Plain(235), [0.02, 0.031, 0.07]),
+        pad: Key::new(Mat::Plain(242), [0.018, 0.032, 0.08]),
         led: Key::new(Mat::Light, [0.25, 0.45, 1.1]),
         glass: Key::new(Mat::Glass, [0.55, 0.62, 0.66]),
         yellow: Key::new(Mat::Plain(120), [0.95, 0.72, 0.05]),
