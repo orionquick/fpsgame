@@ -1845,7 +1845,7 @@ fn home_towers(g: &mut Geo, m: &Mats) {
     lantern_tower(g, m);
     // the lantern: a dark steel mesh cage on the tower's upper part
     let mesh = Key::new(Mat::Plain(100), [0.16, 0.16, 0.15]).wear(wear::METAL);
-    let (y0, y1) = (36.5, 41.5);
+    let (y0, y1) = (36.5, 40.6);
     let tr = lantern_ring();
     for i in 0..4 {
         let (a, b) = (tr[i], tr[(i + 1) % 4]);
