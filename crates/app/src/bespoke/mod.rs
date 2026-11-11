@@ -61,7 +61,8 @@ fn k(mat: &'static str, tint: [f32; 3]) -> Key {
 /// `y` is the finished floor level, `ceil` the ceiling height above it.
 /// `loft`: open timber-ceilinged floor: painted core walls, polished concrete, ceilings only inside the core.
 /// `wood_core`: clad the core in dark timber (the cafe floor), else painted.
-pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool, wood_core: bool) {
+/// `cut`: openings in this floor (a feature stair's well) that the floor finishes stop at.
+pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool, wood_core: bool, cut: &[Rect]) {
     let white = [1.4, 1.4, 1.36];
     for (n, w) in p.walls.iter().enumerate() {
         let (mat, t, tint) = if w.core { (m::CORE_WALL, CORE_T, [1.05, 1.06, 1.08]) } else { (m::DRYWALL, PARTITION_T, white) };
@@ -101,7 +102,7 @@ pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool,
             Use::Corridor | Use::Lobby => k(m::CORRIDOR_FLOOR, [1.0, 1.0, 1.0]),
             Use::Restroom => k(m::TILE_FLOOR, [1.0, 1.0, 1.0]),
             Use::Hall => {
-                stone_slabs(g, r.r, y, seed ^ n as u64);
+                stone_slabs(g, r.r, y, seed ^ n as u64, cut);
                 Key::new(Mat::Plain(0), [0.0; 3])
             }
             Use::Storage | Use::Riser => k(m::CONCRETE, [0.7, 0.7, 0.7]),
@@ -109,7 +110,9 @@ pub fn interior(g: &mut Geo, p: &Plan, y: f32, ceil: f32, seed: u64, loft: bool,
         };
         let rr = r.r;
         if r.kind != Use::Hall {
-            g.quad(floor, Vec3::new(rr.x0, y, rr.z1), Vec3::X * rr.w(), Vec3::NEG_Z * rr.d());
+            for q in minus(rr, cut) {
+                g.quad(floor, Vec3::new(q.x0, y, q.z1), Vec3::X * q.w(), Vec3::NEG_Z * q.d());
+            }
         }
         // ceiling (faces down); a loft only closes the rooms inside the core
         let closed = matches!(r.kind, Use::Restroom | Use::Riser | Use::Storage);
@@ -228,11 +231,13 @@ pub fn lift_doors(g: &mut Geo, e: Rect, y: f32) {
 /// Honed concrete slabs on the building grid (the factory hall's floor): ~1.5 m stones with hairline light joints.
 /// Each slab is its own quad inset over a pale grout plane, with its own patch of the texture, quarter-turn and
 /// slight tint so the floor reads as laid stone rather than one printed sheet.
-fn stone_slabs(g: &mut Geo, r: plan::Rect, y: f32, seed: u64) {
+fn stone_slabs(g: &mut Geo, r: plan::Rect, y: f32, seed: u64, cut: &[Rect]) {
     const SLAB: f32 = 1.52;
     const JOINT: f32 = 0.0025;
     let grout = Key::new(Mat::Plain(200), [0.8, 0.79, 0.74]).inside();
-    g.quad(grout, Vec3::new(r.x0, y - 0.002, r.z1), Vec3::X * r.w(), Vec3::NEG_Z * r.d());
+    for q in minus(r, cut) {
+        g.quad(grout, Vec3::new(q.x0, y - 0.002, q.z1), Vec3::X * q.w(), Vec3::NEG_Z * q.d());
+    }
     // the texture averages ~0.13 (dark, warm); honed light concrete is ~0.35-0.4
     // cream-grey (as in the photos): the texture is warm brown, so lift green and blue a little less than red
     let tints = [[3.05, 3.3, 3.25], [3.2, 3.42, 3.35], [2.9, 3.15, 3.1], [3.12, 3.35, 3.22]];
@@ -250,9 +255,42 @@ fn stone_slabs(g: &mut Geo, r: plan::Rect, y: f32, seed: u64) {
             let (a, b) = (x0 + if i > 0 { JOINT } else { 0.0 }, z0 + if j > 0 { JOINT } else { 0.0 });
             let (c, d) = (x1 - if x1 < r.x1 { JOINT } else { 0.0 }, z1 - if z1 < r.z1 { JOINT } else { 0.0 });
             let uv = [rnd(seed, h ^ 0xa1) * 7.0, rnd(seed, h ^ 0xb2) * 7.0];
-            g.quad_uv(key, Vec3::new(a, y, d), Vec3::X * (c - a), Vec3::NEG_Z * (d - b), uv, (rnd(seed, h ^ 0xc3) * 4.0) as u32);
+            let turns = (rnd(seed, h ^ 0xc3) * 4.0) as u32;
+            for q in minus(Rect::new(a, b, c, d), cut) {
+                // a slab cut by an opening keeps its own patch of the texture
+                let uq = [uv[0] + (q.x0 - a), uv[1] + (d - q.z1)];
+                g.quad_uv(key, Vec3::new(q.x0, y, q.z1), Vec3::X * q.w(), Vec3::NEG_Z * q.d(), uq, turns);
+            }
         }
     }
+}
+
+/// The parts of `r` outside every rectangle in `cut` (a grid split on the cut edges).
+fn minus(r: Rect, cut: &[Rect]) -> Vec<Rect> {
+    let hit = |c: &Rect| c.x0 < r.x1 && c.x1 > r.x0 && c.z0 < r.z1 && c.z1 > r.z0;
+    if !cut.iter().any(hit) {
+        return vec![r];
+    }
+    let mut xs = vec![r.x0, r.x1];
+    let mut zs = vec![r.z0, r.z1];
+    for c in cut.iter().filter(|c| hit(c)) {
+        xs.extend([c.x0.clamp(r.x0, r.x1), c.x1.clamp(r.x0, r.x1)]);
+        zs.extend([c.z0.clamp(r.z0, r.z1), c.z1.clamp(r.z0, r.z1)]);
+    }
+    for v in [&mut xs, &mut zs] {
+        v.sort_by(f32::total_cmp);
+        v.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+    }
+    let mut out = vec![];
+    for i in 0..xs.len() - 1 {
+        for j in 0..zs.len() - 1 {
+            let (cx, cz) = ((xs[i] + xs[i + 1]) / 2.0, (zs[j] + zs[j + 1]) / 2.0);
+            if !cut.iter().any(|c| cx > c.x0 && cx < c.x1 && cz > c.z0 && cz < c.z1) {
+                out.push(Rect::new(xs[i], zs[j], xs[i + 1], zs[j + 1]));
+            }
+        }
+    }
+    out
 }
 
 pub(crate) fn rnd(seed: u64, i: u64) -> f32 {

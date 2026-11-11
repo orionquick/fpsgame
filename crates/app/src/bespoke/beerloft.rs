@@ -79,6 +79,8 @@ pub fn build(g: &mut Geo, f: &mut Furnisher, s: &Site) {
     ducts(g, s);
     track_lights(g, s);
     rug(g, s);
+    feature_stair(g, s);
+    mural_wall(g, s);
 }
 
 /// Places a model with a tint and uniform scale.
@@ -825,6 +827,116 @@ fn track_lights(g: &mut Geo, s: &Site) {
             g.tube(black(), a, a + aim * 0.16, 0.045, 10);
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// feature stair and mural (back right of the photo)
+
+/// The stair starts by the bar's end and rises south along the mural wall to the first floor, where you step
+/// off to the west (it passes under the girder with headroom; the opening is clear of girders).
+const STAIR_X: (f32, f32) = (20.9, 22.55);
+const STAIR_Z: (f32, f32) = (20.6, 29.0); // (bottom, top)
+/// The black mural wall, against the west faces of the column line behind the stair.
+const MURAL_X: f32 = 22.6;
+
+/// The opening in the first floor over the stair's upper end (headroom over the treads).
+pub fn stair_hole() -> Rect {
+    Rect::new(STAIR_X.0 - 0.1, 25.6, MURAL_X, 29.6)
+}
+
+fn glass_rail(g: &mut Geo, a: Vec3, b: Vec3, h: f32) {
+    // a run of glass balustrade from a to b (bottom edge), with a wood cap rail and black steel shoe
+    let d = b - a;
+    let side = Vec3::new(-d.z, 0.0, d.x).normalize();
+    let clear = Key::new(Mat::Glass, [0.8, 0.86, 0.84]).rough(0.12);
+    g.quad(clear, a + Vec3::Y * 0.05, d, Vec3::Y * h);
+    let dir_n = d.normalize();
+    obox(g, oak(), (a + b) * 0.5 + Vec3::Y * (h + 0.06), side, Vec3::Y, dir_n, Vec3::new(0.035, 0.022, d.length() * 0.5 + 0.03));
+    obox(g, black(), (a + b) * 0.5 + Vec3::Y * 0.03, side, Vec3::Y, dir_n, Vec3::new(0.03, 0.03, d.length() * 0.5));
+}
+
+/// Feature stair as in the photo: deep black steel stringers, warm oak treads with a lit strip under each nosing,
+/// open risers, a glass balustrade with an oak cap rail on the open side, an oak handrail on the wall.
+fn feature_stair(g: &mut Geo, s: &Site) {
+    let y = s.y;
+    let rise_total = 6.0;
+    let n = 33;
+    let (bot_z, top_z) = STAIR_Z;
+    let run = top_z - bot_z;
+    let (rise, tread) = (rise_total / n as f32, run / n as f32);
+    let (x0, x1) = STAIR_X;
+    // golden oak treads, lit from the nosing strips, as in the photo
+    let oakk = ins(Key::new(Mat::Surface("pht_oak_veneer_01"), [1.4, 1.95, 1.3]).tile(0.8).rough(0.45));
+    let led = Key::new(Mat::Light, [0.8, 0.66, 0.26]);
+    for i in 0..n {
+        let za = bot_z + tread * i as f32;
+        let zb = za + tread;
+        let top = y + rise * (i + 1) as f32;
+        g.cuboid(oakk, Vec3::new(x0 + 0.02, top - 0.05, za), Vec3::new(x1 - 0.02, top, zb + 0.02));
+        // lit strip under the nosing (the front edge faces north, down the flight)
+        g.cuboid(led, Vec3::new(x0 + 0.05, top - 0.065, za), Vec3::new(x1 - 0.05, top - 0.05, za + 0.015));
+        g.block_aabb(Vec3::new(x0, top - 0.2, za), Vec3::new(x1, top, zb));
+    }
+    let slope = Vec3::new(0.0, rise_total, run).normalize();
+    let len = (rise_total * rise_total + run * run).sqrt();
+    let perp = slope.cross(Vec3::X).normalize();
+    let steel = ins(Key::new(Mat::Plain(90), [0.03, 0.03, 0.033]));
+    for x in [x0 - 0.03, x1 + 0.03] {
+        let mid = Vec3::new(x, y + rise_total * 0.5 - 0.14, (bot_z + top_z) * 0.5);
+        obox(g, steel, mid, Vec3::X, perp, slope, Vec3::new(0.022, 0.2, len * 0.5));
+    }
+    // glass balustrade on the open (west) side in sloped panels with black posts; oak cap rail
+    let clear = Key::new(Mat::Glass, [0.8, 0.86, 0.84]).rough(0.12);
+    let panels = 6;
+    for k in 0..panels {
+        let (t0, t1) = (k as f32 / panels as f32, (k + 1) as f32 / panels as f32);
+        let pa = Vec3::new(x0 - 0.06, y + 0.05 + rise_total * t0, bot_z + run * t0);
+        let pb = Vec3::new(x0 - 0.06, y + 0.05 + rise_total * t1, bot_z + run * t1);
+        g.poly(clear, &[pa, pb, pb + Vec3::Y, pa + Vec3::Y], (pb - pa).normalize(), Vec3::Y);
+        g.tube(black(), pa, pa + Vec3::Y * 1.0, 0.012, 6);
+    }
+    let rail_a = Vec3::new(x0 - 0.06, y + 1.08, bot_z);
+    let rail_b = Vec3::new(x0 - 0.06, y + rise_total + 1.08, top_z);
+    obox(g, oak(), (rail_a + rail_b) * 0.5, Vec3::X, perp, slope, Vec3::new(0.035, 0.022, len * 0.5));
+    g.tube(oak(), Vec3::new(MURAL_X - 0.06, y + 0.9, bot_z), Vec3::new(MURAL_X - 0.06, y + rise_total + 0.9, top_z), 0.022, 8);
+    // the balustrade is a wall to players; keep them out from under the flight
+    g.block_aabb(Vec3::new(x0 - 0.09, y, bot_z + 1.2), Vec3::new(x0 - 0.03, y + rise_total + 1.1, top_z));
+}
+
+/// Glass guard round the stair opening on the first floor (west, south and east sides).
+pub fn stair_guard(g: &mut Geo, y: f32) {
+    let h = stair_hole();
+    // north and east sides closed; the west side leaves the stair's top open to step off
+    let runs = [
+        (Vec3::new(h.x0, y, h.z0), Vec3::new(h.x1, y, h.z0)),
+        (Vec3::new(h.x1, y, h.z0), Vec3::new(h.x1, y, h.z1)),
+        (Vec3::new(h.x0, y, h.z0), Vec3::new(h.x0, y, STAIR_Z.1 - 1.2)),
+    ];
+    for (p, q) in runs {
+        glass_rail(g, p, q, 1.0);
+        g.block_aabb(p.min(q) - Vec3::new(0.03, 0.0, 0.03), p.max(q) + Vec3::new(0.03, 1.1, 0.03));
+    }
+}
+
+/// The black wall behind the stair with a big black-and-white mural of an old ball team (SVG), and an exit sign.
+fn mural_wall(g: &mut Geo, s: &Site) {
+    let y = s.y;
+    let (z0, z1) = (BAR_Z.1 + 0.05, 29.6);
+    let blackp = ins(Key::new(Mat::Plain(200), [0.025, 0.025, 0.027]));
+    g.solid(blackp, Vec3::new(MURAL_X, y, z0), Vec3::new(MURAL_X + 0.15, s.deck_b, z1));
+    // nearly the wall's full height, fading into the black at its edges
+    let mural = ins(Key::new(Mat::Surface("scr_mural"), [0.8, 0.8, 0.8]).tile(8.2).rough(0.85));
+    g.decal(mural, Vec3::new(MURAL_X - 0.005, y + 0.7, z0 + 0.5 + 8.2), Vec3::NEG_Z * 8.2, Vec3::Y * 4.6, 8.2);
+    // spotlights on track along the wall, washing the mural
+    for zc in [z0 + 2.0, z0 + 4.4, z0 + 6.8] {
+        let p = Vec3::new(MURAL_X - 1.4, s.deck_b - 0.6, zc);
+        g.tube(black(), p, p + Vec3::new(0.12, -0.1, 0.0), 0.045, 10);
+        g.downlight(Vec3::new(MURAL_X - 0.8, y + 4.2, zc), 4.2, [0.55, 0.47, 0.36]);
+    }
+    // exit sign over the passage at the stair's foot
+    let p = Vec3::new(MURAL_X - 0.06, y + 2.5, z1 - 0.9);
+    g.cuboid(ins(Key::new(Mat::Plain(120), [0.85, 0.85, 0.84])), p - Vec3::new(0.05, 0.12, 0.17), p + Vec3::new(0.0, 0.12, 0.17));
+    g.quad(Key::new(Mat::Light, [0.05, 0.4, 0.12]), p + Vec3::new(-0.052, -0.08, 0.14), Vec3::NEG_Z * 0.28, Vec3::Y * 0.16);
 }
 
 /// The stencilled concrete rug (an SVG decal) under the lounge: its long side across the room (along the bar),

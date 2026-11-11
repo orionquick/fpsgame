@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Wall mural behind the bar's feature stair (after the interior photo): a big black-and-white print in the manner
+  of an old team photograph - three ballplayers in baggy uniforms and caps posed on the grass in front of a
+  wooden grandstand, with a vignette and film grain. Generic figures: no real people, names or team marks.
+  Its edges fade into the black wall. Rendered by `fps svgtex` into the wall surface (8.2 x 4.6 m).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n"/>
+      <feColorMatrix type="saturate" values="0" in="n" result="g"/>
+      <feComponentTransfer in="g" result="g2"><feFuncA type="table" tableValues="0 0.16"/></feComponentTransfer>
+      <feBlend in="SourceGraphic" in2="g2" mode="multiply"/>
+    </filter>
+    <radialGradient id="vig" cx="0.5" cy="0.5" r="0.72" gradientTransform="translate(0.5 0.5) scale(1 1.15) translate(-0.5 -0.5)">
+      <stop offset="0.5" stop-color="#070708" stop-opacity="0"/>
+      <stop offset="0.8" stop-color="#070708" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#070708" stop-opacity="1"/>
+    </radialGradient>
+    <!-- side shading on faces, as in an old print -->
+    <linearGradient id="face" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a4a49e"/><stop offset="0.6" stop-color="#8a8a85"/><stop offset="1" stop-color="#55554f"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d8d8d4"/><stop offset="1" stop-color="#bdbdb8"/>
+    </linearGradient>
+    <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7d7d78"/><stop offset="1" stop-color="#4d4d4a"/>
+    </linearGradient>
+    <linearGradient id="wool" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b9b9b3"/><stop offset="0.5" stop-color="#e2e2dc"/><stop offset="1" stop-color="#a9a9a3"/>
+    </linearGradient>
+    <!-- one player: flat cap, collared shirt, belted baggy trousers, socks, arms folded -->
+    <g id="player">
+      <path d="M-70,-470 C-70,-520 70,-520 70,-470 L85,-455 L-85,-455 Z" fill="#2a2a28"/>
+      <rect x="-92" y="-462" width="184" height="16" rx="6" fill="#1f1f1d"/>
+      <ellipse cx="0" cy="-400" rx="56" ry="66" fill="url(#face)"/>
+      <path d="M-56,-420 C-50,-470 50,-470 56,-420 C40,-440 -40,-440 -56,-420 Z" fill="#3a3a37" opacity="0.6"/>
+      <path d="M-40,-385 C-30,-370 30,-370 40,-385" stroke="#3a3a37" stroke-width="5" fill="none"/>
+      <rect x="-24" y="-345" width="48" height="30" fill="#7f7f7a"/>
+      <path d="M-150,-300 C-130,-330 -60,-335 0,-330 C60,-335 130,-330 150,-300 L135,-90 L-135,-90 Z" fill="url(#wool)"/>
+      <path d="M-40,-332 L0,-300 L40,-332 L28,-338 L0,-318 L-28,-338 Z" fill="#9a9a95"/>
+      <path d="M-150,-230 C-60,-200 60,-200 150,-230 L150,-170 C60,-140 -60,-140 -150,-170 Z" fill="#c9c9c3"/>
+      <path d="M-130,-205 C-60,-185 60,-185 130,-205" stroke="#8c8c87" stroke-width="10" fill="none"/>
+      <rect x="-138" y="-100" width="276" height="24" fill="#2d2d2b"/>
+      <path d="M-135,-78 L-120,140 L-20,140 L-5,-60 L5,-60 L20,140 L120,140 L135,-78 Z" fill="url(#wool)"/>
+      <rect x="-118" y="135" width="96" height="120" fill="#3a3a37"/><rect x="22" y="135" width="96" height="120" fill="#3a3a37"/>
+      <rect x="-118" y="170" width="96" height="14" fill="#cfcfca"/><rect x="22" y="170" width="96" height="14" fill="#cfcfca"/>
+      <path d="M-125,250 L-10,250 L-5,285 L-140,285 Z" fill="#141413"/><path d="M15,250 L130,250 L140,285 L10,285 Z" fill="#141413"/>
+    </g>
+  </defs>
+  <g filter="url(#grain)">
+    <rect width="1600" height="900" fill="url(#sky)"/>
+    <!-- wooden grandstand: tiered benches and posts, a roof line -->
+    <rect x="0" y="210" width="1600" height="300" fill="#6c6c68"/>
+    <g fill="#8a8a85">
+      <rect x="0" y="250" width="1600" height="14"/><rect x="0" y="300" width="1600" height="14"/>
+      <rect x="0" y="350" width="1600" height="14"/><rect x="0" y="400" width="1600" height="14"/><rect x="0" y="450" width="1600" height="14"/>
+    </g>
+    <g fill="#3e3e3b">
+      <rect x="120" y="190" width="18" height="320"/><rect x="420" y="190" width="18" height="320"/><rect x="720" y="190" width="18" height="320"/>
+      <rect x="1020" y="190" width="18" height="320"/><rect x="1320" y="190" width="18" height="320"/>
+    </g>
+    <rect x="0" y="180" width="1600" height="22" fill="#2e2e2c"/>
+    <!-- crowd: a scatter of pale faces and dark hats in the stands -->
+    <g fill="#a9a9a4" opacity="0.8">
+      <circle cx="60" cy="285" r="9"/><circle cx="190" cy="335" r="9"/><circle cx="260" cy="285" r="9"/><circle cx="330" cy="385" r="9"/>
+      <circle cx="510" cy="335" r="9"/><circle cx="590" cy="435" r="9"/><circle cx="640" cy="285" r="9"/><circle cx="820" cy="385" r="9"/>
+      <circle cx="900" cy="285" r="9"/><circle cx="980" cy="435" r="9"/><circle cx="1100" cy="335" r="9"/><circle cx="1180" cy="385" r="9"/>
+      <circle cx="1250" cy="285" r="9"/><circle cx="1400" cy="435" r="9"/><circle cx="1480" cy="335" r="9"/><circle cx="1550" cy="385" r="9"/>
+    </g>
+    <rect x="0" y="505" width="1600" height="395" fill="url(#grass)"/>
+    <!-- the three players, posed -->
+    <use href="#player" transform="translate(470,620) scale(1.02)"/>
+    <use href="#player" transform="translate(800,610) scale(1.08)"/>
+    <use href="#player" transform="translate(1130,625) scale(1.0)"/>
+    <!-- a bat leaning on the right-hand player, a mitt at the left one's feet -->
+    <path d="M1255,880 L1300,520 L1312,520 L1270,880 Z" fill="#5a5a56"/>
+    <ellipse cx="350" cy="880" rx="55" ry="26" fill="#4a4a46"/>
+    <rect width="1600" height="900" fill="url(#vig)"/>
+  </g>
+</svg>

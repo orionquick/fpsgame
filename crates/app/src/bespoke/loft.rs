@@ -85,7 +85,8 @@ impl Spec {
 
 /// The structure over a floor at `y` (storey `h`): deck, joists, girders, columns, ducts, sprinklers, lights.
 /// `office_lights`: hang the linear LED pendants (the cafe floor uses warm pendants instead).
-pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights: bool, ducts: bool) {
+/// `holes`: openings in the floor above (stairs, lift): the deck and joists stop short of them, with trimmers.
+pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights: bool, ducts: bool, holes: &[Rect]) {
     let (x0, x1, z0, z1) = (s.t, s.w - s.t, s.t, s.d - s.t);
     let top = y + h; // top of the deck above = next finished floor
     let deck_b = top - DECK;
@@ -93,8 +94,35 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights
     let girder_b = deck_b - GIRDER_D;
     // plank deck underside (faces down) and its top edge is the floor above
     // boards run along x (across the joists): texture V along x, face down
-    let (pa, pb, pc, pd) = (Vec3::new(x0, deck_b, z0), Vec3::new(x1, deck_b, z0), Vec3::new(x1, deck_b, z1), Vec3::new(x0, deck_b, z1));
-    g.poly(deck(), &[pa, pb, pc, pd], Vec3::NEG_Z, Vec3::X);
+    // split round the openings into cells, each a down-facing quad
+    let mut xs = vec![x0, x1];
+    let mut zs = vec![z0, z1];
+    for hl in holes {
+        xs.extend([hl.x0.clamp(x0, x1), hl.x1.clamp(x0, x1)]);
+        zs.extend([hl.z0.clamp(z0, z1), hl.z1.clamp(z0, z1)]);
+    }
+    for v in [&mut xs, &mut zs] {
+        v.sort_by(f32::total_cmp);
+        v.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+    }
+    let in_hole = |x: f32, z: f32| holes.iter().any(|hl| x > hl.x0 && x < hl.x1 && z > hl.z0 && z < hl.z1);
+    for i in 0..xs.len() - 1 {
+        for j in 0..zs.len() - 1 {
+            if in_hole((xs[i] + xs[i + 1]) / 2.0, (zs[j] + zs[j + 1]) / 2.0) {
+                continue;
+            }
+            let (ax, bx, az, bz) = (xs[i], xs[i + 1], zs[j], zs[j + 1]);
+            let (pa, pb, pc, pd) = (Vec3::new(ax, deck_b, az), Vec3::new(bx, deck_b, az), Vec3::new(bx, deck_b, bz), Vec3::new(ax, deck_b, bz));
+            g.poly(deck(), &[pa, pb, pc, pd], Vec3::NEG_Z, Vec3::X);
+        }
+    }
+    // trimmer and header timbers round each opening
+    for hl in holes {
+        g.timber(timber(), Vec3::new(hl.x0 - 0.1, joist_b, hl.z0 - 0.1), Vec3::new(hl.x1 + 0.1, deck_b, hl.z0));
+        g.timber(timber(), Vec3::new(hl.x0 - 0.1, joist_b, hl.z1), Vec3::new(hl.x1 + 0.1, deck_b, hl.z1 + 0.1));
+        g.timber(timber(), Vec3::new(hl.x0 - 0.1, joist_b, hl.z0), Vec3::new(hl.x0, deck_b, hl.z1));
+        g.timber(timber(), Vec3::new(hl.x1, joist_b, hl.z0), Vec3::new(hl.x1 + 0.1, deck_b, hl.z1));
+    }
     // girders along x on the pier lines
     for &z in &s.girders {
         g.timber(timber(), Vec3::new(x0, girder_b, z - 0.16), Vec3::new(x1, deck_b, z + 0.16));
@@ -108,7 +136,16 @@ pub fn structure(g: &mut Geo, s: &Spec, y: f32, h: f32, seed: u64, office_lights
         let (za, zb) = (lines[k] + if k == 0 { 0.0 } else { 0.16 }, lines[k + 1] - if k + 2 == lines.len() { 0.0 } else { 0.16 });
         for i in 0..=n {
             let x = x0 + 0.3 + i as f32 * (x1 - x0 - 0.6) / n as f32;
-            g.timber(timber(), Vec3::new(x - 0.04, joist_b, za), Vec3::new(x + 0.04, deck_b, zb));
+            // a joist running into an opening stops at its trimmers
+            let mut spans = vec![(za, zb)];
+            for hl in holes.iter().filter(|hl| x > hl.x0 - 0.1 && x < hl.x1 + 0.1) {
+                spans = spans.into_iter().flat_map(|(a, b)| {
+                    if hl.z1 <= a || hl.z0 >= b { vec![(a, b)] } else { vec![(a, hl.z0 - 0.1), (hl.z1 + 0.1, b)] }
+                }).filter(|(a, b)| b - a > 0.05).collect();
+            }
+            for (a, b) in spans {
+                g.timber(timber(), Vec3::new(x - 0.04, joist_b, a), Vec3::new(x + 0.04, deck_b, b));
+            }
         }
     }
     // columns with steel caps

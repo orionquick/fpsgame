@@ -306,11 +306,25 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         let top = if k + 1 < LEVELS.len() { LEVELS[k + 1].0 } else { ROOF };
         let h = top - y;
         let clear = loft::Spec::clear(h);
-        let holes = if k == 0 { vec![] } else { vec![stair_hole(core.stair), core.elevator] };
+        let decorated = !super::undecorated();
+        // the bar's feature stair rises through the first floor (decorated build only)
+        let mut holes = if k == 0 { vec![] } else { vec![stair_hole(core.stair), core.elevator] };
+        if k == 1 && decorated {
+            holes.push(beerloft::stair_hole());
+        }
+        // openings in the floor above, which the deck and joists of this storey stop short of
+        let mut above = if k + 1 < LEVELS.len() { vec![stair_hole(core.stair), core.elevator] } else { vec![] };
+        if k == 0 && decorated {
+            above.push(beerloft::stair_hole());
+        }
         slab(&mut g, inner, y, if k == 0 { 0.3 } else { 0.09 }, &holes);
-        interior(&mut g, &ground, y, clear, 10 + k as u64, true, k == 0);
+        let well: Vec<Rect> = if k == 1 && decorated { vec![beerloft::stair_hole()] } else { vec![] };
+        interior(&mut g, &ground, y, clear, 10 + k as u64, true, k == 0, &well);
         let bar_floor = k == 0 && !super::undecorated();
-        loft::structure(&mut g, &spec, y, h, k as u64, k != 0 && !super::undecorated(), !bar_floor);
+        loft::structure(&mut g, &spec, y, h, k as u64, k != 0 && !super::undecorated(), !bar_floor, &above);
+        if k == 1 && decorated {
+            beerloft::stair_guard(&mut g, y);
+        }
         wall_members(&mut g, &faces, &spec, y, top - loft::DECK, w);
         if k + 1 < LEVELS.len() {
             stair(&mut g, core.stair, y, LEVELS[k + 1].0 - y);
@@ -338,7 +352,9 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         }
         // zones kept free of desks: meeting rooms, kitchen, lift lobby
         let ne = Rect::new(w - T - 11.0, T, w - T, 6.0);
-        let se = Rect::new(w - T - 9.0, d - T - 7.2, w - T, d - T);
+        // on the first floor the south-east meeting room steps east of the bar's stair well
+        let se_x0 = if k == 1 && !super::undecorated() { beerloft::stair_hole().x1 + 0.8 } else { w - T - 9.0 };
+        let se = Rect::new(se_x0, d - T - 7.2, w - T, d - T);
         let kitchen = Rect::new(core.r.x0 - 0.5, 6.0, w - T, core.r.z0);
         let lobby = Rect::new(core.r.x0 - 2.6, core.r.z0 - 0.5, core.r.x0, core.r.z1 + 0.5);
         let mut reserved = vec![lobby];
@@ -361,6 +377,10 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
             loft::meeting(&mut g, &mut fur, se, y, clear, v(1.0, 0.0));
             loft::kitchen(&mut g, &mut fur, v(core.r.x0, core.r.z0), v(w - T, core.r.z0), y);
             reserved.extend([ne, se, kitchen]);
+            if k == 1 && !super::undecorated() {
+                let h = beerloft::stair_hole();
+                reserved.push(Rect::new(h.x0 - 0.8, h.z0 - 0.8, h.x1 + 0.8, h.z1 + 0.8));
+            }
         }
         // desk benches in the bays between girders and column lines, clear of everything reserved
         let mut zs = vec![T];
