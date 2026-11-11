@@ -235,8 +235,9 @@ fn mats() -> Mats {
         track: s("pht_red_laterite_soil_stones", [0.95, 0.78, 0.68]).tile(2.0),
         chalk: Key::new(Mat::Plain(200), [0.92, 0.92, 0.9]),
         rubber: Key::new(Mat::Plain(160), [0.95, 0.95, 0.94]),
-        concrete: s("pht_smooth_concrete_floor", [1.25, 1.22, 1.15]).tile(2.0).wear(wear::STONE),
-        riser: s("pht_smooth_concrete_floor", [1.05, 1.02, 0.97]).tile(2.0),
+        // (grey: the smooth-concrete scan used before reads brown in this renderer)
+        concrete: s("vlzlajnfw", [0.6, 0.59, 0.56]).tile(3.0).rough(0.8).wear(wear::STONE),
+        riser: Key::new(Mat::Plain(200), [0.4, 0.39, 0.37]),
         stucco: s("tjeneevfw", [1.1, 0.92, 0.7]).tile(2.0),
         sandstone: s("pt_ashlar_sandstone", [1.0, 1.0, 1.0]).tile(3.0),
         steel: Key::new(Mat::Plain(110), [0.86, 0.87, 0.87]).wear(wear::METAL),
@@ -276,7 +277,12 @@ const TERR_PITCH: f32 = 0.85;
 const UP_PITCH: f32 = 0.8;
 const UP_RISE: f32 = 0.56;
 const TERR_RISE: f32 = 0.5;
-const CONCOURSE_Y: f32 = 4.6;
+/// The main concourse, level with the podium outside the home plate frame (lidar: 7.70-7.75 m all round it).
+const CONCOURSE_Y: f32 = 7.7;
+/// The lower bowl's height where it passes under the terrace's face (lidar: 4.6 m at the last open row); from there
+/// ten more rows climb under the overhang to the concourse.
+const LB_BREAK_Y: f32 = 4.6;
+const LB_EXT_ROWS: i32 = 10;
 const TERR_Y: f32 = 11.6;
 const UP_Y: f32 = 21.8;
 const CANOPY_DEPTH: f32 = 12.0;
@@ -286,8 +292,8 @@ const BAY: f32 = 9.5;
 /// frame's plane out from the upper deck's back, its bay, the upper concourse floor, the lettering's top, and the
 /// truss chords (letter truss, roof truss top under the canopy).
 const FRAME_OFF: f32 = 0.85;
-const GZ_BAY: f32 = 13.4;
-const GZ_UPPER_CONCOURSE: f32 = 22.5;
+const GZ_BAY: f32 = 11.0;
+const GZ_UPPER_CONCOURSE: f32 = 23.5;
 const GZ_LETTER_TOP: f32 = 36.4;
 /// The underside of the top rows' box edge, over the posts above the letter truss.
 const GZ_BOX_BOTTOM: f32 = 35.0;
@@ -476,6 +482,11 @@ fn mound(g: &mut Geo, m: &Mats, c: Vec2) {
     g.cuboid(m.rubber, Vec3::new(rb.x - 0.305, h, rb.y - 0.076), Vec3::new(rb.x + 0.305, h + 0.02, rb.y + 0.076));
 }
 
+/// Pale broom-finished concrete slabs: plazas, the podium, the concourse.
+fn paving() -> Key {
+    Key::new(Mat::Surface("vlzlajnfw"), [0.64, 0.62, 0.58]).tile(3.0).rough(0.8)
+}
+
 /// Upward-facing flat polygon (any winding).
 fn poly_up(g: &mut Geo, k: Key, pts: &[Vec3]) {
     let a = (pts[1] - pts[0]).cross(pts[2] - pts[0]);
@@ -623,7 +634,7 @@ fn stations(front: &[Vec2]) -> Vec<Station> {
 /// Tread height of the lower bowl at offset `n` (rows rise slowly at the front, faster near the top).
 fn lb_y(n: f32, end: f32) -> f32 {
     let t = ((n - 0.8) / (end - 0.8)).clamp(0.0, 1.0);
-    0.45 + (CONCOURSE_Y - 0.45) * t.powf(1.35)
+    0.45 + (LB_BREAK_Y - 0.45) * t.powf(1.35)
 }
 
 /// The seating bowl from foul pole to foul pole: the lower bowl's concrete steps and seats behind a padded front
@@ -683,23 +694,26 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                 seat_row(g, f, at(&a, n0 + 0.42), at(&b, n0 + 0.42), (ya + yb) / 2.0, -(a.n + b.n).normalize());
             }
         }
-        let (lba, lbb) = (0.8 + rows as f32 * LB_PITCH, 0.8 + rows as f32 * LB_PITCH);
-        // --- concourse floor under the terrace (lower bowl back to the suites)
-        let (ca, cb) = (lba, lbb);
-        let (sa, sb) = (a.terrace + 3.0, b.terrace + 3.0);
-        g.poly(m.concrete, &[v(at(&a, ca), CONCOURSE_Y), v(at(&a, sa + 6.0), CONCOURSE_Y), v(at(&b, sb + 6.0), CONCOURSE_Y), v(at(&b, cb), CONCOURSE_Y)], Vec3::new(a.n.x, 0.0, a.n.y), Vec3::new(e.x, 0.0, e.y));
-        g.block_ring(&[at(&a, ca), at(&a, sa + 6.0), at(&b, sb + 6.0), at(&b, cb)], 0.0, CONCOURSE_Y);
-        // rail along the top of the lower bowl
-        g.tube(m.rail, v(at(&a, ca), CONCOURSE_Y + 1.0), v(at(&b, cb), CONCOURSE_Y + 1.0), 0.03, 6);
-        // suite glazing under the terrace
-        g.poly(m.glass, &[v(at(&a, sa), CONCOURSE_Y), v(at(&b, sb), CONCOURSE_Y), v(at(&b, sb), 8.6), v(at(&a, sa), 8.6)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-        g.block_ring(&[at(&a, sa), at(&b, sb), at(&b, sb + 0.2), at(&a, sa + 0.2)], CONCOURSE_Y, 8.6);
-        // terrace soffit over the concourse
-        g.poly(m.stucco, &[v(at(&a, a.terrace), 8.6), v(at(&b, b.terrace), 8.6), v(at(&b, sb + 6.0), 8.6), v(at(&a, sa + 6.0), 8.6)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, 0.0, a.n.y));
-        // --- terrace facia with an LED ribbon
+        let lba = 0.8 + rows as f32 * LB_PITCH;
+        // --- the rows carry on under the terrace's overhang up to the main concourse
+        let ext_rise = (CONCOURSE_Y - LB_BREAK_Y) / LB_EXT_ROWS as f32;
+        for k in 0..LB_EXT_ROWS {
+            let (n0, n1) = (lba + k as f32 * LB_PITCH, lba + (k + 1) as f32 * LB_PITCH);
+            let y = LB_BREAK_Y + k as f32 * ext_rise;
+            g.poly(m.concrete, &[v(at(&a, n0), y), v(at(&a, n1), y), v(at(&b, n1), y), v(at(&b, n0), y)], Vec3::new(a.n.x, 0.0, a.n.y), Vec3::new(e.x, 0.0, e.y));
+            g.poly(m.riser, &[v(at(&a, n1), y), v(at(&b, n1), y), v(at(&b, n1), y + ext_rise), v(at(&a, n1), y + ext_rise)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            g.block_ring(&[at(&a, n0), at(&a, n1), at(&b, n1), at(&b, n0)], 0.0, y);
+            if !in_aisle {
+                seat_row(g, f, at(&a, n0 + 0.42), at(&b, n0 + 0.42), y, -(a.n + b.n).normalize());
+            }
+        }
+        // where the concourse begins
+        let nc = lba + LB_EXT_ROWS as f32 * LB_PITCH;
+        // --- terrace facia with an LED ribbon; its underside follows the rake (drawn below, once its depth is known)
         let (ta, tb) = (at(&a, a.terrace), at(&b, b.terrace));
-        g.poly(m.navy, &[v(tb, 8.6), v(ta, 8.6), v(ta, TERR_Y + 0.2), v(tb, TERR_Y + 0.2)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
-        g.poly(m.led, &[v(tb - b.n * 0.02, 10.4), v(ta - a.n * 0.02, 10.4), v(ta - a.n * 0.02, 11.2), v(tb - b.n * 0.02, 11.2)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+        let t_under = TERR_Y - 0.9;
+        g.poly(m.navy, &[v(tb, t_under), v(ta, t_under), v(ta, TERR_Y + 0.2), v(tb, TERR_Y + 0.2)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+        g.poly(m.led, &[v(tb - b.n * 0.02, 10.9), v(ta - a.n * 0.02, 10.9), v(ta - a.n * 0.02, 11.5), v(tb - b.n * 0.02, 11.5)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
         // --- terrace rows: 10, under the upper deck's overhang
         let t_rows = (((a.upper + 3.5) - (a.terrace + 0.3)) / TERR_PITCH).floor().clamp(4.0, 12.0) as i32;
         for j in 0..t_rows {
@@ -714,6 +728,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let t_back_a = a.terrace + 0.3 + t_rows as f32 * TERR_PITCH;
         let t_back_b = b.terrace + 0.3 + t_rows as f32 * TERR_PITCH;
         let t_top = TERR_Y + t_rows as f32 * TERR_RISE;
+        g.poly(m.soffit, &[v(ta, t_under), v(tb, t_under), v(at(&b, t_back_b), t_top - 0.9), v(at(&a, t_back_a), t_top - 0.9)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, -0.6, a.n.y).normalize());
         // club-level back wall behind the terrace, up to the upper deck's soffit (open where a stair core's bridge
         // comes through)
         let (ca, cb) = (at(&a, t_back_a), at(&b, t_back_b));
@@ -749,6 +764,50 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let up_back_a = a.upper + 0.3 + u_rows as f32 * UP_PITCH;
         let up_back_b = b.upper + 0.3 + u_rows as f32 * UP_PITCH;
         let up_top = UP_Y + u_rows as f32 * UP_RISE;
+        // --- the main concourse: from the top of the lower rows back to the concourse blocks; at a gate stair to
+        // the stair's head; behind home out through the frame onto the podium
+        {
+            let at_gate = GATES.iter().any(|&gb| (a.bearing - gb).abs() < 2.2);
+            let gz0 = home_gate(a.bearing) && home_gate(b.bearing);
+            // the podium stands outside the frame from about 138 to 186 degrees (lidar footprint)
+            let podium = gz0 && a.bearing > 138.0 && b.bearing < 186.0;
+            let (c1a, c1b) = if at_gate {
+                (a.terrace + 9.0, b.terrace + 9.0)
+            } else if podium {
+                (up_back_a + 3.0, up_back_b + 3.0)
+            } else if gz0 {
+                (up_back_a + 0.35, up_back_b + 0.35)
+            } else {
+                (up_back_a - 6.0, up_back_b - 6.0)
+            };
+            // inner part, to the line of the concourse blocks; the outer part is left out where a stair core stands
+            let (m_a, m_b) = (c1a.min(up_back_a - 6.0), c1b.min(up_back_b - 6.0));
+            let q = [at(&a, nc), at(&a, m_a), at(&b, m_b), at(&b, nc)];
+            poly_up(g, paving(), &q.map(|p| v(p, CONCOURSE_Y)));
+            g.block_ring(&q, 0.0, CONCOURSE_Y);
+            g.tube(m.rail, v(at(&a, nc), CONCOURSE_Y + 1.0), v(at(&b, nc), CONCOURSE_Y + 1.0), 0.03, 6);
+            if c1a > m_a + 0.01 {
+                let (ta4, tb4) = (at(&a, up_back_a + 4.2), at(&b, up_back_b + 4.2));
+                for (f0, f1, hole) in runs(|fr| cores.iter().any(|c| c.covers(ta4.lerp(tb4, fr)))) {
+                    if hole {
+                        continue;
+                    }
+                    let (i0, i1) = (at(&a, m_a).lerp(at(&b, m_b), f0), at(&a, m_a).lerp(at(&b, m_b), f1));
+                    let (o0, o1) = (at(&a, c1a).lerp(at(&b, c1b), f0), at(&a, c1a).lerp(at(&b, c1b), f1));
+                    let q = [i0, o0, o1, i1];
+                    poly_up(g, paving(), &q.map(|p| v(p, CONCOURSE_Y)));
+                    g.block_ring(&q, 0.0, CONCOURSE_Y);
+                    if !podium {
+                        // an open edge over the street: a stone base below, a rail above
+                        wall_poly(g, m.sandstone, &[v(o0, 0.0), v(o1, 0.0), v(o1, CONCOURSE_Y), v(o0, CONCOURSE_Y)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                        for hh in [0.55f32, 1.05] {
+                            g.tube(m.rail, v(o0, CONCOURSE_Y + hh), v(o1, CONCOURSE_Y + hh), 0.025, 5);
+                        }
+                        g.block_ring(&[o0, o1, o1 + b.n * 0.1, o0 + a.n * 0.1], CONCOURSE_Y, CONCOURSE_Y + 1.05);
+                    }
+                }
+            }
+        }
         // soffit under the upper deck (from the facia's foot back and up, parallel to the rake)
         if home_gate(a.bearing) && home_gate(b.bearing) {
             let under_rows = Key::new(Mat::Plain(215), [0.42, 0.43, 0.44]);
@@ -786,22 +845,15 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
             gz_line.push((at(&b, up_back_b + FRAME_OFF), b.n));
             let t_tread = t_top - TERR_RISE;
             let edge = 0.35;
-            let at_gate_stair = GATES.iter().any(|&gb| (a.bearing - gb).abs() < 2.2);
             // the upper deck's soffit height at offset r (it rises with the rake from the front to the back)
             let soffit = |s: &Station, ub: f32, r: f32| (UP_Y - 2.3) + (up_top - UP_Y) * ((r - s.upper) / (ub - s.upper)).clamp(0.0, 1.0);
-            // decks (height, inner offset at a and b, outer offset at a and b, fascia depth): a mezzanine over the
-            // street-level wall, set back; the terrace concourse level with the terrace's top row; the upper
-            // concourse, out from under the low end of the soffit; each out to the frame
+            // decks above the main concourse (height, inner offset at a and b, outer offset at a and b, fascia
+            // depth, as measured on the old head-on photo): the terrace concourse level with the terrace's top row;
+            // the upper concourse, out from under the low end of the soffit; each out to the frame
             let mut decks = vec![];
-            if !at_gate_stair {
-                decks.push((CONCOURSE_Y, a.terrace + 9.0, b.terrace + 9.0, up_back_a + edge, up_back_b + edge, 0.8));
-                // a strip of lights under its edge
-                let (la, lb) = (at(&a, up_back_a + edge - 0.6), at(&b, up_back_b + edge - 0.6));
-                poly_down(g, m.led_warm, &[v(la, CONCOURSE_Y - 0.82), v(lb, CONCOURSE_Y - 0.82), v(lb + b.n * 0.25, CONCOURSE_Y - 0.82), v(la + a.n * 0.25, CONCOURSE_Y - 0.82)]);
-            }
-            decks.push((t_tread + 0.25, t_back_a + 0.3, t_back_b + 0.3, up_back_a + edge, up_back_b + edge, 1.35));
-            let (ri_a, ri_b) = (a.upper + 0.36 * (up_back_a - a.upper), b.upper + 0.36 * (up_back_b - b.upper));
-            decks.push((GZ_UPPER_CONCOURSE, ri_a, ri_b, up_back_a + edge, up_back_b + edge, 1.4));
+            decks.push((t_tread + 0.25, t_back_a + 0.3, t_back_b + 0.3, up_back_a + edge, up_back_b + edge, 0.75));
+            let (ri_a, ri_b) = (a.upper + 0.5 * (up_back_a - a.upper), b.upper + 0.5 * (up_back_b - b.upper));
+            decks.push((GZ_UPPER_CONCOURSE, ri_a, ri_b, up_back_a + edge, up_back_b + edge, 1.0));
             for &(y, ra_in, rb_in, ra_out, rb_out, fascia) in &decks {
                 let (ia, ib, oa, ob) = (at(&a, ra_in), at(&b, rb_in), at(&a, ra_out), at(&b, rb_out));
                 let q = [ia, ib, ob, oa];
@@ -906,10 +958,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
             // a gate: the blocks open and a stair climbs from the sidewalk to the concourse under the decks
             gate_stair(g, m, &a, &b, up_back_a + 4.0, a.terrace + 9.0);
         } else if gz {
-            // under the decks at the home plate gate: an open arcade, a sandstone wall set well back
-            let (pa, pb) = (at(&a, up_back_a - 4.0), at(&b, up_back_b - 4.0));
-            wall_poly(g, m.sandstone, &[v(pa, 0.0), v(pb, 0.0), v(pb, CONCOURSE_Y - 0.35), v(pa, CONCOURSE_Y - 0.35)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-            g.block_ring(&[ga, gb, pb, pa], 0.0, CONCOURSE_Y - 0.35);
+            // behind home the main concourse runs out through the frame (drawn above)
         } else {
             wall_poly(g, m.sandstone, &[v(oa, 0.0), v(ob, 0.0), v(ob, blk), v(oa, blk)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             poly_up(g, m.concrete, &[v(ga, blk), v(gb, blk), v(ob, blk), v(oa, blk)]);
@@ -1296,8 +1345,11 @@ fn backstop_net(g: &mut Geo, m: &Mats, st: &[Station]) {
     }
 }
 
-/// Gates (bearing from home): the home plate gate behind home and one each side.
-const GATES: [f32; 3] = [172.0, 120.0, 240.0];
+/// Gate stairs from the street (bearing from home), one each side; behind home the way in is the grand stair and
+/// the podium.
+const GATES: [f32; 2] = [120.0, 240.0];
+/// Stair cores (bearing from home).
+const CORES: [f32; 3] = [208.0, 126.0, 246.0];
 
 /// A stair from the street (at offset `n_out`) up to the concourse floor (at `n_in`), between stations a and b.
 fn gate_stair(g: &mut Geo, m: &Mats, a: &Station, b: &Station, n_out: f32, n_in: f32) {
@@ -1305,7 +1357,7 @@ fn gate_stair(g: &mut Geo, m: &Mats, a: &Station, b: &Station, n_out: f32, n_in:
     let at = |s: &Station, n: f32| s.p + s.n * n;
     let e = (b.p - a.p).normalize_or_zero();
     let ev = Vec3::new(e.x, 0.0, e.y);
-    let steps = 30;
+    let steps = 46;
     let rise = CONCOURSE_Y / steps as f32;
     let run = (n_out - n_in) / steps as f32;
     for k in 0..steps {
@@ -1407,9 +1459,24 @@ pub fn core_routes(city: &city::City) -> Vec<Vec<([f32; 2], Option<f32>)>> {
     .collect()
 }
 
+/// The way in behind home, as walk waypoints (world x, z) with the floor expected there: from the plaza up the
+/// grand stair, along the podium under the footbridge, through the frame onto the main concourse, and down the rows
+/// under the terrace.
+pub fn home_gate_route() -> Vec<([f32; 2], Option<f32>)> {
+    vec![
+        ([7.05, 104.35], None),
+        ([-9.8, 94.6], Some(CONCOURSE_Y)),
+        ([-5.5, 83.5], Some(CONCOURSE_Y)),
+        ([0.0, 75.5], Some(CONCOURSE_Y)),
+        ([-0.28, 66.1], Some(CONCOURSE_Y)),
+        ([-0.53, 58.1], Some(CONCOURSE_Y)),
+        ([-0.84, 48.1], None),
+    ]
+}
+
 /// The stair cores, one a little clockwise of each gate, standing on the street.
 fn cores(city: &city::City, st: &[Station]) -> Vec<Core> {
-    GATES.iter().filter_map(|&gb| core_at(st, gb + if gb == 172.0 { 36.0 } else { 6.0 })).map(|mut c| {
+    CORES.iter().filter_map(|&cb| core_at(st, cb)).map(|mut c| {
         // the ground floor is a level slab at the highest street point round the footprint
         let pts = [(-CORE_HALF, c.r0), (CORE_HALF, c.r0), (CORE_HALF, c.r0 + CORE_DEPTH + 1.0), (-CORE_HALF, c.r0 + CORE_DEPTH + 1.0), (0.0, c.r0 + CORE_DEPTH / 2.0)];
         c.base = pts.iter().map(|&(t, r)| {
@@ -1625,37 +1692,15 @@ fn home_gate_front(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)]) {
     let centre = (0..=200).map(|k| total * k as f32 / 200.0).min_by(|&a, &b| {
         let ba = place(a).0.x.atan2(-place(a).0.y).to_degrees().rem_euclid(360.0);
         let bb = place(b).0.x.atan2(-place(b).0.y).to_degrees().rem_euclid(360.0);
-        (ba - 167.0).abs().total_cmp(&(bb - 167.0).abs())
+        (ba - 163.0).abs().total_cmp(&(bb - 163.0).abs())
     }).unwrap_or(total / 2.0);
-    let u0 = centre - width / 2.0;
-    let top = GZ_LETTER_TOP;
-    for (ci, ch) in text.chars().enumerate() {
-        for (r, row) in glyph(ch).iter().enumerate() {
-            let b = row.as_bytes();
-            let mut c = 0;
-            while c < 5 {
-                if b[c] != b'#' {
-                    c += 1;
-                    continue;
-                }
-                let st = c;
-                while c < 5 && b[c] == b'#' {
-                    c += 1;
-                }
-                let ua = u0 + (ci as f32 * 6.0 + st as f32) * px * 1.15;
-                let ub = u0 + (ci as f32 * 6.0 + c as f32) * px * 1.15;
-                let (pa, na, _) = place(ua);
-                let (pb, nb, _) = place(ub);
-                let yb = top - (r + 1) as f32 * px;
-                let e = (pb - pa).normalize();
-                // red outline (the letters' returns) behind, white face in front, as on the building
-                let (wa, wb) = (pa - e * 0.1 + na * 0.12, pb + e * 0.1 + nb * 0.12);
-                g.poly(m.letters, &[v(wa, yb - 0.1), v(wb, yb - 0.1), v(wb, yb + px + 0.1), v(wa, yb + px + 0.1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-                let (ra, rb) = (pa + na * 0.2, pb + nb * 0.2);
-                g.poly(m.white, &[v(ra, yb), v(rb, yb), v(rb, yb + px), v(ra, yb + px)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-            }
-        }
-    }
+    let _ = (width, glyph, px, n_ch);
+    let (p, n, _) = place(centre);
+    // (flat, standing 1.2 m proud of the curved frame at its middle; red with a white edge behind)
+    let right = Vec2::new(n.y, -n.x);
+    let right = if Vec3::new(right.x, 0.0, right.y).cross(Vec3::Y).dot(Vec3::new(n.x, 0.0, n.y)) > 0.0 { right } else { -right };
+    sign(g, "sgn_ballpark", [0.95, 0.95, 0.93], p + n * 1.15, 31.5, right, 20.6, 4.6);
+    sign(g, "sgn_ballpark", [0.36, 0.012, 0.02], p + n * 1.2, 31.6, right, 20.4, 4.4);
 }
 
 /// The footbridge from the terrace concourse out to the tower (satellite): its tower end on the tower's north face,
@@ -2408,7 +2453,7 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
     };
     let bearing = |p: Vec2| p.x.atan2(-p.y).to_degrees().rem_euclid(360.0);
     // a column at the lettering's centre, then every bay either way
-    let centre = (0..=400).map(|k| total * k as f32 / 400.0).min_by(|&a, &b| (bearing(place(a).0) - 167.0).abs().total_cmp(&(bearing(place(b).0) - 167.0).abs())).unwrap();
+    let centre = (0..=400).map(|k| total * k as f32 / 400.0).min_by(|&a, &b| (bearing(place(a).0) - 163.0).abs().total_cmp(&(bearing(place(b).0) - 163.0).abs())).unwrap();
     let mut cols: Vec<f32> = vec![];
     let mut u = centre - (centre / GZ_BAY).floor() * GZ_BAY;
     while u <= total + 1e-3 {
@@ -2436,30 +2481,33 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
     // twelve-panel zig-zag) and V levels (foot, head, reach of each arm as a fraction of the bay)
     // (bottom chord, top chord, panels whose diagonal is a big arm running through the band)
     // (bottom chord, top chord, panels whose diagonal rises from a big arm's head: a heavier member, as in the photos)
-    let bands: [(f32, f32, &[usize]); 4] = [(13.0, d1 - 1.35, &[2, 3]), (18.9, GZ_UPPER_CONCOURSE - 1.4, &[1, 4]), (31.5, 33.4, &[2, 3]), (top_row + 1.15, roof, &[])];
+    // (heights from the old head-on photo, scaled between the lidar roof edge and the terrace deck: trusses 12.9 to
+    // 15.6 and 19.0 to 22.5 m)
+    let b0 = 12.9f32;
+    let bands: [(f32, f32, &[usize]); 4] = [(b0, d1 - 0.75, &[2, 3]), (19.0, GZ_UPPER_CONCOURSE - 1.0, &[1, 4]), (31.5, 33.4, &[2, 3]), (top_row + 1.15, roof, &[])];
     // the big arms, left half of the bay (mirrored for the right): (fraction, height) to (fraction, height), section.
     // From the photos: at the bottom, arms from near the bay's middle under the terrace deck down through the truss
     // to the street-level deck's edge by the columns, crossed by legs from each column's foot of the truss; under
     // the upper concourse, arms from the terrace deck by the column up through the truss to the fascia; the tall
     // bay's from the upper concourse by the column to the letter truss. Where an arm crosses a truss it is that
     // panel's diagonal.
-    let mid_lo = 18.9;
+    let mid_lo = 19.0;
     // each reaches the floor of the level below; steep (about 60 degrees), not 45
     // every arm hangs from the bottom chord of the truss above its level down to that level's floor; the trusses
     // keep their own diagonals
     // at the bottom a leg from each column's top corner runs down to meet the big arm (a Y, not a cross)
-    let big = ((2.0f32 / 6.0, 13.0f32), (0.0f32, CONCOURSE_Y));
-    let leg_dir = (0.36f32, CONCOURSE_Y - 13.0);
+    let big = ((2.0f32 / 6.0, b0), (0.0f32, CONCOURSE_Y));
+    let leg_dir = (0.36f32, CONCOURSE_Y - b0);
     let leg_end = {
-        // solve (0, 13) + t * leg_dir = big.0 + s * (big.1 - big.0)
+        // solve (0, b0) + t * leg_dir = big.0 + s * (big.1 - big.0)
         let (ax, ay) = (big.1 .0 - big.0 .0, big.1 .1 - big.0 .1);
         let den = leg_dir.0 * ay - leg_dir.1 * ax;
-        let t = ((big.0 .0) * ay - (big.0 .1 - 13.0) * ax) / den;
-        (leg_dir.0 * t, 13.0 + leg_dir.1 * t)
+        let t = ((big.0 .0) * ay - (big.0 .1 - b0) * ax) / den;
+        (leg_dir.0 * t, b0 + leg_dir.1 * t)
     };
     let arms = [
         (big.0 .0, big.0 .1, big.1 .0, big.1 .1, 0.6),
-        (0.0, 13.0, leg_end.0, leg_end.1, 0.42),
+        (0.0, b0, leg_end.0, leg_end.1, 0.42),
         (1.0 / 6.0, mid_lo, 0.0, d1, 0.5),
         (2.0 / 6.0, 31.5, 0.0, GZ_UPPER_CONCOURSE, 0.55),
     ];
@@ -2480,7 +2528,7 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
             // its sides, not dropped
             let inside = |t: f32| {
                 let y = yp + (yq - yp) * t;
-                point_in(&br, p.lerp(q, t)) && y > d1 - 5.2 && y < BRIDGE_TOP + 0.1
+                point_in(&br, p.lerp(q, t)) && y > CONCOURSE_Y - 0.1 && y < BRIDGE_TOP + 0.1
             };
             const N: usize = 48;
             let mut t0: Option<f32> = None;
@@ -3607,29 +3655,27 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
 
 // ---------------------------------------------------------------- grand stair
 
-/// The grand stair from the home plate plaza up to the concourse level under the footbridge. Plan from the map's
-/// stair flights (thirty mapped lines: three tiers heading 120 degrees, 5.7 / 4.3 / 4.6 m long with landings, the top
-/// edge 12.5 m long under the bridge's centre line, the lower tiers fanning out to the north-east); heights from the
-/// lidar (7-8 m at the top edge, about 5 and 3 m on the landings, an 8 m level round the bridge's bowl end). North-
-/// east of it the same level carries on as a planted terrace behind a stone wall (8.5 m to its top in the street
-/// photo; the lidar's 12-14 m there is its trees). The level runs back to the offices and on under the bridge to
-/// the bowl.
+/// The grand stair from the home plate plaza up to the podium under the footbridge. Its plan from the map's thirty
+/// stair-flight lines (three tiers heading 120 degrees, the lower ones fanning out to the north-east); its section
+/// from the lidar along the run: the top nosing 2.6 m out from the bridge's centre line at 7.70 m, landings at
+/// 5.2 and 2.6 m, the foot 19.1 m out (flights of 15, 16 and 16 risers at 0.58 m per metre). Round it the podium:
+/// the lidar's 7.70 m footprint outside the frame - under the bridge, the pocket east of it, the planted terrace
+/// beside the stair (its 12-14 m returns are trees) and the terrace along the frame to the east.
 fn grand_stair(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
     let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let (d, c) = (Vec2::new(0.866, 0.5), Vec2::new(-0.5, 0.866));
     let uv = |t: f32, w: f32| Vec2::new(-7.7, 88.9) + d * t + c * w - HOME;
     let wl = |x: f32, z: f32| Vec2::new(x, z) - HOME;
-    let (ri, tr, wide) = (0.165f32, 0.31f32, 12.5f32);
-    let tiers = [(18i32, 0.0f32), (14, 2.2), (16, 6.0)];
-    let lands = [1.8f32, 2.0];
-    let top = ri * tiers.iter().map(|t| t.0).sum::<i32>() as f32;
-    let paving = Key::new(Mat::Surface("vlzlajnfw"), [0.64, 0.62, 0.58]).tile(3.0).rough(0.8);
+    let tiers = [(15i32, 0.0f32), (16, 2.2), (16, 6.0)];
+    let lands = [1.6f32, 1.6];
+    let top = CONCOURSE_Y;
+    let (ri, tr, wide, t_top) = (top / 47.0, 0.2835f32, 12.5f32, 2.6f32);
+    let paving = paving();
     let riser = Key::new(Mat::Plain(200), [0.4, 0.39, 0.37]);
-    let (d3, r3) = (Vec3::new(d.x, 0.0, d.y), Vec3::new(-c.x, 0.0, -c.y));
-    let _ = d3;
+    let r3 = Vec3::new(-c.x, 0.0, -c.y);
     // the flights: (start along the run, height at its top, risers, north-east extension)
     let mut flights: Vec<(f32, f32, i32, f32)> = vec![];
-    let (mut t, mut h) = (0.0f32, top);
+    let (mut t, mut h) = (t_top, top);
     for (i, &(n, ext)) in tiers.iter().enumerate() {
         flights.push((t, h, n, ext));
         t += n as f32 * tr;
@@ -3660,8 +3706,8 @@ fn grand_stair(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
         }
         for w in ws {
             g.tube(m.rail, v3(uv(t0, w), y0 + 0.95), v3(uv(t1, w), y1 + 0.95), 0.025, 6);
-            for f in [0.0f32, 0.5, 1.0] {
-                let (tt, yy) = (t0 + (t1 - t0) * f, y0 + (y1 - y0) * f);
+            for fr in [0.0f32, 0.5, 1.0] {
+                let (tt, yy) = (t0 + (t1 - t0) * fr, y0 + (y1 - y0) * fr);
                 g.tube(m.rail, v3(uv(tt, w), yy - ri), v3(uv(tt, w), yy + 0.95), 0.02, 6);
             }
         }
@@ -3679,44 +3725,48 @@ fn grand_stair(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
     };
     let cheek = |t: f32| height(t) + 1.05;
     // stone cheeks: along the tower side (tapering with the gap to the tower), and stepping out with the fan
-    prism(g, m, &uv, m.sandstone, &[(0.0, wide), (total, wide), (total, wide + 0.3), (0.0, wide + 1.3)], -0.5, &cheek, false);
+    prism(g, m, &uv, m.sandstone, &[(t_top, wide), (total, wide), (total, wide + 0.3), (t_top, wide + 1.1)], -0.5, &cheek, false);
     let (t1, t2) = (flights[1].0 - lands[0], flights[2].0 - lands[1]);
-    prism(g, m, &uv, m.sandstone, &[(0.0, -0.4), (t1, -0.4), (t1, 0.0), (0.0, 0.0)], -0.5, &cheek, false);
+    prism(g, m, &uv, m.sandstone, &[(t_top, -0.4), (t1, -0.4), (t1, 0.0), (t_top, 0.0)], -0.5, &cheek, false);
     prism(g, m, &uv, m.sandstone, &[(t1 - 0.4, -2.6), (t2, -2.6), (t2, -2.2), (t1 - 0.4, -2.2)], -0.5, &cheek, false);
     prism(g, m, &uv, m.sandstone, &[(t1 - 0.4, -2.2), (t1, -2.2), (t1, -0.4), (t1 - 0.4, -0.4)], -0.5, &cheek, false);
     prism(g, m, &uv, m.sandstone, &[(t2 - 0.4, -6.4), (total, -6.4), (total, -6.0), (t2 - 0.4, -6.0)], -0.5, &cheek, false);
     prism(g, m, &uv, m.sandstone, &[(t2 - 0.4, -6.0), (t2, -6.0), (t2, -2.6), (t2 - 0.4, -2.6)], -0.5, &cheek, false);
-    // --- the level at the top: back to the offices, and on under the bridge to the bowl
+    // --- the podium: a stone-walled mass with paving on top; `parapet` edges (index of their first point) get a
+    // 1 m stone parapet (they stand over the plaza)
+    let id = |x: f32, z: f32| Vec2::new(x, z);
     let flat = |hh: f32| move |_u: f32| hh;
-    prism(g, m, &uv, m.sandstone, &[(-4.6, 0.0), (0.0, 0.0), (0.0, wide + 1.3), (-4.6, wide + 1.3)], -0.5, &flat(top), false);
-    poly_up(g, paving, &[uv(-4.6, 0.0), uv(0.0, 0.0), uv(0.0, wide + 1.3), uv(-4.6, wide + 1.3)].map(|p| v3(p, top + 0.005)));
+    let mut podium = |g: &mut Geo, ring: &[Vec2], parapet: &[usize]| {
+        let r: Vec<(f32, f32)> = ring.iter().map(|p| (p.x, p.y)).collect();
+        prism(g, m, &id, m.sandstone, &r, -0.5, &flat(top), false);
+        poly_up(g, paving, &ring.iter().map(|&p| v3(p, top + 0.005)).collect::<Vec<_>>());
+        let centre = ring.iter().copied().sum::<Vec2>() / ring.len() as f32;
+        for &k in parapet {
+            let (p, q) = (ring[k], ring[(k + 1) % ring.len()]);
+            let e = (q - p).normalize();
+            let n = if e.perp().dot(centre - p) > 0.0 { e.perp() } else { -e.perp() } * 0.4;
+            let pr = [p, q, q + n, p + n];
+            prism(g, m, &id, m.sandstone, &pr.map(|x| (x.x, x.y)), top, &flat(top + 1.0), false);
+        }
+    };
+    // the head of the stair back to the offices, and under the bridge to the frame
+    podium(g, &[uv(-4.6, 0.0), uv(t_top, 0.0), uv(t_top, wide + 1.1), uv(-4.6, wide + 1.1)], &[]);
     let (bt, bb) = (Vec2::new(BRIDGE_TOWER.0, BRIDGE_TOWER.1) - HOME, Vec2::new(BRIDGE_BOWL.0, BRIDGE_BOWL.1) - HOME);
     let be = (bt - bb).normalize();
     let bs = be.perp() * (BRIDGE_W / 2.0 + 0.3);
-    let near = uv(0.0, 0.0);
-    let s_a = (near - bb).dot(be);
-    let (p0, p1) = (bb + be * 0.6, bb + be * s_a);
-    let id = |x: f32, z: f32| Vec2::new(x, z);
-    let ring = [p0 - bs, p1 - bs, p1 + bs, p0 + bs];
-    prism(g, m, &id, m.sandstone, &ring.map(|p| (p.x, p.y)), -0.5, &flat(top), false);
-    poly_up(g, paving, &ring.map(|p| v3(p, top + 0.005)));
-    // a rail where the level ends at the bowl's frame
-    for y in [0.55f32, 1.05] {
-        g.tube(m.rail, v3(p0 - bs, top + y), v3(p0 + bs, top + y), 0.025, 6);
-    }
-    g.block_ring(&[p0 - bs, p0 + bs, p0 + bs + be * 0.1, p0 - bs + be * 0.1], top, top + 1.05);
-    // --- the planted terrace north-east of the stair: the same level behind a stone wall with a parapet, trees on it
-    let block = [wl(-4.0, 89.6), wl(7.5, 89.6), wl(16.0, 88.5), wl(16.0, 82.0), wl(10.0, 81.5), wl(2.0, 83.5), wl(-2.0, 87.0)];
-    prism(g, m, &id, m.sandstone, &block.map(|p| (p.x, p.y)), 0.0, &flat(top), false);
-    poly_up(g, paving, &block.map(|p| v3(p, top + 0.005)));
-    let centre = block.iter().copied().sum::<Vec2>() / block.len() as f32;
-    for k in 0..3 {
-        let (p, q) = (block[k], block[k + 1]);
-        let e = (q - p).normalize();
-        let n = if e.perp().dot(centre - p) > 0.0 { e.perp() } else { -e.perp() } * 0.4;
-        let ring = [p, q, q + n, p + n];
-        prism(g, m, &id, m.sandstone, &ring.map(|r| (r.x, r.y)), top, &flat(top + 1.0), false);
-    }
+    let s_a = (uv(0.0, 0.0) - bb).dot(be);
+    let (p0, p1) = (bb - be * 1.0, bb + be * (s_a + 1.5));
+    podium(g, &[p0 - bs, p1 - bs, p1 + bs, p0 + bs], &[]);
+    // the pocket east of the bridge, the planted terrace beside the stair, and the terrace along the frame (the
+    // lidar footprint's outline, in convex pieces)
+    podium(g, &[wl(3.8, 76.1), wl(13.8, 74.1), wl(14.8, 82.1), wl(2.0, 83.5), wl(-1.0, 80.0)], &[]);
+    podium(g, &[wl(-4.0, 89.6), wl(3.3, 90.1), wl(13.3, 89.1), wl(15.8, 87.6), wl(14.8, 82.1), wl(2.0, 83.5), wl(-2.0, 87.0)], &[0, 1, 2, 3]);
+    podium(g, &[wl(13.8, 74.1), wl(26.8, 70.1), wl(24.3, 80.1), wl(17.3, 80.1), wl(14.8, 82.1)], &[2, 3]);
+    podium(g, &[wl(26.8, 70.1), wl(38.3, 62.6), wl(39.8, 72.1), wl(35.3, 74.6), wl(24.3, 80.1)], &[2, 3]);
+    // (stopping short of the stair core that stands on its east tip)
+    podium(g, &[wl(38.3, 62.6), wl(41.6, 59.0), wl(43.6, 61.0), wl(39.0, 67.0)], &[1, 2]);
+    podium(g, &[wl(38.3, 62.6), wl(39.0, 67.0), wl(39.8, 72.1)], &[1]);
+    // trees on the planted terrace
     if let Some((mn, mx)) = f.bounds("sf_380a2c4bfa") {
         for (k, (x, z)) in [(2.0f32, 86.6f32), (8.0, 86.2), (13.0, 85.6)].into_iter().enumerate() {
             let sc = 1.6f32;

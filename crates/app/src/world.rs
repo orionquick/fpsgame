@@ -294,39 +294,53 @@ mod tests {
         let c = city();
         let col = Collision::new(&c, None);
         for (i, route) in crate::bespoke::petco::core_routes(&c).into_iter().enumerate() {
-            let mut p = route[0].0;
-            let mut y = c.terrain.at(p[0] as f64, p[1] as f64) as f32;
-            for (j, &(target, expect)) in route.iter().enumerate().skip(1) {
-                for _ in 0..600 {
-                    let (dx, dz) = (target[0] - p[0], target[1] - p[1]);
-                    let d = dx.hypot(dz);
-                    if d < 0.15 {
-                        break;
-                    }
-                    let s = d.min(0.1);
-                    let mut q = [p[0] + dx / d * s, p[1] + dz / d * s];
-                    col.push_out(&mut q, y + 0.45, 1.35, 0.35);
-                    p = q;
-                    let ground = c.terrain.at(p[0] as f64, p[1] as f64) as f32;
-                    // fall at most 0.5 m a tick (gravity), land on the highest floor within a step
-                    let floor = col.roof_under(p, y, 0.45).map_or(ground, |r| r.max(ground));
-                    y = floor.max(y - 0.5);
+            walk(&c, &col, &format!("core {i}"), &route);
+        }
+    }
+
+    #[test]
+    fn ballpark_grand_stair_leads_onto_the_concourse_and_down_to_the_seats() {
+        let c = city();
+        let col = Collision::new(&c, None);
+        let y = walk(&c, &col, "home gate", &crate::bespoke::petco::home_gate_route());
+        assert!(y > 4.3 && y < 6.6, "under the terrace the rows should be between the open bowl and the concourse: {y:.2}");
+    }
+
+    /// Walks a route of waypoints with the player's collision; returns the floor height at the end.
+    fn walk(c: &city::City, col: &Collision, name: &str, route: &[([f32; 2], Option<f32>)]) -> f32 {
+        let mut p = route[0].0;
+        let mut y = c.terrain.at(p[0] as f64, p[1] as f64) as f32;
+        for (j, &(target, expect)) in route.iter().enumerate().skip(1) {
+            for _ in 0..600 {
+                let (dx, dz) = (target[0] - p[0], target[1] - p[1]);
+                let d = dx.hypot(dz);
+                if d < 0.15 {
+                    break;
                 }
-                let miss = (target[0] - p[0]).hypot(target[1] - p[1]);
-                if miss >= 0.6 {
-                    for s in &col.solids {
-                        let q = [p[0] + (target[0] - p[0]) / miss * 0.4, p[1] + (target[1] - p[1]) / miss * 0.4];
-                        if point_in(&s.ring, q) && s.y1 > y + 0.45 && s.y0 < y + 1.8 {
-                            eprintln!("blocker y {:.2}..{:.2} ring {:?}", s.y0, s.y1, s.ring);
-                        }
+                let s = d.min(0.1);
+                let mut q = [p[0] + dx / d * s, p[1] + dz / d * s];
+                col.push_out(&mut q, y + 0.45, 1.35, 0.35);
+                p = q;
+                let ground = c.terrain.at(p[0] as f64, p[1] as f64) as f32;
+                // fall at most 0.5 m a tick (gravity), land on the highest floor within a step
+                let floor = col.roof_under(p, y, 0.45).map_or(ground, |r| r.max(ground));
+                y = floor.max(y - 0.5);
+            }
+            let miss = (target[0] - p[0]).hypot(target[1] - p[1]);
+            if miss >= 0.6 {
+                for s in &col.solids {
+                    let q = [p[0] + (target[0] - p[0]) / miss * 0.4, p[1] + (target[1] - p[1]) / miss * 0.4];
+                    if point_in(&s.ring, q) && s.y1 > y + 0.45 && s.y0 < y + 1.8 {
+                        eprintln!("blocker y {:.2}..{:.2} ring {:?}", s.y0, s.y1, s.ring);
                     }
-                }
-                assert!(miss < 0.6, "core {i}: stuck before waypoint {j} at {p:?} y {y:.2} (target {target:?})");
-                if let Some(e) = expect {
-                    assert!((y - e).abs() < 0.3, "core {i}: at waypoint {j} floor {y:.2}, expected {e:.2}");
                 }
             }
+            assert!(miss < 0.6, "{name}: stuck before waypoint {j} at {p:?} y {y:.2} (target {target:?})");
+            if let Some(e) = expect {
+                assert!((y - e).abs() < 0.3, "{name}: at waypoint {j} floor {y:.2}, expected {e:.2}");
+            }
         }
+        y
     }
 
     #[test]
