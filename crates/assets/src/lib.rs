@@ -348,6 +348,17 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
     }
     // transmissive (glass) materials, noted before their extensions are stripped
     let transmissive: Vec<bool> = v["materials"].as_array().map_or(vec![], |a| a.iter().map(|m| m["extensions"].get("KHR_materials_transmission").is_some()).collect());
+    // specular-glossiness materials (older exports): their diffuse image and glossiness, likewise noted first
+    let spec_gloss: Vec<Option<(String, f32)>> = v["materials"].as_array().map_or(vec![], |a| {
+        a.iter()
+            .map(|m| {
+                let e = m["extensions"].get("KHR_materials_pbrSpecularGlossiness")?;
+                let tex = e["diffuseTexture"]["index"].as_u64()? as usize;
+                let img = v["textures"][tex]["source"].as_u64()? as usize;
+                Some((v["images"][img]["uri"].as_str()?.to_string(), e["glossinessFactor"].as_f64().unwrap_or(1.0) as f32))
+            })
+            .collect()
+    });
     for m in v["materials"].as_array_mut().into_iter().flatten() {
         if let Some(o) = m.as_object_mut() {
             o.remove("extensions");
@@ -461,6 +472,19 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
             let name = mt.name().unwrap_or("").to_lowercase();
             let trans = mt.index().and_then(|i| transmissive.get(i).copied()).unwrap_or(false);
             let glass = trans || mt.alpha_mode() == gltf::material::AlphaMode::Blend && pbr.base_color_factor()[3] < 0.95 || pbr.base_color_factor()[3] < 0.6 || name.contains("glass") || name.contains("bottle");
+            // older exports describe the surface with the specular-glossiness extension only: take its diffuse map,
+            // and its glossiness as roughness (it is not a metal)
+            if let (None, Some(Some((img, gloss)))) = (pbr.base_color_texture(), mt.index().and_then(|i| spec_gloss.get(i).cloned())) {
+                return Maps {
+                    glass: false,
+                    base: Some(format!("{dir}{}", img.replace("%20", " "))),
+                    normal: uri(mt.normal_texture().map(|t| t.texture())),
+                    base_factor: Some([1.0; 4]),
+                    rough_factor: Some(1.0 - gloss * 0.5),
+                    metal_factor: Some(0.0),
+                    ..Default::default()
+                };
+            }
             Maps {
                 glass,
                 base: uri(pbr.base_color_texture().map(|t| t.texture())),

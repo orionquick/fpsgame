@@ -85,3 +85,9 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Agave Sisalana Plant" by Md Mahmudur Rahman Bappy, CC Attribution, https://sketchfab.com/3d-models/cab98668fa5c42aa82b61c104c051b79
 - "NZ Flax" by toAflame, CC Attribution, https://sketchfab.com/3d-models/10ec8061ccc04a9a92760ed1fff3d7eb
 - "Graduate" typeface by Eduardo Tunni and "Montserrat" by Julieta Ulanovsky et al., SIL Open Font License 1.1 (sign lettering rendered by fps proctex), https://fonts.google.com/specimen/Graduate, https://fonts.google.com/specimen/Montserrat
+- "Trees (low-Poly, 4k Tris / Tree)" by Sereib, CC Attribution, https://sketchfab.com/3d-models/6fad6d1b2d7e4b2187ea6e6a721606ff
+- "Poste_separador_queue_Barrier" by eventdesignws, CC Attribution, https://sketchfab.com/3d-models/d9146a68827e4b1c854991bb9872046e
+- "Metal Door 2" by tboiston, CC Attribution, https://sketchfab.com/3d-models/4da6b538427244aaababe36d3e228a40
+- "Security Camera (with Animations & Textures)" by TampaJoey, CC Attribution, https://sketchfab.com/3d-models/631834aba23f43a482e4de7120d68d19
+- "Crowd control barrier. Metallic rusty old. Fence" by Rylae Shylna, CC Attribution, https://sketchfab.com/3d-models/3a3345997371447fb74362c066f254ac
+- "JACARANDA_TREE" by Uncanny Bingchilling, CC Attribution, https://sketchfab.com/3d-models/380a2c4bfa6d4ac5b73dc6b001651b4c

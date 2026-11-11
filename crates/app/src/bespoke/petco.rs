@@ -336,7 +336,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         stair_core(&mut g, &m, c);
     }
     home_plaza(&mut g, &mut f, &m, c, &st);
-    east_building(&mut g, &m, &|p: Vec2| c.terrain.at((p.x + HOME.x) as f64, (p.y + HOME.y) as f64) as f32);
+    east_building(&mut g, &mut f, &m, &|p: Vec2| c.terrain.at((p.x + HOME.x) as f64, (p.y + HOME.y) as f64) as f32);
     outfield(&mut g, &mut f, &m);
     backstop_net(&mut g, &m, &st);
     for b in [95.0f32, 265.0] {
@@ -3014,6 +3014,19 @@ fn bougainvillea(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, drop: 
     }
 }
 
+/// Places a catalog model so that its point (model x, z; default its footprint's centre) stands on local `at`, model
+/// height 0 at `y`, its +X axis along `x_dir` (its +Z a quarter turn clockwise of that, seen from above).
+fn place(g: &Geo, f: &mut Furnisher, id: &str, anchor: Option<(f32, f32)>, at: Vec2, y: f32, x_dir: Vec2, scale: f32) {
+    let Some((mn, mx)) = f.bounds(id) else { return };
+    let (cx, cz) = ((mn[0] + mx[0]) * 0.5, (mn[2] + mx[2]) * 0.5);
+    let (ax, az) = anchor.unwrap_or((cx, cz));
+    let x = x_dir.normalize();
+    let z = Vec2::new(-x.y, x.x);
+    let p = at - (x * (ax - cx) + z * (az - cz)) * scale;
+    let [wx, wz] = g.world_xz(p);
+    f.out.push(crate::library::Placement { asset: id.to_string(), part: crate::library::ALL_PARTS, x: wx, z: wz, y: g.world_y(y + mn[1] * scale), rot: g.heading(x), scale: [scale; 3], tint: [1.0; 3], lod: 0, indoor: false });
+}
+
 const SGN_N: [&str; 9] = ["sgn_n1", "sgn_n2", "sgn_n3", "sgn_n4", "sgn_n5", "sgn_n6", "sgn_n7", "sgn_n8", "sgn_n9"];
 
 /// Lettering from `fps proctex` (real typefaces, cutout): the text fills a box `w` x `h` whose bottom centre is `c`
@@ -3031,7 +3044,7 @@ fn sign(g: &mut Geo, id: &'static str, tint: [f32; 3], c: Vec2, y: f32, right: V
 /// of the band's height, in white aluminium framing over a counter ledge. `modules` share the run evenly.
 /// `numbers`: the module that is booth 1 (numerals in gold over the grille lights, up to 9). `lanes`: belt
 /// stanchions in front. `left` to `right` as seen from the front (`out`).
-fn ticket_wall(g: &mut Geo, m: &Mats, left: Vec2, right: Vec2, out: Vec2, y0: f32, y1: f32, modules: usize, numbers: Option<usize>, lanes: bool) {
+fn ticket_wall(g: &mut Geo, f: &mut Furnisher, m: &Mats, left: Vec2, right: Vec2, out: Vec2, y0: f32, y1: f32, modules: usize, numbers: Option<usize>, lanes: bool) {
     let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let len = (right - left).length();
     let r = (right - left) / len;
@@ -3073,25 +3086,26 @@ fn ticket_wall(g: &mut Geo, m: &Mats, left: Vec2, right: Vec2, out: Vec2, y0: f3
     }
     g.member(m.white, v3(right + out * 0.05, y0), v3(right + out * 0.05, y1), 0.05, 0.06, o3);
     if lanes {
-        // belt stanchions: black posts with red belts - a lane out from the counter every second booth, tied by a
-        // belt line 2.6 m out with a gap at every other span
-        let post = Key::new(Mat::Plain(110), [0.03, 0.03, 0.03]);
+        // belt stanchions: the post and head of a model by eventdesignws (CC BY), with red belts as in the photo - a
+        // lane out from the counter every second booth, and a belt along the queue line 2.6 m out
         let belt = Key::new(Mat::Plain(190), [0.3, 0.03, 0.03]);
-        let mut put = |g: &mut Geo, p: Vec2| {
-            g.tube(post, v3(p, 0.1), v3(p, 1.02), 0.03, 8);
-            g.tube(post, v3(p, 0.1), v3(p, 0.13), 0.17, 12);
+        let mut post = |g: &mut Geo, f: &mut Furnisher, p: Vec2| {
+            let [x, z] = g.world_xz(p);
+            for (part, y) in [(1usize, 0.09f32), (2, 0.95)] {
+                f.out.push(crate::library::Placement { asset: "sf_d9146a6882".into(), part, x, z, y: g.world_y(y), rot: 0.0, scale: [1.0; 3], tint: [1.0; 3], lod: 0, indoor: false });
+            }
         };
-        let lanes_n = modules / 2;
-        for i in 0..=lanes_n {
+        let n_lanes = modules / 2;
+        for i in 0..=n_lanes {
             let p0 = at((i * 2) as f32 * w) + out * 0.7;
             let p1 = p0 + out * 1.9;
-            put(g, p0);
-            put(g, p1);
-            g.member(belt, v3(p0, 0.95), v3(p1, 0.95), 0.012, 0.05, Vec3::new(r.x, 0.0, r.y));
+            post(g, f, p0);
+            post(g, f, p1);
+            g.member(belt, v3(p0, 0.99), v3(p1, 0.99), 0.012, 0.05, r3);
             g.block_ring(&[p0 - r * 0.03, p1 - r * 0.03, p1 + r * 0.03, p0 + r * 0.03], 0.1, 1.0);
-            if i < lanes_n && i % 2 == 0 {
+            if i < n_lanes && i % 2 == 0 {
                 let q1 = at(((i + 1) * 2) as f32 * w) + out * 2.6;
-                g.member(belt, v3(p1, 0.95), v3(q1, 0.95), 0.012, 0.05, o3);
+                g.member(belt, v3(p1, 0.99), v3(q1, 0.99), 0.012, 0.05, o3);
                 g.block_ring(&[p1 - out * 0.03, q1 - out * 0.03, q1 + out * 0.03, p1 + out * 0.03], 0.1, 1.0);
             }
         }
@@ -3102,7 +3116,7 @@ fn ticket_wall(g: &mut Geo, m: &Mats, left: Vec2, right: Vec2, out: Vec2, y0: f3
 /// heights from the lidar; its street face and south-west end face from street photos rectified onto a metre grid
 /// (camera solved against the lidar corners; heights cross-checked between two photos to 0.5 m).
 /// Frame: a runs north-east along the street from (66, 74), b in toward the bowl; the street face is the plane b = 0.5.
-fn east_building(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
+fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
     let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let (t, n) = (Vec2::new(1.0, -1.0).normalize(), Vec2::new(-1.0, -1.0).normalize());
     let uv = |a: f32, b: f32| Vec2::new(66.0, 74.0) + t * a + n * b - HOME;
@@ -3128,7 +3142,9 @@ fn east_building(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
     let su = |a: f32| a - a0;
     let bays = [(-7.0f32, 1.5f32), (2.8, 11.2), (12.5, 21.0)];
     let rows = [(18.6f32, 19.8f32), (13.1, 14.3)];
-    let mut holes: Vec<[f32; 4]> = vec![[su(h0), su(h1), 0.0, hh], [su(s0), su(h1), sy0, sy1]];
+    // (the slot runs on to the right past the hall, open onto the podium's terrace)
+    let s1 = 16.2f32;
+    let mut holes: Vec<[f32; 4]> = vec![[su(h0), su(h1), 0.0, hh], [su(s0), su(s1), sy0, sy1]];
     for &(w0, w1) in &bays {
         for &(y0, y1) in &rows {
             holes.push([su(w0), su(w1), y0, y1]);
@@ -3185,7 +3201,7 @@ fn east_building(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
             g.member(dark, v3(p, 4.1), v3(p, hc), 0.06, 0.06, t3);
         }
         let mods = ((d1 - d0) / 1.4).round().max(1.0) as usize;
-        ticket_wall(g, m, o + t * 0.25, uv(h1, fb + d0) + t * 0.25, -t, 1.04, 2.61, mods, None, false);
+        ticket_wall(g, f, m, o + t * 0.25, uv(h1, fb + d0) + t * 0.25, -t, 1.04, 2.61, mods, None, false);
     }
     // the back wall: brown, ribbed above the windows
     g.quad(brown, v3(uv(h0, bb), 0.0), t3 * (h1 - h0), Vec3::Y * hc);
@@ -3197,7 +3213,7 @@ fn east_building(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
     // twelve 1.40 m modules ending at the right wall; booth 4's grille on a = 0
     let (tw1, nmod) = (h1 - 0.05, 12usize);
     let tw0 = tw1 - nmod as f32 * 1.4;
-    ticket_wall(g, m, uv(tw0, bb), uv(tw1, bb), out, 1.04, 2.61, nmod, Some(3), true);
+    ticket_wall(g, f, m, uv(tw0, bb), uv(tw1, bb), out, 1.04, 2.61, nmod, Some(3), true);
     let grille = |k: f32| tw0 + (k + 2.0) * 1.4 + 0.41;
     sign(g, "sgn_will_call", gold, uv(tw0 + 2.1, bb) + out * 0.03, 2.7, t, 1.5, 0.2);
     sign(g, "sgn_tickets", gold, uv(grille(4.0), bb) + out * 0.03, 3.02, t, 1.73, 0.33);
@@ -3266,45 +3282,45 @@ fn east_building(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
         g.quad(Key::new(Mat::Plain(60), [0.015, 0.02, 0.03]), v3(q - t * 0.01 - n * 0.25, 1.3), -n3 * 0.55, Vec3::Y * 0.5);
         g.quad(Key::new(Mat::Plain(140), [0.5, 0.05, 0.05]), v3(q - t * 0.01 - n * 0.15, 2.57), -n3 * 0.3, Vec3::Y * 0.2);
         sign(g, "sgn_atm", gold, uv(h1, fb + 0.9) - t * 0.03, 3.45, -n, 0.62, 0.26);
-        let cam = Key::new(Mat::Plain(120), [0.8, 0.8, 0.79]);
-        let c = uv(h1, fb - 1.6) - t * 0.25;
-        g.member(cam, v3(uv(h1, fb - 1.6), 4.1), v3(c, 4.1), 0.05, 0.05, Vec3::Y);
-        g.member(cam, v3(c + n * 0.18, 3.98), v3(c - n * 0.18, 3.92), 0.13, 0.12, Vec3::Y);
+        // a wall camera (model by TampaJoey, CC BY: its mount at z = 0.04, its body out along +Z)
+        place(g, f, "sf_631834aba2", Some((0.0, 0.04)), uv(h1, fb - 1.6), 3.7, Vec2::new(-t.y, t.x), 1.0);
     }
 
-    // --- the loggia slot over the hall: a stone parapet (the face itself) with a rail, a shallow balcony behind,
-    // a tan back wall with a door, a tan soffit
+    // --- the loggia slot over the hall: a stone parapet (the face itself) with a rail and a shallow balcony that
+    // runs on to the right onto the podium's terrace; a tan back wall; at its left end a wide hallway leads back
+    // into the building from the slot's left edge; near the right a doorway stands in a recess
     {
         let (pl, pr) = (uv(s0, fb), uv(h1, fb));
+        let pe = uv(s1, fb);
         let inw = -out * sd;
         let i3 = -o3;
-        wall_poly(g, m.sandstone, &[v3(pl, sy0), v3(pl + inw, sy0), v3(pl + inw, sy1), v3(pl, sy1)], i3, Vec3::Y);
-        wall_poly(g, m.sandstone, &[v3(pr + inw, sy0), v3(pr, sy0), v3(pr, sy1), v3(pr + inw, sy1)], -i3, Vec3::Y);
-        poly_down(g, ceil, &[v3(pl, sy1), v3(pr, sy1), v3(pr + inw, sy1), v3(pl + inw, sy1)]);
+        // right end jamb (beyond the terrace canopy), soffit, floor
+        wall_poly(g, m.sandstone, &[v3(pe + inw, sy0), v3(pe, sy0), v3(pe, sy1), v3(pe + inw, sy1)], -i3, Vec3::Y);
+        poly_down(g, ceil, &[v3(pl, sy1), v3(pe, sy1), v3(pe + inw, sy1), v3(pl + inw, sy1)]);
         poly_up(g, stone_flat(), &[v3(pl, sy0), v3(pr, sy0), v3(pr - out * 0.4, sy0), v3(pl - out * 0.4, sy0)]);
+        poly_up(g, m.concrete, &[v3(pl - out * 0.4, 7.7), v3(pe - out * 0.4, 7.7), v3(pe + inw, 7.7), v3(pl + inw, 7.7)]);
         // (a warmer stucco than the rest: in the photos it sits in shade lit by the stone's bounce)
         let slot_wall = Key::new(Mat::Surface("tjeneevfw"), [0.95, 0.6, 0.32]).tile(2.0);
-        let (bl, br) = (pl + inw, pr + inw);
-        let bu = |a: f32| a - s0;
-        // a walkway leads back into the building on the left; on the right a doorway stands in a recess
-        let (walk, alcove) = ([bu(-1.0), bu(0.75), 7.7, 10.3], [bu(6.25), bu(7.8), 7.7, 10.05]);
-        wall_holes(g, slot_wall, bl, br, 7.7, sy1, &[walk, alcove]);
-        // (their inner faces are in deep shade in the photos)
         let deep = Key::new(Mat::Surface("tjeneevfw"), [0.3, 0.2, 0.12]).tile(2.0);
-        reveal(g, deep, bl, br, walk, 4.5);
+        let (bl, br) = (pl + inw, pe + inw);
+        let bu = |a: f32| a - s0;
+        // the hallway: from the slot's left edge 4.4 m along, full height, 5 m deep, a glazed door at its end
+        let (walk, alcove) = ([0.0, bu(0.7), 7.7, sy1], [bu(6.1), bu(7.6), 7.7, 10.05]);
+        wall_holes(g, slot_wall, bl, br, 7.7, sy1, &[walk, alcove]);
+        let hall_d = 5.0;
+        let (hl, hr) = (bl, uv(0.7, fb) + inw);
+        let back = -out * hall_d;
+        wall_poly(g, m.sandstone, &[v3(pl, sy0), v3(pl + inw, sy0), v3(pl + inw, sy1), v3(pl, sy1)], i3, Vec3::Y);
+        g.quad(deep, v3(hl, 7.7), i3 * hall_d, Vec3::Y * (sy1 - 7.7));
+        g.quad(deep, v3(hr + back, 7.7), o3 * hall_d, Vec3::Y * (sy1 - 7.7));
+        g.quad(deep, v3(hl + back, 7.7), t3 * 4.4, Vec3::Y * (sy1 - 7.7));
+        poly_down(g, deep, &[v3(hl, sy1), v3(hr, sy1), v3(hr + back, sy1), v3(hl + back, sy1)]);
+        poly_up(g, m.concrete, &[v3(hl, 7.7), v3(hr, 7.7), v3(hr + back, 7.7), v3(hl + back, 7.7)]);
+        g.quad(Key::new(Mat::Plain(60), [0.1, 0.14, 0.18]), v3(uv(-0.9, fb) + inw + back + out * 0.03, 7.7), t3 * 1.5, Vec3::Y * 2.3);
+        g.member(dark, v3(uv(-0.15, fb) + inw + back + out * 0.05, 7.7), v3(uv(-0.15, fb) + inw + back + out * 0.05, 10.0), 0.05, 0.05, o3);
         reveal(g, deep, bl, br, alcove, 0.9);
-        g.quad(Key::new(Mat::Plain(60), [0.1, 0.14, 0.18]), v3(uv(-1.0, fb) + inw - out * 4.5, 7.7), t3 * 1.75, Vec3::Y * 2.6);
-        g.member(dark, v3(uv(-0.125, fb) + inw - out * 4.45, 7.7), v3(uv(-0.125, fb) + inw - out * 4.45, 10.3), 0.05, 0.05, o3);
-        // the door: a grey steel leaf with a small vision light, in a pale frame
-        let door = Key::new(Mat::Plain(120), [0.2, 0.2, 0.2]);
-        let db = inw - out * 0.9;
-        g.quad(door, v3(uv(6.7, fb) + db + out * 0.02, 7.7), t3 * 0.8, Vec3::Y * 2.05);
-        g.quad(dark, v3(uv(6.95, fb) + db + out * 0.03, 9.0), t3 * 0.3, Vec3::Y * 0.5);
-        for a in [6.68f32, 7.52] {
-            g.member(sill, v3(uv(a, fb) + db + out * 0.04, 7.7), v3(uv(a, fb) + db + out * 0.04, 9.77), 0.05, 0.06, o3);
-        }
-        g.member(sill, v3(uv(6.68, fb) + db + out * 0.04, 9.77), v3(uv(7.52, fb) + db + out * 0.04, 9.77), 0.06, 0.05, o3);
-        g.member(Key::new(Mat::Plain(70), [0.5, 0.5, 0.5]), v3(uv(7.38, fb) + db + out * 0.06, 8.7), v3(uv(7.38, fb) + db + out * 0.06, 8.82), 0.03, 0.05, o3);
+        // the door (model by tboiston, CC BY, modelled in centimetres): a grey steel leaf with a vision light
+        place(g, f, "sf_4da6b53842", None, uv(6.85, fb) + inw - out * 0.82, 7.7, t, 0.01);
         g.member(frame, v3(pl - out * 0.2, sy0 + 0.08), v3(pr - out * 0.2, sy0 + 0.08), 0.05, 0.05, Vec3::Y);
     }
 

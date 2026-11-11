@@ -193,7 +193,9 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         ([-95.0, 48.0], [0.84805, 0.52992], [2.0, 110.0, -20.0, 26.0]),
     ];
     // the sidewalk in front of the east building has broadleaf street trees, not palms (street photos)
-    let jacaranda = lib.catalog.get("ph_jacaranda_tree").filter(|a| !a.parts.is_empty());
+    // (a jacaranda by Uncanny Bingchilling, CC BY: an umbrella crown on a clear stem, modelled 3 m tall)
+    let pair = lib.catalog.get("sf_380a2c4bfa").filter(|a| !a.parts.is_empty());
+    let mut east: Vec<(f64, [f64; 2])> = vec![];
     for (i, p) in c.trees.iter().enumerate() {
         let local = |s: &([f64; 2], [f64; 2], [f64; 4])| {
             let (dx, dz) = (p[0] - s.0[0], p[1] - s.0[1]);
@@ -206,11 +208,8 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
             continue;
         }
         let (eu, ev) = local(&solids[0]);
-        if let (Some(j), true) = (jacaranda, eu > -16.0 && eu < 45.0 && ev >= 4.5 && ev < 15.0) {
-            let hs = hash(i as u64, 977);
-            let hgt = c.tree_h.get(i).copied().unwrap_or(8.0).clamp(6.5, 9.5);
-            let sc = (hgt / extent(j)[1] as f64) as f32;
-            out.push(Placement { asset: j.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: (hs % 360) as f64, scale: [sc * 1.25, sc * 0.9, sc * 1.25], tint: [2.2, 2.6, 1.3], lod: 0, indoor: false });
+        if pair.is_some() && eu > -26.0 && eu < 45.0 && ev >= 4.5 && ev < 15.0 {
+            east.push((eu, *p));
             continue;
         }
         let h = c.tree_h.get(i).copied().unwrap_or(8.0).clamp(4.0, 22.0);
@@ -235,6 +234,27 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         }
         out.push(Placement { asset: crown.id.clone(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: y0 + trunk_h - crown_h * 0.25, rot: (hs % 360) as f64, scale: [cs, cs, cs], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
     }
+    if let Some(m) = pair {
+        // the forecourt's four trees as measured on the street photo (a along the street from (66, 74), 9.5 m out
+        // from the face): -13.4, -1.85, 11.8, 23.9. The surveyed tree tops here are dropped for them. The real trees
+        // are about 8.5 m tall with 10 m crowns clearing 3 m.
+        let _ = &east;
+        let mn = m.parts.iter().fold([f32::MAX; 3], |a, q| [a[0].min(q.min[0]), a[1].min(q.min[1]), a[2].min(q.min[2])]);
+        let mx = m.parts.iter().fold([f32::MIN; 3], |a, q| [a[0].max(q.max[0]), a[1].max(q.max[1]), a[2].max(q.max[2])]);
+        let (cx, cz) = ((mn[0] + mx[0]) as f64 * 0.5, (mn[2] + mx[2]) as f64 * 0.5);
+        for (k, a0) in [-13.4f64, -1.85, 11.8, 23.9].into_iter().enumerate() {
+            let a = [66.0 + 0.70711 * a0 + 0.70711 * 9.5, 74.0 - 0.70711 * a0 + 0.70711 * 9.5];
+            let rot = 45.0 + k as f64 * 70.0;
+            let (sx, sy, sz) = (2.2f64, 2.8f64, 3.9f64);
+            let r = rot.to_radians();
+            let (ux, uz, zx, zz) = (r.sin(), -r.cos(), r.cos(), r.sin());
+            // the trunk's base is the model's origin
+            let (ox, oz) = (-cx * sx, -cz * sz);
+            let (x, z) = (a[0] - ox * ux - oz * zx, a[1] - ox * uz - oz * zz);
+            out.push(Placement { asset: m.id.clone(), part: crate::library::ALL_PARTS, x, z, y: c.terrain.at(a[0], a[1]) - 0.05, rot, scale: [sx as f32, sy as f32, sz as f32], tint: [0.3, 0.52, 0.2], lod: 0, indoor: false });
+        }
+    }
+
     out
 }
 
