@@ -223,7 +223,7 @@ fn mats() -> Mats {
     Mats {
         grass: s("sfklehwa", [0.62, 0.92, 0.5]).tile(2.0).rough(0.85),
         grass_dark: s("sfklehwa", [0.5, 0.78, 0.42]).tile(2.0).rough(0.85),
-        dirt: s("pht_baseball_playground", [1.12, 0.82, 0.62]).tile(3.0),
+        dirt: s("pht_baseball_playground", [0.92, 0.58, 0.4]).tile(3.0),
         track: s("pht_red_laterite_soil_stones", [0.95, 0.78, 0.68]).tile(2.0),
         chalk: Key::new(Mat::Plain(200), [0.92, 0.92, 0.9]),
         rubber: Key::new(Mat::Plain(160), [0.95, 0.95, 0.94]),
@@ -293,8 +293,16 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     outfield_wall(&mut g, &m);
     foul_poles(&mut g, &m);
     let st = stations(&front);
+    if std::env::var("FPS_PETCO_DEBUG").is_ok() {
+        let b: Vec<String> = st.iter().step_by(10).map(|s| format!("{:.0}@({:.0},{:.0}) f{:.1}", s.bearing, s.p.x, s.p.y, s.front)).collect();
+        eprintln!("stations {}: {}", st.len(), b.join(" "));
+    }
     bowl(&mut g, &mut f, &m, &st, &front);
     outfield(&mut g, &mut f, &m);
+    backstop_net(&mut g, &m, &st);
+    for b in [95.0f32, 265.0] {
+        disc(&mut g, m.dirt, dir(b) * 9.5, 1.52, 0.02);
+    }
     western_metal(&mut g, &m, c);
     for t in TOWERS {
         tower(&mut g, &m, t);
@@ -588,10 +596,15 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let (a, b) = (st[i], st[i + 1]);
         let mid_s = (arc[i] + arc[i + 1]) / 2.0;
         let in_aisle = aisle(mid_s);
-        // --- front wall (true front line): padded, 1.1 m, LED ribbon on top behind home
+        // --- front wall (true front line): padded, 1.1 m; in the dugout spans the dugout's roof edge instead
         let (fa, fb) = (at(&a, a.front), at(&b, b.front));
         let e = (fb - fa).normalize_or_zero();
-        g.poly(m.pad, &[v(fb, 0.0), v(fa, 0.0), v(fa, 1.1), v(fb, 1.1)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+        let dug = dugout_at(a.bearing) && dugout_at(b.bearing);
+        if dug {
+            dugout(g, m, &a, &b);
+        } else {
+            g.poly(m.pad, &[v(fb, 0.0), v(fa, 0.0), v(fa, 1.1), v(fb, 1.1)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+        }
         g.poly(m.concrete, &[v(fa, 1.1), v(fb, 1.1), v(fb + b.n * 0.3, 1.1), v(fa + a.n * 0.3, 1.1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y.cross(Vec3::new(e.x, 0.0, e.y)));
         g.block_ring(&[fa, fb, fb + b.n * 0.3, fa + a.n * 0.3], 0.0, 1.1);
         // --- lower bowl: treads and risers from the front line to the back
@@ -600,7 +613,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         for j in 0..rows {
             let n0 = 0.8 + j as f32 * LB_PITCH;
             let n1 = n0 + LB_PITCH;
-            if n1 < a.front.min(b.front) {
+            if n1 < a.front.min(b.front) || (dug && n0 < a.front + DUG_DEPTH) {
                 continue;
             }
             let (n0a, n0b) = (n0.max(a.front + 0.3), n0.max(b.front + 0.3));
@@ -707,9 +720,14 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let blk = 9.0 + 5.0 * (((arc[i] / 23.0).floor() as i32).rem_euclid(3) as f32);
         let (ga, gb) = (at(&a, up_back_a - 6.0), at(&b, up_back_b - 6.0));
         let (oa, ob) = (wa + a.n * 4.0, wb + b.n * 4.0);
-        g.poly(m.sandstone, &[v(oa, 0.0), v(ob, 0.0), v(ob, blk), v(oa, blk)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-        poly_up(g, m.concrete, &[v(ga, blk), v(gb, blk), v(ob, blk), v(oa, blk)]);
-        g.block_ring(&[ga, gb, ob, oa], 0.0, blk);
+        if GATES.iter().any(|&gb| (a.bearing - gb).abs() < 2.2) {
+            // a gate: the blocks open and a stair climbs from the sidewalk to the concourse under the decks
+            gate_stair(g, m, &a, &b, up_back_a + 4.0, a.terrace + 9.0);
+        } else {
+            g.poly(m.sandstone, &[v(oa, 0.0), v(ob, 0.0), v(ob, blk), v(oa, blk)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            poly_up(g, m.concrete, &[v(ga, blk), v(gb, blk), v(ob, blk), v(oa, blk)]);
+            g.block_ring(&[ga, gb, ob, oa], 0.0, blk);
+        }
         // --- canopy: white steel over the back rows (55-305 degrees)
         if a.bearing > 55.0 && a.bearing < 305.0 {
             let cy = 39.4;
@@ -1021,5 +1039,86 @@ fn board(g: &mut Geo, m: &Mats, c: Vec2, face: Vec2, w: f32, y0: f32, y1: f32, s
         let k = Key::new(Mat::Light, [1.4, 1.4, 1.35]);
         g.quad(m.navy, v(c - side * 9.0 + face * 0.05, y1 + 0.3), Vec3::new(side.x, 0.0, side.y) * 18.0, Vec3::Y * 3.0);
         g.quad(k, v(c - side * 8.0 + face * 0.08, y1 + 1.1), Vec3::new(side.x, 0.0, side.y) * 16.0, Vec3::Y * 1.4);
+    }
+}
+
+// ---------------------------------------------------------------- dugouts, netting
+
+/// The dugouts (station bearings from home): first-base side (visitors) and third-base side (home), ~30 m long and
+/// centred off the bases, where the aerial shows the breaks in the front rows.
+const DUGOUTS: [(f32, f32); 2] = [(57.0, 80.0), (280.0, 303.0)];
+const DUG_DEPTH: f32 = 4.2;
+
+fn dugout_at(b: f32) -> bool {
+    DUGOUTS.iter().any(|&(a, c)| b > a && b < c)
+}
+
+/// One segment of a dugout: sunk 1.2 m with a bench along its back wall, its roof at 1.1 m (the front rows start
+/// above it), a padded roof edge and a rail along the front; closed to players (a block over the pit).
+fn dugout(g: &mut Geo, m: &Mats, a: &Station, b: &Station) {
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let at = |s: &Station, n: f32| s.p + s.n * n;
+    let e = (b.p - a.p).normalize_or_zero();
+    let ev = Vec3::new(e.x, 0.0, e.y);
+    let (f0a, f0b) = (at(a, a.front), at(b, b.front));
+    let (bka, bkb) = (at(a, a.front + DUG_DEPTH), at(b, b.front + DUG_DEPTH));
+    let floor = -1.2;
+    poly_up(g, m.concrete, &[v(f0a, floor), v(f0b, floor), v(bkb, floor), v(bka, floor)]);
+    // the field-side lip down into the pit, the back wall, the bench
+    g.poly(m.pad, &[v(f0b, floor), v(f0a, floor), v(f0a, 0.0), v(f0b, 0.0)], ev, Vec3::Y);
+    g.poly(m.navy, &[v(bka, floor), v(bkb, floor), v(bkb, 1.1), v(bka, 1.1)], -ev, Vec3::Y);
+    let (s0a, s0b) = (at(a, a.front + DUG_DEPTH - 0.55), at(b, b.front + DUG_DEPTH - 0.55));
+    g.poly(m.navy, &[v(s0a, floor + 0.45), v(s0b, floor + 0.45), v(bkb, floor + 0.45), v(bka, floor + 0.45)], ev, Vec3::new(a.n.x, 0.0, a.n.y));
+    // roof slab with a padded edge facing the field
+    let (r0a, r0b) = (at(a, a.front + 1.0), at(b, b.front + 1.0));
+    poly_up(g, m.concrete, &[v(r0a, 1.15), v(r0b, 1.15), v(bkb, 1.15), v(bka, 1.15)]);
+    g.poly(m.riser, &[v(bka, 1.0), v(bkb, 1.0), v(r0b, 1.0), v(r0a, 1.0)], ev, -Vec3::new(a.n.x, 0.0, a.n.y));
+    g.poly(m.pad, &[v(r0b, 0.75), v(r0a, 0.75), v(r0a, 1.15), v(r0b, 1.15)], -ev, Vec3::Y);
+    g.tube(m.rail, v(f0a + a.n * 0.2, 0.95), v(f0b + b.n * 0.2, 0.95), 0.035, 6);
+    g.block_ring(&[f0a, f0b, bkb, bka], 0.0, 1.15);
+}
+
+/// Netting behind home plate from dugout to dugout: steel posts and cables with a fine, nearly clear net.
+fn backstop_net(g: &mut Geo, m: &Mats, st: &[Station]) {
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let net = Key::new(Mat::Glass, [0.25, 0.25, 0.25]).rough(0.07);
+    let span: Vec<&Station> = st.iter().filter(|s| s.bearing > DUGOUTS[0].1 && s.bearing < DUGOUTS[1].0).collect();
+    let h = 9.0;
+    for (k, w) in span.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let (pa, pb) = (a.p + a.n * (a.front + 0.15), b.p + b.n * (b.front + 0.15));
+        let e = (pb - pa).normalize_or_zero();
+        g.poly(net, &[v(pa, 1.1), v(pb, 1.1), v(pb, h), v(pa, h)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+        if k % 9 == 0 {
+            g.tube(m.rail, v(pa, 1.1), v(pa, h + 0.3), 0.06, 6);
+        }
+    }
+    if let (Some(a), Some(b)) = (span.first(), span.last()) {
+        let _ = (a, b);
+    }
+    let pts: Vec<Vec2> = span.iter().map(|s| s.p + s.n * (s.front + 0.15)).collect();
+    for w in pts.windows(2) {
+        g.tube(m.rail, v(w[0], h), v(w[1], h), 0.02, 4);
+    }
+}
+
+/// Gates (bearing from home): the home plate gate behind home and one each side.
+const GATES: [f32; 3] = [180.0, 120.0, 240.0];
+
+/// A stair from the street (at offset `n_out`) up to the concourse floor (at `n_in`), between stations a and b.
+fn gate_stair(g: &mut Geo, m: &Mats, a: &Station, b: &Station, n_out: f32, n_in: f32) {
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let at = |s: &Station, n: f32| s.p + s.n * n;
+    let e = (b.p - a.p).normalize_or_zero();
+    let ev = Vec3::new(e.x, 0.0, e.y);
+    let steps = 30;
+    let rise = CONCOURSE_Y / steps as f32;
+    let run = (n_out - n_in) / steps as f32;
+    for k in 0..steps {
+        let (n0, n1) = (n_out - k as f32 * run, n_out - (k + 1) as f32 * run);
+        let y = (k + 1) as f32 * rise;
+        poly_up(g, m.concrete, &[v(at(a, n0), y), v(at(b, n0), y), v(at(b, n1), y), v(at(a, n1), y)]);
+        g.poly(m.riser, &[v(at(a, n0), y - rise), v(at(b, n0), y - rise), v(at(b, n0), y), v(at(a, n0), y)], ev, Vec3::Y);
+        g.block_ring(&[at(a, n0), at(b, n0), at(b, n1), at(a, n1)], 0.0, y);
     }
 }
