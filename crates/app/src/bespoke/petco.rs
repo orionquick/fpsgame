@@ -2286,7 +2286,7 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
     // every arm hangs from the bottom chord of the truss above its level down to that level's floor; the trusses
     // keep their own diagonals
     // at the bottom a leg from each column's top corner runs down to meet the big arm (a Y, not a cross)
-    let big = ((2.0f32 / 6.0, 13.0f32), (0.04f32, CONCOURSE_Y));
+    let big = ((2.0f32 / 6.0, 13.0f32), (0.0f32, CONCOURSE_Y));
     let leg_dir = (0.36f32, CONCOURSE_Y - 13.0);
     let leg_end = {
         // solve (0, 13) + t * leg_dir = big.0 + s * (big.1 - big.0)
@@ -2298,8 +2298,8 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
     let arms = [
         (big.0 .0, big.0 .1, big.1 .0, big.1 .1, 0.6),
         (0.0, 13.0, leg_end.0, leg_end.1, 0.42),
-        (1.0 / 6.0, mid_lo, 0.06, d1, 0.5),
-        (2.0 / 6.0, 31.5, 0.05, GZ_UPPER_CONCOURSE, 0.55),
+        (1.0 / 6.0, mid_lo, 0.0, d1, 0.5),
+        (2.0 / 6.0, 31.5, 0.0, GZ_UPPER_CONCOURSE, 0.55),
     ];
     for w in cols.windows(2) {
         let ((pa, na), (pb, nb)) = (place(w[0]), place(w[1]));
@@ -2391,8 +2391,9 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
             let p = at(f);
             let side = Vec3::new((pb - pa).normalize().x, 0.0, (pb - pa).normalize().y);
             if !blocked(p) {
-                g.member(k, v(p, 33.4), v(p + nrm * GZ_OVERHANG, under), 0.28, 0.26, side);
-                g.member(k, v(p - nrm * 0.4, under - 0.2), v(p + nrm * GZ_OVERHANG, under - 0.2), 0.3, 0.26, side);
+                let front = fa.lerp(fb, f);
+                g.member(k, v(p, 33.4), v(front, under), 0.28, 0.26, side);
+                g.member(k, v(p - nrm * 0.4, under - 0.2), v(front, under - 0.2), 0.3, 0.26, side);
             }
         }
         // under the upper deck, against the rows' stepped underside: a raker truss at each tall column (chords down
@@ -2401,7 +2402,7 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
         // top rows down to its middle. r: metres in from the upper deck's back (the frame stands FRAME_OFF out).
         let side = Vec3::new((pb - pa).normalize().x, 0.0, (pb - pa).normalize().y);
         let under_rows = |r: f32| top_row + 0.01 - r * UP_RISE / UP_PITCH;
-        let pt = |f: f32, r: f32| at(f) - nrm * (FRAME_OFF + r);
+        let pt = |f: f32, r: f32| (pa - na * (FRAME_OFF + r)).lerp(pb - nb * (FRAME_OFF + r), f);
         let r_end = GZ_RAKE * 0.62;
         let depth = 2.3;
         for f in [0.0f32, 1.0] {
@@ -2416,6 +2417,10 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
             g.member(k, v(pt(f, 0.0), top(0.0)), v(pt(f, r_end), top(r_end)), 0.4, 0.4, side);
             g.member(k, v(pt(f, 0.0), top(0.0) - depth), v(pt(f, r_end), top(r_end) - depth), 0.4, 0.4, side);
             g.member(k, v(pt(f, 0.0), top(0.0) - depth), v(pt(f, 0.0), top(0.0)), 0.3, 0.3, side);
+            // and back to the frame column at both chords
+            for y in [top(0.0), top(0.0) - depth] {
+                g.member(k, v(pt(f, 0.0), y), v(at(f), y), 0.4, 0.4, side);
+            }
             let n = 6;
             for j in 0..n {
                 let (r0, r1) = (r_end * j as f32 / n as f32, r_end * (j + 1) as f32 / n as f32);
