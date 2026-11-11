@@ -5,8 +5,10 @@ use wgpu::util::DeviceExt;
 
 pub use wgpu as wgpu_reexport;
 
+pub mod cull;
 pub mod gi;
 pub mod textured;
+pub use cull::CullWorld;
 pub use textured::{compress_material, read_compressed, write_compressed, Batch, CompressedTex, CompressedTex3, Instance, Material, TexVertex};
 
 pub const MSAA: u32 = 4;
@@ -16,6 +18,8 @@ const SHADOW_FAR_RES: u32 = 4096;
 const SHADOW_NEAR_RES: u32 = 4096;
 /// Half-size of the near shadow cascade around the camera, metres.
 const NEAR_HALF: f32 = 70.0;
+/// Grid the culled path's near cascade centre snaps to (it is redrawn when the eye changes cell).
+const NEAR_CELL: f32 = 8.0;
 
 pub struct Gpu {
     pub instance: wgpu::Instance,
@@ -24,6 +28,14 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     /// BC block compression available (textures upload compressed).
     pub bc: bool,
+}
+
+/// Instance options: wgpu's per-draw indirect validation off (it adds GPU work for every indirect draw; the culled
+/// path's arguments are written by our own shader). WGPU_* environment variables still override.
+pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
+    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    d.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    d.with_env()
 }
 
 impl Gpu {
@@ -46,7 +58,7 @@ impl Gpu {
         Self { instance, adapter, device, queue, bc }
     }
     pub fn headless() -> Self {
-        Self::new(wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()), None)
+        Self::new(wgpu::Instance::new(instance_descriptor()), None)
     }
 }
 
@@ -116,6 +128,8 @@ pub struct Camera {
     pub focus: Vec3,
     /// Haze density per metre; 0 for top-down review renders.
     pub fog: f32,
+    /// 1 / tan(half the vertical field of view); 0 for orthographic views.
+    pub proj_y: f32,
 }
 
 impl Camera {
@@ -125,7 +139,7 @@ impl Camera {
         let (hw, hh) = ((rect[2] - rect[0]) * 0.5, (rect[3] - rect[1]) * 0.5);
         let eye = Vec3::new(cx, top + 50.0, cz);
         let view = Mat4::look_at_rh(eye, Vec3::new(cx, 0.0, cz), Vec3::NEG_Z);
-        Self { view_proj: Mat4::orthographic_rh(-hw, hw, -hh, hh, 1.0, top + 400.0) * view, eye, focus: Vec3::new(cx, 0.0, cz), fog: 0.0 }
+        Self { view_proj: Mat4::orthographic_rh(-hw, hw, -hh, hh, 1.0, top + 400.0) * view, eye, focus: Vec3::new(cx, 0.0, cz), fog: 0.0, proj_y: 0.0 }
     }
     /// Top-down orthographic view of `rect` cut at height `cut` (everything above it left out): interior plans.
     pub fn plan(rect: [f32; 4], cut: f32) -> Self {
@@ -133,14 +147,14 @@ impl Camera {
         let (hw, hh) = ((rect[2] - rect[0]) * 0.5, (rect[3] - rect[1]) * 0.5);
         let eye = Vec3::new(cx, cut, cz);
         let view = Mat4::look_at_rh(eye, Vec3::new(cx, cut - 1.0, cz), Vec3::NEG_Z);
-        Self { view_proj: Mat4::orthographic_rh(-hw, hw, -hh, hh, 0.01, 60.0) * view, eye, focus: Vec3::new(cx, cut - 3.0, cz), fog: 0.0 }
+        Self { view_proj: Mat4::orthographic_rh(-hw, hw, -hh, hh, 0.01, 60.0) * view, eye, focus: Vec3::new(cx, cut - 3.0, cz), fog: 0.0, proj_y: 0.0 }
     }
     /// First-person view. Yaw 0 = north (-z), 90 = east (+x); pitch up positive. Degrees.
     pub fn perspective(eye: Vec3, yaw_deg: f32, pitch_deg: f32, fov_y_deg: f32, aspect: f32) -> Self {
         let dir = look_dir(yaw_deg, pitch_deg);
         let view = Mat4::look_at_rh(eye, eye + dir, Vec3::Y);
         let flat = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
-        Self { view_proj: Mat4::perspective_rh(fov_y_deg.to_radians(), aspect, 0.1, 5000.0) * view, eye, focus: eye + flat * (NEAR_HALF * 0.6), fog: 0.0009 }
+        Self { view_proj: Mat4::perspective_rh(fov_y_deg.to_radians(), aspect, 0.1, 5000.0) * view, eye, focus: eye + flat * (NEAR_HALF * 0.6), fog: 0.0009, proj_y: 1.0 / (fov_y_deg.to_radians() * 0.5).tan() }
     }
 }
 
@@ -203,6 +217,7 @@ pub struct Renderer {
     n_lights: std::cell::Cell<u32>,
     probe_tex: wgpu::Texture,
     probe_down: wgpu::RenderPipeline,
+    blit_pipeline: wgpu::RenderPipeline,
     probe_down_bgl: wgpu::BindGroupLayout,
     probe_down_samp: wgpu::Sampler,
     /// Current probe state (see Globals) and the radiance encode scale while baking (0 = normal output).
@@ -221,8 +236,29 @@ pub struct Renderer {
     /// Voxel flood-fill GI (indirect diffuse light).
     pub gi: gi::Gi,
     hist_bgl: wgpu::BindGroupLayout,
+    // culled path (see cull.rs)
+    pub(crate) inst_bgl: wgpu::BindGroupLayout,
+    pub(crate) cull_bgl: wgpu::BindGroupLayout,
+    pub(crate) cull_pipeline: wgpu::ComputePipeline,
+    pub(crate) hiz_init_bgl: wgpu::BindGroupLayout,
+    pub(crate) hiz_init_pipeline: wgpu::ComputePipeline,
+    pub(crate) hiz_down_bgl: wgpu::BindGroupLayout,
+    pub(crate) hiz_down_pipeline: wgpu::ComputePipeline,
+    tex_ids_pipeline: wgpu::RenderPipeline,
+    glass_ids_pipeline: wgpu::RenderPipeline,
+    /// Depth prepass (no colour) and the shading pipelines that follow it (depth equal, no writes).
+    flat_pre_pipeline: wgpu::RenderPipeline,
+    tex_ids_pre_pipeline: wgpu::RenderPipeline,
+    flat_shade_pipeline: wgpu::RenderPipeline,
+    sky_late_pipeline: wgpu::RenderPipeline,
+    /// The world, sun and centre the near shadow map was last drawn for by the culled path.
+    near_key: std::cell::Cell<(u64, [f32; 3], [i32; 3])>,
+    tex_shadow_ids_pipeline: wgpu::RenderPipeline,
+    /// The world and sun the far shadow map was last drawn for by the culled path (it is static).
+    far_key: std::cell::Cell<(u64, [f32; 3])>,
 }
 
+const ID_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![4 => Uint32];
 const VERTEX_ATTRS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
 
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -427,6 +463,90 @@ impl Renderer {
             depth_state(true, wgpu::CompareFunction::Less, shadow_bias),
             Default::default(),
         );
+        // ---- culled path ----
+        let storage = |binding, vis, read_only| wgpu::BindGroupLayoutEntry { binding, visibility: vis, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only }, has_dynamic_offset: false, min_binding_size: None }, count: None };
+        let inst_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("instances"), entries: &[storage(0, wgpu::ShaderStages::VERTEX, true)] });
+        let ids_layout = [Some(textured::layouts()[0].clone()), Some(wgpu::VertexBufferLayout { array_stride: 4, step_mode: wgpu::VertexStepMode::Instance, attributes: &ID_ATTRS })];
+        let tex_ids_layout = layout("tex ids", &[Some(&bgl), Some(&mat_bgl), Some(&hist_bgl), Some(&inst_bgl)]);
+        let tex_shadow_ids_layout = layout("tex shadow ids", &[Some(&sbgl), Some(&mat_bgl), Some(&inst_bgl)]);
+        let tex_ids_pipeline = pipe(
+            "tex ids",
+            &tex_ids_layout,
+            wgpu::VertexState { module: &tex_mod, entry_point: Some("vs_ids"), compilation_options: Default::default(), buffers: &ids_layout },
+            Some(wgpu::FragmentState { module: &tex_mod, entry_point: Some("fs"), compilation_options: Default::default(), targets: &color }),
+            depth_state(false, wgpu::CompareFunction::LessEqual, Default::default()),
+            ms,
+        );
+        let no_color = [Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::empty() })];
+        let tex_ids_pre_pipeline = pipe(
+            "tex ids prepass",
+            &tex_ids_layout,
+            wgpu::VertexState { module: &tex_mod, entry_point: Some("vs_ids"), compilation_options: Default::default(), buffers: &ids_layout },
+            Some(wgpu::FragmentState { module: &tex_mod, entry_point: Some("fs_pre"), compilation_options: Default::default(), targets: &no_color }),
+            depth_state(true, wgpu::CompareFunction::Less, Default::default()),
+            ms,
+        );
+        let flat_pre_pipeline = pipe(
+            "flat prepass",
+            &main_layout,
+            wgpu::VertexState { module: &flat_mod, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[Some(vertex_layout())] },
+            Some(wgpu::FragmentState { module: &flat_mod, entry_point: Some("fs_pre"), compilation_options: Default::default(), targets: &no_color }),
+            depth_state(true, wgpu::CompareFunction::Less, Default::default()),
+            ms,
+        );
+        let flat_shade_pipeline = pipe(
+            "flat shade",
+            &main_layout,
+            wgpu::VertexState { module: &flat_mod, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[Some(vertex_layout())] },
+            Some(wgpu::FragmentState { module: &flat_mod, entry_point: Some("fs"), compilation_options: Default::default(), targets: &color }),
+            depth_state(false, wgpu::CompareFunction::LessEqual, Default::default()),
+            ms,
+        );
+        // the sky last, only where nothing was drawn (its depth is 1, the clear value)
+        let sky_late_pipeline = pipe(
+            "sky late",
+            &main_layout,
+            wgpu::VertexState { module: &flat_mod, entry_point: Some("vs_sky"), compilation_options: Default::default(), buffers: &[] },
+            Some(wgpu::FragmentState { module: &flat_mod, entry_point: Some("fs_sky"), compilation_options: Default::default(), targets: &color }),
+            depth_state(false, wgpu::CompareFunction::LessEqual, Default::default()),
+            ms,
+        );
+        let glass_ids_pipeline = pipe(
+            "glass ids",
+            &tex_ids_layout,
+            wgpu::VertexState { module: &tex_mod, entry_point: Some("vs_ids"), compilation_options: Default::default(), buffers: &ids_layout },
+            Some(wgpu::FragmentState { module: &tex_mod, entry_point: Some("fs_glass"), compilation_options: Default::default(), targets: &glass_color }),
+            depth_state(false, wgpu::CompareFunction::Less, Default::default()),
+            ms,
+        );
+        let tex_shadow_ids_pipeline = pipe(
+            "tex shadow ids",
+            &tex_shadow_ids_layout,
+            wgpu::VertexState { module: &shadow_mod, entry_point: Some("vs_tex_ids"), compilation_options: Default::default(), buffers: &ids_layout },
+            Some(wgpu::FragmentState { module: &shadow_mod, entry_point: Some("fs_tex"), compilation_options: Default::default(), targets: &[] }),
+            depth_state(true, wgpu::CompareFunction::Less, shadow_bias),
+            Default::default(),
+        );
+        let cull_mod = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("cull"), source: wgpu::ShaderSource::Wgsl(include_str!("cull.wgsl").into()) });
+        let cs = wgpu::ShaderStages::COMPUTE;
+        let unfilt = |binding| wgpu::BindGroupLayoutEntry { binding, visibility: cs, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
+        let r32_store = |binding| wgpu::BindGroupLayoutEntry { binding, visibility: cs, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::R32Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None };
+        let cull_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("cull"),
+            entries: &[storage(0, cs, true), storage(1, cs, true), storage(2, cs, true), storage(3, cs, true), uniform(4, cs), storage(5, cs, false), storage(6, cs, false), unfilt(7)],
+        });
+        let hiz_init_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hiz init"),
+            entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: cs, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: true }, count: None }, r32_store(1)],
+        });
+        let hiz_down_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("hiz down"), entries: &[unfilt(2), r32_store(3)] });
+        let compute = |label, bgl: &wgpu::BindGroupLayout, entry| {
+            d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: Some(label), layout: Some(&layout(label, &[Some(bgl)])), module: &cull_mod, entry_point: Some(entry), compilation_options: Default::default(), cache: None })
+        };
+        let cull_pipeline = compute("cull", &cull_bgl, "cull");
+        let hiz_init_pipeline = compute("hiz init", &hiz_init_bgl, "hiz_init");
+        let hiz_down_pipeline = compute("hiz down", &hiz_down_bgl, "hiz_down");
+
         let probe_down_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("probe down"),
             entries: &[
@@ -441,6 +561,14 @@ impl Renderer {
             &layout("probe down", &[Some(&probe_down_bgl)]),
             wgpu::VertexState { module: &down_mod, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
             Some(wgpu::FragmentState { module: &down_mod, entry_point: Some("fs"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+            None,
+            Default::default(),
+        );
+        let blit_pipeline = pipe(
+            "blit",
+            &layout("blit", &[Some(&probe_down_bgl)]),
+            wgpu::VertexState { module: &down_mod, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            Some(wgpu::FragmentState { module: &down_mod, entry_point: Some("fs_blit"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
             None,
             Default::default(),
         );
@@ -467,12 +595,45 @@ impl Renderer {
             None,
             Default::default(),
         );
-        Self { hist_bgl, gi, probe_tex, probe_down, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), white: std::cell::Cell::new([1.0; 3]), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
+        Self { inst_bgl, cull_bgl, cull_pipeline, hiz_init_bgl, hiz_init_pipeline, hiz_down_bgl, hiz_down_pipeline, tex_ids_pipeline, glass_ids_pipeline, flat_pre_pipeline, tex_ids_pre_pipeline, flat_shade_pipeline, sky_late_pipeline, near_key: std::cell::Cell::new((0, [0.0; 3], [0; 3])), tex_shadow_ids_pipeline, far_key: std::cell::Cell::new((0, [0.0; 3])), hist_bgl, gi, probe_tex, probe_down, blit_pipeline, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), white: std::cell::Cell::new([1.0; 3]), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
     }
 
     /// Renders a reflection probe at `pos` for the box `min`..`max` (world): six 90-degree faces, then a blurred mip
     /// chain for rough reflections and diffuse light. Shading inside the box uses it until the next bake.
     pub fn bake_probe(&self, gpu: &Gpu, scene: &Scene, batches: &[&Batch], pos: Vec3, min: Vec3, max: Vec3) {
+        self.bake_faces(gpu, pos, min, max, &|enc, cam, t, out| self.render(gpu, enc, scene, batches, cam, t, out));
+    }
+
+    /// `bake_probe` through the culled path (the probe's low resolution picks coarse levels of detail).
+    pub fn bake_probe_culled(&self, gpu: &Gpu, scene: &Scene, world: &CullWorld, batches: &[&Batch], pos: Vec3, min: Vec3, max: Vec3) {
+        self.bake_faces(gpu, pos, min, max, &|enc, cam, t, out| {
+            // the faces don't share a view: no occlusion test against the previous face's depth
+            t.prev_cull.set(None);
+            self.render_culled(gpu, enc, scene, world, batches, cam, t, out)
+        });
+    }
+
+    /// Bilinear copy of `src` onto `dst` (the internal-resolution frame onto the window).
+    pub fn blit(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, src: &wgpu::TextureView, dst: &wgpu::TextureView) {
+        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blit"),
+            layout: &self.probe_down_bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.probe_down_samp) }],
+        });
+        let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("blit"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: dst, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        p.set_pipeline(&self.blit_pipeline);
+        p.set_bind_group(0, &bind, &[]);
+        p.draw(0..3, 0..1);
+    }
+
+    fn bake_faces(&self, gpu: &Gpu, pos: Vec3, min: Vec3, max: Vec3, face: &dyn Fn(&mut wgpu::CommandEncoder, &Camera, &Targets, &wgpu::TextureView)) {
         self.probe.set([[0.0; 4]; 3]);
         self.encode.set(PROBE_ENCODE);
         let t = Targets::new(gpu, self, PROBE_RES, PROBE_RES);
@@ -493,9 +654,9 @@ impl Renderer {
         let proj = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.05, 400.0);
         for (i, (fwd, up)) in faces.iter().enumerate() {
             let view = Mat4::look_at_rh(pos, pos + *fwd, *up);
-            let cam = Camera { view_proj: proj * view, eye: pos, focus: pos, fog: 0.0009 };
+            let cam = Camera { view_proj: proj * view, eye: pos, focus: pos, fog: 0.0009, proj_y: 1.0 };
             let mut enc = gpu.device.create_command_encoder(&Default::default());
-            self.render(gpu, &mut enc, scene, batches, &cam, &t, &tmp_view);
+            face(&mut enc, &cam, &t, &tmp_view);
             enc.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo { texture: &tmp, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyTextureInfo { texture: &self.probe_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: 0, z: i as u32 }, aspect: wgpu::TextureAspect::All },
@@ -606,10 +767,9 @@ impl Renderer {
         }
     }
 
-    /// Records the shadow + main passes. `msaa` is the multisampled colour target, `resolve` the final one.
-    pub fn render(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, scene: &Scene, batches: &[&Batch], cam: &Camera, t: &Targets, out: &wgpu::TextureView) {
-        let (msaa, resolve, depth) = (&t.msaa, &t.scene, &t.depth);
-        let (lf, ln) = (self.light_far(scene), self.light_near(cam.focus));
+    /// Writes the frame's globals and cascade matrices; returns the far and near light view-projections.
+    fn write_globals(&self, gpu: &Gpu, scene: &Scene, cam: &Camera, t: &Targets, near_focus: Vec3) -> (Mat4, Mat4) {
+        let (lf, ln) = (self.light_far(scene), self.light_near(near_focus));
         let v4 = |r: f32, g: f32, b: f32, w: f32| [r, g, b, w];
         let gl = Globals {
             view_proj: cam.view_proj.to_cols_array_2d(),
@@ -642,8 +802,42 @@ impl Renderer {
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&gl));
         gpu.queue.write_buffer(&self.far.uniform, 0, bytemuck::cast_slice(&lf.to_cols_array()));
         gpu.queue.write_buffer(&self.near.uniform, 0, bytemuck::cast_slice(&ln.to_cols_array()));
-        self.shadow_pass(enc, &self.far, scene, batches);
-        self.shadow_pass(enc, &self.near, scene, batches);
+        (lf, ln)
+    }
+
+    /// Ambient occlusion from the depth, composite onto the output, and keep this frame as reflection history.
+    fn post(&self, enc: &mut wgpu::CommandEncoder, cam: &Camera, t: &Targets, out: &wgpu::TextureView) {
+        for (pipe, view, group) in [(&self.ao_pipeline, &t.ao, &t.post_ao), (&self.composite_pipeline, out, &t.post)] {
+            let att = |view| Some(wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } });
+            let composite = std::ptr::eq(pipe, &self.composite_pipeline);
+            let atts = [att(view), att(&t.hist_out)];
+            let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("post"),
+                color_attachments: if composite { &atts[..] } else { &atts[..1] },
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            p.set_pipeline(pipe);
+            p.set_bind_group(0, &self.bind, &[]);
+            p.set_bind_group(1, group, &[]);
+            p.draw(0..3, 0..1);
+        }
+        // this frame's composite becomes the next frame's reflection history
+        enc.copy_texture_to_texture(t.hist_out_tex.as_image_copy(), t.hist_tex.as_image_copy(), wgpu::Extent3d { width: t.w, height: t.h, depth_or_array_layers: 1 });
+        t.prev.set((cam.view_proj, cam.eye, true));
+    }
+
+    /// Records the shadow + main passes. `msaa` is the multisampled colour target, `resolve` the final one.
+    pub fn render(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, scene: &Scene, batches: &[&Batch], cam: &Camera, t: &Targets, out: &wgpu::TextureView) {
+        let (msaa, resolve, depth) = (&t.msaa, &t.scene, &t.depth);
+        self.write_globals(gpu, scene, cam, t, cam.focus);
+        self.near_key.set((0, [0.0; 3], [0; 3]));
+        if std::env::var("FPS_BENCH_NO_SHADOW").is_err() {
+            self.shadow_pass(enc, &self.far, scene, batches);
+            self.shadow_pass(enc, &self.near, scene, batches);
+        }
         let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -676,28 +870,136 @@ impl Renderer {
             }
         }
         drop(p);
-        // ambient occlusion from the depth, then composite onto the output
-        for (pipe, view, group) in [(&self.ao_pipeline, &t.ao, &t.post_ao), (&self.composite_pipeline, out, &t.post)] {
-            let att = |view| Some(wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } });
-            let composite = std::ptr::eq(pipe, &self.composite_pipeline);
-            let atts = [att(view), att(&t.hist_out)];
+        self.post(enc, cam, t, out);
+        // the plain path redraws the far cascade itself
+        self.far_key.set((0, [0.0; 3]));
+    }
+
+    /// The culled frame: GPU visibility and level of detail per instance (frustum, projected size, last frame's
+    /// depth pyramid), indirect draws, and the far shadow map kept while the world and sun stay the same.
+    /// `batches` must be the ones `world` was built from.
+    pub fn render_culled(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, scene: &Scene, world: &CullWorld, batches: &[&Batch], cam: &Camera, t: &Targets, out: &wgpu::TextureView) {
+        assert_eq!(world.n_batches, batches.len(), "render_culled: batches differ from the CullWorld's");
+        // the near cascade is centred on the eye snapped to an 8 m grid and kept until the eye leaves the cell
+        // (the world is static), so it is only redrawn about once a second at a walk
+        let cell = (cam.eye / NEAR_CELL).round();
+        let near_focus = cell * NEAR_CELL;
+        let (lf, ln) = self.write_globals(gpu, scene, cam, t, near_focus);
+        let q = lod_quality();
+        let px_scale = t.h as f32 * 0.5 * cam.proj_y;
+        let hiz_on = t.prev_cull.get().filter(|_| std::env::var("FPS_NO_OCCLUSION").is_err());
+        let main_planes = cull::planes(&cam.view_proj);
+        let view = |planes: [[f32; 4]; 6], scale: f32, ortho: bool, min_px: f32, shadow: bool, hiz: Option<Mat4>| cull::ViewU {
+            planes,
+            prev_vp: hiz.unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
+            eye: [cam.eye.x, cam.eye.y, cam.eye.z, scale],
+            lod: [ortho as u32 as f32, min_px, 1.0 / q, 0.0],
+            hiz: [hiz.is_some() as u32 as f32, t.hiz.size[0] as f32, t.hiz.size[1] as f32, t.hiz.mips as f32],
+            misc: [shadow as u32, 0, 0, 0],
+            lod2: [0.0; 4],
+        };
+        let near_planes = cull::planes(&ln);
+        let far_planes = cull::planes(&lf);
+        let sun = self.sun_dir.to_array();
+        let far_needed = self.far_key.get() != (world.id, sun) || std::env::var("FPS_BENCH_NO_FARCACHE").is_ok();
+        let skip = std::env::var("FPS_BENCH_SKIP").unwrap_or_default();
+        let skip = |w: &str| skip.split(',').any(|x| x == w);
+        if !skip("cull") {
+            world.cull(gpu, self, enc, cull::MAIN, &view(main_planes, px_scale, false, 0.6, false, hiz_on), &t.hiz.full);
+        }
+        let near_key = (world.id, sun, cell.as_ivec3().to_array());
+        let near_needed = self.near_key.get() != near_key || std::env::var("FPS_BENCH_NO_FARCACHE").is_ok();
+        if near_needed {
+            world.cull(gpu, self, enc, cull::NEAR, &view(near_planes, px_scale, false, 0.6, true, None), &t.hiz.full);
+        }
+        if far_needed {
+            // texel-sized detail: the far map is view independent, so it can be kept
+            let texel = 2.0 * (scene.max - scene.min).length() * 0.5 / SHADOW_FAR_RES as f32;
+            world.cull(gpu, self, enc, cull::FAR, &view(far_planes, 1.0 / texel, true, 0.5, true, None), &t.hiz.full);
+        }
+        let shadows = std::env::var("FPS_BENCH_NO_SHADOW").is_err();
+        for (v, cascade, planes) in [(cull::NEAR, &self.near, &near_planes), (cull::FAR, &self.far, &far_planes)] {
+            if !shadows || (v == cull::FAR && !far_needed) || (v == cull::NEAR && !near_needed) {
+                continue;
+            }
             let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("post"),
-                color_attachments: if composite { &atts[..] } else { &atts[..1] },
-                depth_stencil_attachment: None,
+                label: Some("shadow culled"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &cascade.view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            p.set_pipeline(pipe);
-            p.set_bind_group(0, &self.bind, &[]);
-            p.set_bind_group(1, group, &[]);
-            p.draw(0..3, 0..1);
+            p.set_pipeline(&self.shadow_pipeline);
+            p.set_bind_group(0, &cascade.bind, &[]);
+            p.set_vertex_buffer(0, scene.vbuf.slice(..));
+            p.set_index_buffer(scene.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+            p.draw_indexed(0..scene.n_idx, 0, 0..1);
+            p.set_pipeline(&self.tex_shadow_ids_pipeline);
+            p.set_bind_group(2, &world.inst_bind, &[]);
+            world.draw(&mut p, batches, v, planes, false);
         }
-        // this frame's composite becomes the next frame's reflection history
-        enc.copy_texture_to_texture(t.hist_out_tex.as_image_copy(), t.hist_tex.as_image_copy(), wgpu::Extent3d { width: t.w, height: t.h, depth_or_array_layers: 1 });
-        t.prev.set((cam.view_proj, cam.eye, true));
+        if shadows && far_needed {
+            self.far_key.set((world.id, sun));
+        }
+        if shadows && near_needed {
+            self.near_key.set(near_key);
+        }
+        let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("main culled"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &t.msaa,
+                depth_slice: None,
+                resolve_target: Some(&t.scene),
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Discard },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &t.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        p.set_bind_group(0, &self.bind, &[]);
+        // depth prepass: every opaque surface, depth only
+        p.set_pipeline(&self.flat_pre_pipeline);
+        p.set_vertex_buffer(0, scene.vbuf.slice(..));
+        p.set_index_buffer(scene.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+        p.draw_indexed(0..scene.n_idx, 0, 0..1);
+        p.set_pipeline(&self.tex_ids_pre_pipeline);
+        p.set_bind_group(2, &t.hist_bind, &[]);
+        p.set_bind_group(3, &world.inst_bind, &[]);
+        if !skip("pre") {
+            world.draw(&mut p, batches, cull::MAIN, &main_planes, false);
+        }
+        // shading: only the nearest surface passes the depth test
+        p.set_pipeline(&self.flat_shade_pipeline);
+        p.set_vertex_buffer(0, scene.vbuf.slice(..));
+        p.set_index_buffer(scene.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+        p.draw_indexed(0..scene.n_idx, 0, 0..1);
+        p.set_pipeline(&self.tex_ids_pipeline);
+        if !skip("shade") {
+            world.draw(&mut p, batches, cull::MAIN, &main_planes, false);
+        }
+        p.set_pipeline(&self.sky_late_pipeline);
+        p.draw(0..3, 0..1);
+        p.set_pipeline(&self.glass_ids_pipeline);
+        p.set_bind_group(2, &t.hist_bind, &[]);
+        p.set_bind_group(3, &world.inst_bind, &[]);
+        world.draw(&mut p, batches, cull::MAIN, &main_planes, true);
+        drop(p);
+        if !skip("post") {
+            self.post(enc, cam, t, out);
+        }
+        // the depth pyramid for next frame's occlusion test
+        if !skip("hiz") {
+            t.hiz.build(self, enc);
+        }
+        t.prev_cull.set(Some(cam.view_proj));
     }
+}
+
+/// Level-of-detail quality (FPS_LOD, default 0.5: a level may be off by up to 2 px; 1 = 1 px, higher = finer).
+fn lod_quality() -> f32 {
+    std::env::var("FPS_LOD").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5)
 }
 
 /// MSAA colour + depth targets for a given size.
@@ -717,6 +1019,9 @@ pub struct Targets {
     hist_bind: wgpu::BindGroup,
     /// Previous frame's view-projection and eye, and whether the history holds a frame yet.
     prev: std::cell::Cell<(Mat4, Vec3, bool)>,
+    /// Depth pyramid of the last culled frame, and that frame's view-projection.
+    hiz: cull::Hiz,
+    prev_cull: std::cell::Cell<Option<Mat4>>,
     pub w: u32,
     pub h: u32,
 }
@@ -789,7 +1094,8 @@ impl Targets {
             layout: &r.hist_bgl,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&hist_tex.create_view(&Default::default())) }],
         });
-        Self { msaa, depth, scene, ao, post, post_ao, hist_tex, hist_out_tex, hist_out, hist_bind, prev: std::cell::Cell::new((Mat4::IDENTITY, Vec3::ZERO, false)), w, h }
+        let hiz = cull::Hiz::new(gpu, r, &depth, w, h);
+        Self { msaa, depth, scene, ao, post, post_ao, hist_tex, hist_out_tex, hist_out, hist_bind, prev: std::cell::Cell::new((Mat4::IDENTITY, Vec3::ZERO, false)), hiz, prev_cull: std::cell::Cell::new(None), w, h }
     }
 }
 

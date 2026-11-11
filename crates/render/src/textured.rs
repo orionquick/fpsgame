@@ -242,36 +242,109 @@ impl Material {
     }
 }
 
-/// One mesh with one material, drawn once per instance.
+/// One mesh with one material, drawn once per instance. The index buffer holds every level of detail back to back
+/// (finest first); the culled path picks a level per instance on the GPU, the plain path draws the finest.
 pub struct Batch {
     pub(crate) vb: wgpu::Buffer,
     pub(crate) ib: wgpu::Buffer,
+    /// Indices of the finest level (the plain path draws `0..n_idx`).
     pub(crate) n_idx: u32,
+    /// (first index, index count) per level of detail, and each level's error in model units.
+    pub(crate) lods: Vec<[u32; 2]>,
+    pub(crate) lod_err: Vec<f32>,
     pub(crate) inst: wgpu::Buffer,
     pub(crate) n_inst: u32,
     pub(crate) material: std::sync::Arc<Material>,
+    /// Mesh bounds in model space, and all instances' bounds in world space.
+    pub(crate) local: [glam::Vec3; 2],
+    pub(crate) world: [glam::Vec3; 2],
     /// Drawn after opaque geometry with blending, casts no shadow (glazing).
     pub transparent: bool,
+    /// What it is (for profiling).
+    pub label: String,
+}
+
+/// World bounds of a model-space box under a transform.
+pub(crate) fn xform_box(m: &glam::Mat4, b: &[glam::Vec3; 2]) -> [glam::Vec3; 2] {
+    let c = m.transform_point3((b[0] + b[1]) * 0.5);
+    let e = (b[1] - b[0]) * 0.5;
+    let we = m.x_axis.truncate().abs() * e.x + m.y_axis.truncate().abs() * e.y + m.z_axis.truncate().abs() * e.z;
+    [c - we, c + we]
 }
 
 impl Batch {
+    /// Triangles drawn per pass at the finest level (all instances).
+    pub fn tris(&self) -> u64 {
+        self.n_idx as u64 / 3 * self.n_inst as u64
+    }
+    pub fn instances(&self) -> u32 {
+        self.n_inst
+    }
+    pub fn labelled(mut self, l: &str) -> Self {
+        self.label = l.to_string();
+        self
+    }
+    /// Index counts per level of detail.
+    pub fn lod_sizes(&self) -> Vec<u32> {
+        self.lods.iter().map(|l| l[1]).collect()
+    }
     pub fn transparent(mut self) -> Self {
         self.transparent = true;
         self
     }
     pub fn new(gpu: &Gpu, verts: &[TexVertex], idx: &[u32], instances: &[Instance], material: std::sync::Arc<Material>) -> Option<Self> {
-        if verts.is_empty() || idx.is_empty() || instances.is_empty() {
+        Self::with_lods(gpu, verts, &[(idx, 0.0)], instances, material)
+    }
+    /// A batch with simplified levels of detail: (indices, error in model units), the full mesh first.
+    pub fn with_lods(gpu: &Gpu, verts: &[TexVertex], lods: &[(&[u32], f32)], instances: &[Instance], material: std::sync::Arc<Material>) -> Option<Self> {
+        let finest = lods.first()?.0;
+        if verts.is_empty() || finest.is_empty() || instances.is_empty() {
             return None;
+        }
+        // level k keeps its slot (the GPU picks levels by number); one that doesn't reduce reuses the finer range
+        let mut all: Vec<u32> = Vec::with_capacity(lods.iter().map(|l| l.0.len()).sum());
+        let mut ranges: Vec<[u32; 2]> = vec![];
+        let mut errs: Vec<f32> = vec![];
+        for &(l, e) in lods {
+            match ranges.last() {
+                Some(&prev) if l.is_empty() || l.len() as u32 >= prev[1] * 9 / 10 => {
+                    ranges.push(prev);
+                    errs.push(*errs.last().unwrap());
+                }
+                _ => {
+                    ranges.push([all.len() as u32, l.len() as u32]);
+                    errs.push(e);
+                    all.extend_from_slice(l);
+                }
+            }
+        }
+        let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+        for &i in finest.iter() {
+            let p = glam::Vec3::from(verts[i as usize].pos);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        let local = [lo, hi];
+        let (mut wlo, mut whi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+        for inst in instances {
+            let b = xform_box(&glam::Mat4::from_cols_array_2d(&inst.model), &local);
+            wlo = wlo.min(b[0]);
+            whi = whi.max(b[1]);
         }
         let mk = |c: &[u8], usage| gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("batch"), contents: c, usage });
         Some(Self {
             vb: mk(bytemuck::cast_slice(verts), wgpu::BufferUsages::VERTEX),
-            ib: mk(bytemuck::cast_slice(idx), wgpu::BufferUsages::INDEX),
-            n_idx: idx.len() as u32,
-            inst: mk(bytemuck::cast_slice(instances), wgpu::BufferUsages::VERTEX),
+            ib: mk(bytemuck::cast_slice(&all), wgpu::BufferUsages::INDEX),
+            n_idx: finest.len() as u32,
+            lods: ranges,
+            lod_err: errs,
+            inst: mk(bytemuck::cast_slice(instances), wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC),
             n_inst: instances.len() as u32,
             material,
+            local,
+            world: [wlo, whi],
             transparent: false,
+            label: String::new(),
         })
     }
 }

@@ -6,7 +6,7 @@ struct VIn {
 };
 
 struct VOut {
-    @builtin(position) clip: vec4f,
+    @builtin(position) @invariant clip: vec4f,
     @location(0) world: vec3f,
     @location(1) nrm: vec3f,
     @location(2) col: vec3f,
@@ -29,6 +29,12 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let ndl = max(dot(n, l), 0.0);
     var c = i.col * (g.sun_col.rgb * ndl * sun_shadow(i.world, n) + ambient(n));
     return vec4f(tonemap(haze(c, i.world)), 1.0);
+}
+
+// depth prepass: no colour
+@fragment
+fn fs_pre() -> @location(0) vec4f {
+    return vec4f(0.0);
 }
 
 struct SkyOut {

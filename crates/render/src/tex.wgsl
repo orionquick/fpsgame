@@ -26,7 +26,7 @@ struct VIn {
 };
 
 struct VOut {
-    @builtin(position) clip: vec4f,
+    @builtin(position) @invariant clip: vec4f,
     @location(0) world: vec3f,
     @location(1) nrm: vec3f,
     @location(2) uv: vec2f,
@@ -37,8 +37,43 @@ struct VOut {
     @location(7) edge: vec4f,
 };
 
+// the culled path: instances fetched by id from the registry (see cull.rs)
+struct Inst { model: mat4x4f, tint: vec4f, params: vec4f };
+@group(3) @binding(0) var<storage, read> insts: array<Inst>;
+
+struct VIdIn {
+    @location(0) pos: vec3f,
+    @location(1) nrm: vec3f,
+    @location(2) uv: vec2f,
+    @location(3) tan: vec4f,
+    @location(10) edge: vec4f,
+    @location(4) iid: u32,
+};
+
+@vertex
+fn vs_ids(v: VIdIn) -> VOut {
+    let I = insts[v.iid];
+    var w: VIn;
+    w.pos = v.pos;
+    w.nrm = v.nrm;
+    w.uv = v.uv;
+    w.tan = v.tan;
+    w.edge = v.edge;
+    w.m0 = I.model[0];
+    w.m1 = I.model[1];
+    w.m2 = I.model[2];
+    w.m3 = I.model[3];
+    w.tint = I.tint;
+    w.params = I.params;
+    return vs_body(w);
+}
+
 @vertex
 fn vs(v: VIn) -> VOut {
+    return vs_body(v);
+}
+
+fn vs_body(v: VIn) -> VOut {
     let m = mat4x4f(v.m0, v.m1, v.m2, v.m3);
     let w = m * vec4f(v.pos, 1.0);
     var o: VOut;
@@ -181,6 +216,15 @@ fn ssr(world: vec3f, r: vec3f, rough: f32) -> vec4f {
         lo = t;
         step *= 1.13;
         t += step;
+    }
+    return vec4f(0.0);
+}
+
+// depth prepass: the same cut-outs as `fs`, no shading (each pixel is then shaded once)
+@fragment
+fn fs_pre(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
+    if (textureSample(t_base, samp, i.uv).a < 0.5 || (i.params.x > 2.5 && !front)) {
+        discard;
     }
     return vec4f(0.0);
 }

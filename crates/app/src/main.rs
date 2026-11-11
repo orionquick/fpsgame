@@ -179,6 +179,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let scene = scene_arg(&args).map(|n| editor::Store::new(&scenes_dir(), &n).load(&editor::World::new(c.clone()))).transpose()?;
             play::run(c, scene, (arg(&args, "--x", -291.5), arg(&args, "--z", -250.0)), arg(&args, "--yaw", 0.0))?;
         }
+        Some("bench") => {
+            // fps bench [--scene NAME] [--w 1440 --h 900 --frames 60]: headless frame timing at fixed views
+            let c = city::City::load(&city_path())?;
+            let scene = scene_arg(&args).map(|n| editor::Store::new(&scenes_dir(), &n).load(&editor::World::new(c.clone()))).transpose()?;
+            let ground = |x: f32, z: f32| c.terrain.at(x as f64, z as f64) as f32;
+            let eye = |x: f32, z: f32, up: f32| glam::Vec3::new(x, ground(x, z) + up, z);
+            let mut views = vec![];
+            if let Some(sp) = scene.as_ref().and_then(|s| s.spawns.first()) {
+                views.push((eye(sp.x as f32, sp.z as f32, 1.7), sp.yaw as f32, 0.0));
+            }
+            // the beer hall (inside the factory), a long street, and from above
+            views.push((glam::Vec3::new(73.4, 5.04 + 1.65, -163.9), 80.0, 9.0));
+            views.push((eye(-291.5, -250.0, 1.7), 0.0, 0.0));
+            views.push((eye(40.0, -120.0, 60.0), 300.0, -20.0));
+            play::bench(&c, scene.as_ref(), &views, arg(&args, "--w", 1440), arg(&args, "--h", 900), arg(&args, "--frames", 40));
+        }
         Some("ops") => {
             let ed = editor()?;
             let json = match args.windows(2).find(|w| w[0] == "--file") {

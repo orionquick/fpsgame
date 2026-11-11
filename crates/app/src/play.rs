@@ -39,16 +39,23 @@ struct Gfx {
     gpu: Gpu,
     renderer: Renderer,
     scene: Scene,
+    /// Render targets and the frame at the internal resolution (upscaled to the window).
     targets: Targets,
+    frame: wgpu::TextureView,
     batches: Vec<render::Batch>,
+    /// GPU instance registry for culling and level of detail (built from `batches`).
+    world: render::CullWorld,
     lights: Vec<render::PointLight>,
     probes: Vec<[Vec3; 3]>,
     /// Index of the probe currently baked.
     baked: Option<usize>,
     /// GI voxelizer inputs and where the GI volume was last centred.
-    gi_tris: Vec<crate::gi::Tri>,
-    gi_city: Vec<crate::gi::Prism>,
+    gi_tris: Arc<Vec<crate::gi::Tri>>,
+    gi_city: Arc<Vec<crate::gi::Prism>>,
     gi_at: Option<Vec3>,
+    /// A GI re-voxelization running on a worker thread (the frame keeps the old field until it lands).
+    gi_job: Option<(std::sync::mpsc::Receiver<crate::gi::Field>, Vec3)>,
+    terrain: Arc<city::model::Terrain>,
 }
 
 struct App {
@@ -64,6 +71,87 @@ struct App {
     last: Instant,
     title_at: Instant,
     frames: u32,
+}
+
+/// Everything the game draws: the static scene, textured batches, lamps, reflection probes, GI inputs.
+pub struct Content {
+    pub scene: Scene,
+    pub batches: Vec<render::Batch>,
+    pub lights: Vec<render::PointLight>,
+    pub probes: Vec<[Vec3; 3]>,
+    pub gi_tris: Vec<crate::gi::Tri>,
+    pub gi_city: Vec<crate::gi::Prism>,
+}
+
+/// Builds the game's content (shared by `play` and `bench`).
+pub fn load(gpu: &Gpu, renderer: &Renderer, city: &City, editor_scene: Option<&editor::Scene>) -> Content {
+    let mut lib = crate::library::Library::open(&crate::root());
+    let area = editor_scene.and_then(|s| s.bounds).unwrap_or_else(|| city.play_rect());
+    let tree_pl = lib.as_ref().map_or(vec![], |l| crate::dressing::trees(l, city, area));
+    let base = crate::world::Base::new(city, !tree_pl.is_empty());
+    let scene = crate::world::scene(gpu, &base, city, editor_scene);
+    let mut batches = vec![];
+    if let Some(lib) = lib.as_mut() {
+        let report = |what: &str, b: &[render::Batch]| {
+            if std::env::var("FPS_BENCH_REPORT").is_ok() {
+                let t: u64 = b.iter().map(|b| b.tris()).sum();
+                let mut v: Vec<(u64, u32, u64)> = b.iter().map(|b| (b.tris(), b.instances(), b.tris() / b.instances().max(1) as u64)).collect();
+                v.sort_by(|a, b| b.0.cmp(&a.0));
+                println!("{what}: {} batches {:.2}M tris; top (tris, inst, tris/inst) {:?}", b.len(), t as f64 / 1e6, &v[..v.len().min(6)]);
+            }
+        };
+        batches = crate::world::city_batches(gpu, renderer, lib, &base);
+        report("city", &batches);
+        let bb = crate::bespoke::all_batches(gpu, renderer, lib, city);
+        report("bespoke", &bb);
+        batches.extend(bb);
+        let tb = crate::library::prefab_batches(gpu, renderer, lib, &tree_pl);
+        report("trees", &tb);
+        batches.extend(tb);
+        let pb = crate::library::prefab_batches(gpu, renderer, lib, &crate::buildings::build(lib, city, area).0);
+        report("prefab buildings", &pb);
+        batches.extend(pb);
+        if let Some(s) = editor_scene {
+            let mut pl = crate::world::object_placements(lib, city, s);
+            pl.extend(crate::dressing::dress(lib, city, area));
+            for (id, v, i) in crate::dressing::markings(lib, city, area) {
+                let mat = lib.material(gpu, renderer, &id);
+                let yellow = lib.catalog.get(&id).is_some_and(|a| a.title.contains("Yellow"));
+                let tint = if yellow { [1.15, 1.05, 0.55] } else { [1.0, 1.0, 1.0] };
+                batches.extend(render::Batch::new(gpu, &v, &i, &[render::Instance::new(glam::Mat4::IDENTITY, tint, 1.0)], mat));
+            }
+            let sb = crate::library::prefab_batches(gpu, renderer, lib, &pl);
+            report("scene objects", &sb);
+            batches.extend(sb);
+        }
+    }
+    let lights = if crate::bespoke::undecorated() { vec![] } else { crate::bespoke::all_lights(city) };
+    let probes = crate::bespoke::all_probes(city);
+    let gi_tris = lib.as_ref().map_or(vec![], |l| crate::gi::tris(l, city));
+    let gi_city = crate::gi::prisms(city);
+    Content { scene, batches, lights, probes, gi_tris, gi_city }
+}
+
+/// Internal resolution for a window: FPS_RENDER_SCALE times the physical size, by default the logical (point)
+/// size, so a Retina window renders a quarter of its pixels and is upscaled.
+fn internal_size(window: &Window, w: u32, h: u32) -> (u32, u32) {
+    let s = std::env::var("FPS_RENDER_SCALE").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0 / window.scale_factor()).clamp(0.25, 1.0);
+    (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1))
+}
+
+fn frame_view(gpu: &Gpu, format: wgpu::TextureFormat, w: u32, h: u32) -> wgpu::TextureView {
+    gpu.device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("frame"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&Default::default())
 }
 
 pub fn run(city: City, scene: Option<editor::Scene>, spawn: (f32, f32), yaw: f32) -> Result<(), Box<dyn std::error::Error>> {
@@ -145,7 +233,7 @@ impl ApplicationHandler for App {
             return;
         }
         let window = Arc::new(el.create_window(Window::default_attributes().with_title("San Diego FPS").with_inner_size(winit::dpi::LogicalSize::new(1440, 900))).unwrap());
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = wgpu::Instance::new(render::instance_descriptor());
         let surface = instance.create_surface(window.clone()).unwrap();
         let gpu = Gpu::new(instance, Some(&surface));
         let size = window.inner_size();
@@ -155,36 +243,13 @@ impl ApplicationHandler for App {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&gpu.device, &config);
         let renderer = Renderer::new(&gpu, config.format);
-        let mut lib = crate::library::Library::open(&crate::root());
-        let tree_pl = lib.as_ref().map_or(vec![], |l| crate::dressing::trees(l, &self.city, self.editor_scene.as_ref().and_then(|s| s.bounds).unwrap_or_else(|| self.city.play_rect())));
-        let base = crate::world::Base::new(&self.city, !tree_pl.is_empty());
-        let scene = crate::world::scene(&gpu, &base, &self.city, self.editor_scene.as_ref());
-        let mut batches = vec![];
-        if let Some(lib) = lib.as_mut() {
-            batches = crate::world::city_batches(&gpu, &renderer, lib, &base);
-            batches.extend(crate::bespoke::all_batches(&gpu, &renderer, lib, &self.city));
-            let mut pl = tree_pl;
-            pl.extend(crate::buildings::build(lib, &self.city, self.editor_scene.as_ref().and_then(|s| s.bounds).unwrap_or_else(|| self.city.play_rect())).0);
-            batches.extend(crate::library::prefab_batches(&gpu, &renderer, lib, &pl));
-            if let Some(s) = self.editor_scene.as_ref() {
-                let mut pl = crate::world::object_placements(lib, &self.city, s);
-                let area = s.bounds.unwrap_or_else(|| self.city.play_rect());
-                pl.extend(crate::dressing::dress(lib, &self.city, area));
-                for (id, v, i) in crate::dressing::markings(lib, &self.city, area) {
-                    let mat = lib.material(&gpu, &renderer, &id);
-                    let yellow = lib.catalog.get(&id).is_some_and(|a| a.title.contains("Yellow"));
-                    let tint = if yellow { [1.15, 1.05, 0.55] } else { [1.0, 1.0, 1.0] };
-                    batches.extend(render::Batch::new(&gpu, &v, &i, &[render::Instance::new(glam::Mat4::IDENTITY, tint, 1.0)], mat));
-                }
-                    batches.extend(crate::library::prefab_batches(&gpu, &renderer, lib, &pl));
-            }
-        }
-        let targets = Targets::new(&gpu, &renderer, config.width, config.height);
-        let lights = if crate::bespoke::undecorated() { vec![] } else { crate::bespoke::all_lights(&self.city) };
-        let probes = crate::bespoke::all_probes(&self.city);
-        let gi_tris = lib.as_ref().map_or(vec![], |l| crate::gi::tris(l, &self.city));
-        let gi_city = crate::gi::prisms(&self.city);
-        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, batches, lights, probes, baked: None, gi_tris, gi_city, gi_at: None });
+        let c = load(&gpu, &renderer, &self.city, self.editor_scene.as_ref());
+        let (iw, ih) = internal_size(&window, config.width, config.height);
+        let targets = Targets::new(&gpu, &renderer, iw, ih);
+        let frame = frame_view(&gpu, config.format, iw, ih);
+        let Content { scene, batches, lights, probes, gi_tris, gi_city } = c;
+        let world = render::CullWorld::new(&gpu, &renderer, &batches.iter().collect::<Vec<_>>());
+        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, frame, batches, world, lights, probes, baked: None, gi_tris: Arc::new(gi_tris), gi_city: Arc::new(gi_city), gi_at: None, gi_job: None, terrain: Arc::new(self.city.terrain.clone()) });
         self.last = Instant::now();
     }
 
@@ -196,7 +261,9 @@ impl ApplicationHandler for App {
                     g.config.width = s.width.max(1);
                     g.config.height = s.height.max(1);
                     g.surface.configure(&g.gpu.device, &g.config);
-                    g.targets = Targets::new(&g.gpu, &g.renderer, g.config.width, g.config.height);
+                    let (iw, ih) = internal_size(&g.window, g.config.width, g.config.height);
+                    g.targets = Targets::new(&g.gpu, &g.renderer, iw, ih);
+                    g.frame = frame_view(&g.gpu, g.config.format, iw, ih);
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => self.grab(true),
@@ -239,13 +306,33 @@ impl ApplicationHandler for App {
                 // flood-fill GI: re-voxelize around the player on entering a room or after moving 12 m; the light
                 // keeps converging a few steps every frame (the previous field is the starting point)
                 let moved = g.gi_at.is_none_or(|a| a.distance(cam.eye) > 12.0);
-                if !g.gi_tris.is_empty() && std::env::var("FPS_NO_GI").is_err() && (moved || (inside != g.baked && inside.is_some())) {
-                    let terrain = |x: f32, z: f32| self.city.terrain.at(x as f64, z as f64) as f32;
-                    let f = crate::gi::build(&g.gi_tris, &g.gi_city, terrain, &g.lights, g.renderer.sun_dir, cam.eye);
-                    g.renderer.gi.upload(&g.gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, g.gi_at.is_none());
-                    g.renderer.gi_iterate(&g.gpu, 160);
-                    g.gi_at = Some(cam.eye);
-                    g.baked = None;
+                if !g.gi_tris.is_empty() && std::env::var("FPS_NO_GI").is_err() {
+                    let want = moved || (inside != g.baked && inside.is_some());
+                    if g.gi_at.is_none() {
+                        // the first field before the first frame
+                        let t = g.terrain.clone();
+                        let f = crate::gi::build(&g.gi_tris, &g.gi_city, |x, z| t.at(x as f64, z as f64) as f32, &g.lights, g.renderer.sun_dir, cam.eye);
+                        g.renderer.gi.upload(&g.gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, true);
+                        g.renderer.gi_iterate(&g.gpu, 160);
+                        g.gi_at = Some(cam.eye);
+                    } else if want && g.gi_job.is_none() {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let (tris, city, terrain, lights, sun, eye) = (g.gi_tris.clone(), g.gi_city.clone(), g.terrain.clone(), g.lights.clone(), g.renderer.sun_dir, cam.eye);
+                        std::thread::spawn(move || {
+                            let _ = tx.send(crate::gi::build(&tris, &city, |x, z| terrain.at(x as f64, z as f64) as f32, &lights, sun, eye));
+                        });
+                        g.gi_job = Some((rx, eye));
+                    }
+                    if let Some((rx, eye)) = &g.gi_job {
+                        if let Ok(f) = rx.try_recv() {
+                            g.renderer.gi.upload(&g.gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, false);
+                            g.renderer.gi_iterate(&g.gpu, 48);
+                            g.gi_at = Some(*eye);
+                            g.gi_job = None;
+                            // reflections re-bake with the new light
+                            g.baked = None;
+                        }
+                    }
                 }
                 if inside != g.baked {
                     let refs: Vec<&render::Batch> = g.batches.iter().collect();
@@ -254,7 +341,7 @@ impl ApplicationHandler for App {
                             let p = g.probes[i];
                             g.renderer.set_exposure(1.0);
                             g.renderer.set_lights(&g.gpu, &g.lights, p[0]);
-                            g.renderer.bake_probe(&g.gpu, &g.scene, &refs, p[0], p[1], p[2]);
+                            g.renderer.bake_probe_culled(&g.gpu, &g.scene, &g.world, &refs, p[0], p[1], p[2]);
                             g.renderer.set_exposure(if g.renderer.gi.enabled() { crate::INTERIOR_EXPOSURE } else { 2.2 });
                             g.renderer.set_white_balance(if g.lights.is_empty() { crate::INTERIOR_WHITE } else { crate::LAMPLIT_WHITE });
                         }
@@ -271,7 +358,13 @@ impl ApplicationHandler for App {
                 if g.renderer.gi.enabled() {
                     g.renderer.gi.iterate(&mut enc, 4);
                 }
-                g.renderer.render(&g.gpu, &mut enc, &g.scene, &g.batches.iter().collect::<Vec<_>>(), &cam, &g.targets, &view);
+                let refs: Vec<&render::Batch> = g.batches.iter().collect();
+                if std::env::var("FPS_NO_CULL").is_ok() {
+                    g.renderer.render(&g.gpu, &mut enc, &g.scene, &refs, &cam, &g.targets, &g.frame);
+                } else {
+                    g.renderer.render_culled(&g.gpu, &mut enc, &g.scene, &g.world, &refs, &cam, &g.targets, &g.frame);
+                }
+                g.renderer.blit(&g.gpu, &mut enc, &g.frame, &view);
                 g.gpu.queue.submit([enc.finish()]);
                 g.gpu.queue.present(frame);
                 self.frames += 1;
@@ -300,5 +393,118 @@ impl ApplicationHandler for App {
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
         }
+    }
+}
+
+/// Headless frame timing over the game's own content: `views` are (eye, yaw, pitch); prints ms per frame.
+pub fn bench(city: &City, editor_scene: Option<&editor::Scene>, views: &[(Vec3, f32, f32)], w: u32, h: u32, frames: u32) {
+    let gpu = Gpu::headless();
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let renderer = Renderer::new(&gpu, format);
+    let t0 = Instant::now();
+    let c = load(&gpu, &renderer, city, editor_scene);
+    let tris: u64 = c.batches.iter().map(|b| b.tris()).sum();
+    let inst: u64 = c.batches.iter().map(|b| b.instances() as u64).sum();
+    println!("loaded in {:.1}s: {} batches, {} instances, {:.2}M textured tris per pass, {} lights", t0.elapsed().as_secs_f32(), c.batches.len(), inst, tris as f64 / 1e6, c.lights.len());
+    let targets = Targets::new(&gpu, &renderer, w, h);
+    let out = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bench out"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = out.create_view(&Default::default());
+    let refs: Vec<&render::Batch> = c.batches.iter().collect();
+    let world = render::CullWorld::new(&gpu, &renderer, &refs);
+    let culled = std::env::var("FPS_NO_CULL").is_err();
+    let wait = || {
+        gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).expect("poll");
+    };
+    for (vi, &(eye, yaw, pitch)) in views.iter().enumerate() {
+        let cam = Camera::perspective(eye, yaw, pitch, 70.0, w as f32 / h as f32);
+        let inside = c.probes.iter().position(|p| cam.eye.cmpge(p[1]).all() && cam.eye.cmple(p[2]).all());
+        let t_gi = Instant::now();
+        if !c.gi_tris.is_empty() && std::env::var("FPS_NO_GI").is_err() {
+            let terrain = |x: f32, z: f32| city.terrain.at(x as f64, z as f64) as f32;
+            let f = crate::gi::build(&c.gi_tris, &c.gi_city, terrain, &c.lights, renderer.sun_dir, cam.eye);
+            renderer.gi.upload(&gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, true);
+            renderer.gi_iterate(&gpu, 160);
+        }
+        wait();
+        let gi_ms = t_gi.elapsed().as_secs_f32() * 1000.0;
+        let t_probe = Instant::now();
+        if let Some(i) = inside {
+            let p = c.probes[i];
+            renderer.set_lights(&gpu, &c.lights, p[0]);
+            if culled {
+                renderer.bake_probe_culled(&gpu, &c.scene, &world, &refs, p[0], p[1], p[2]);
+            } else {
+                renderer.bake_probe(&gpu, &c.scene, &refs, p[0], p[1], p[2]);
+            }
+            wait();
+            println!("   probe bake {:.0} ms", t_probe.elapsed().as_secs_f32() * 1000.0);
+        } else {
+            renderer.clear_probe();
+        }
+        let frame = || {
+            renderer.set_lights(&gpu, &c.lights, cam.eye);
+            let mut enc = gpu.device.create_command_encoder(&Default::default());
+            if renderer.gi.enabled() && std::env::var("FPS_BENCH_NO_GIITER").is_err() {
+                renderer.gi.iterate(&mut enc, 4);
+            }
+            if culled {
+                renderer.render_culled(&gpu, &mut enc, &c.scene, &world, &refs, &cam, &targets, &view);
+            } else {
+                renderer.render(&gpu, &mut enc, &c.scene, &refs, &cam, &targets, &view);
+            }
+            gpu.queue.submit([enc.finish()]);
+        };
+        println!("   gi rebuild {gi_ms:.0} ms");
+        for _ in 0..3 {
+            frame();
+        }
+        wait();
+        let t = Instant::now();
+        let mut worst = 0.0f32;
+        let mut cpu = 0.0f32;
+        for _ in 0..frames {
+            let f0 = Instant::now();
+            frame();
+            cpu += f0.elapsed().as_secs_f32();
+            wait();
+            worst = worst.max(f0.elapsed().as_secs_f32());
+        }
+        println!("   cpu (encode + submit) {:.2} ms/frame", cpu * 1000.0 / frames as f32);
+        let ms = t.elapsed().as_secs_f32() * 1000.0 / frames as f32;
+        if culled && std::env::var("FPS_BENCH_REPORT").is_ok() {
+            for (name, (inst, tris, top)) in ["main", "near", "far"].iter().zip(world.stats(&gpu)) {
+                let top: Vec<String> = top.iter().filter(|t| t.3 > 0).map(|(b, l, n, t)| format!("\n      {} lod{l}/{:?} x{n} {:.1}M", refs[*b].label, refs[*b].lod_sizes().iter().map(|i| i / 3).collect::<Vec<_>>(), *t as f64 / 1e6)).collect();
+                println!("   {name}: {inst} instances, {:.2}M tris; heaviest {}", tris as f64 / 1e6, top.join(", "));
+            }
+        }
+        if let Ok(tag) = std::env::var("FPS_BENCH_PNG") {
+            let row = (w * 4).div_ceil(256) * 256;
+            let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("png"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let mut enc = gpu.device.create_command_encoder(&Default::default());
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: &out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            gpu.queue.submit([enc.finish()]);
+            buf.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+            wait();
+            let data = buf.slice(..).get_mapped_range().expect("range");
+            let mut img = image::RgbaImage::new(w, h);
+            for y in 0..h {
+                img.as_mut()[(y * w * 4) as usize..((y + 1) * w * 4) as usize].copy_from_slice(&data[(y * row) as usize..(y * row + w * 4) as usize]);
+            }
+            let _ = img.save(crate::root().join(format!("out/bench_{tag}_{vi}.png")));
+        }
+        println!("view ({:.0},{:.1},{:.0}) yaw {:.0}{}: {:.2} ms/frame ({:.0} fps), worst {:.1} ms", eye.x, eye.y, eye.z, yaw, if inside.is_some() { " [indoor]" } else { "" }, ms, 1000.0 / ms, worst * 1000.0);
     }
 }

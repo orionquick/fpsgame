@@ -11,7 +11,7 @@ pub struct Library {
     pub inbox: PathBuf,
     pub out: PathBuf,
     materials: HashMap<String, Arc<Material>>,
-    meshes: HashMap<String, Arc<Vec<(Vec<TexVertex>, [Vec<u32>; 3])>>>,
+    meshes: HashMap<String, Arc<Vec<MeshLods>>>,
     plain: Option<Arc<Material>>,
     glass: Option<Arc<Material>>,
 }
@@ -121,16 +121,28 @@ impl Library {
         self.plain.get_or_insert_with(|| Arc::new(Material::plain(gpu, r, 200))).clone()
     }
 
-    pub fn mesh(&mut self, id: &str) -> Option<Arc<Vec<(Vec<TexVertex>, [Vec<u32>; 3])>>> {
+    /// A model's parts: vertices, four index lists (full, ~25%, ~6%, ~1.5% of the triangles) and each level's
+    /// simplification error in model units.
+    pub fn mesh(&mut self, id: &str) -> Option<Arc<Vec<MeshLods>>> {
         if let Some(m) = self.meshes.get(id) {
             return Some(m.clone());
         }
         let parts = assets::load_mesh(&self.out, id).ok()?;
-        let m: Arc<Vec<(Vec<TexVertex>, [Vec<u32>; 3])>> = Arc::new(parts.into_iter().map(|p| { let [l1, l2] = p.lods; (p.verts.iter().map(|v| TexVertex { pos: v.pos, nrm: v.nrm, uv: v.uv, tan: v.tan, edge: [0.0; 4] }).collect(), [p.idx, l1, l2]) }).collect());
+        let chain = assets::lod_chain(&self.out, id, &parts);
+        let m: Arc<Vec<MeshLods>> = Arc::new(
+            parts
+                .into_iter()
+                .zip(chain)
+                .map(|(p, [(l1, e1), (l2, e2), (l3, e3)])| (p.verts.iter().map(|v| TexVertex { pos: v.pos, nrm: v.nrm, uv: v.uv, tan: v.tan, edge: [0.0; 4] }).collect(), [p.idx, l1, l2, l3], [0.0, e1, e2, e3]))
+                .collect(),
+        );
         self.meshes.insert(id.to_string(), m.clone());
         Some(m)
     }
 }
+
+/// One model part: vertices, index lists per level of detail, and each level's error in model units.
+pub type MeshLods = (Vec<TexVertex>, [Vec<u32>; 4], [f32; 4]);
 
 /// Bounding-box size of all parts (x, y, z).
 pub fn extent(a: &Asset) -> [f32; 3] {
@@ -185,7 +197,7 @@ pub fn placement_matrix(a: &Asset, part: usize, p: &Placement) -> glam::Mat4 {
 
 /// Groups placements into one instanced batch per asset part.
 pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[Placement]) -> Vec<Batch> {
-    let mut groups: HashMap<(String, usize, u8), Vec<Instance>> = HashMap::new();
+    let mut groups: HashMap<(String, usize), Vec<Instance>> = HashMap::new();
     let mut part_mat: HashMap<(String, usize), String> = HashMap::new();
     let mut glass_parts: HashMap<(String, usize), Vec<Instance>> = HashMap::new();
     let indoor = |p: &Placement| if p.indoor { [0.0, INDOOR_AMBIENT, INDOOR_LAMP, 0.0] } else { [0.0; 4] };
@@ -211,7 +223,8 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
             }
             let key = a.parts[part].material.filter(|_| !a.materials.is_empty()).map_or(a.id.clone(), |m| format!("{}#{m}", a.id));
             part_mat.insert((p.asset.clone(), part), key);
-            groups.entry((p.asset.clone(), part, p.lod.min(2))).or_default().push(Instance::new(m, p.tint, 1.0).with_params(indoor(p)));
+            // every level of detail goes in one batch: the GPU picks one per instance and frame
+            groups.entry((p.asset.clone(), part)).or_default().push(Instance::new(m, p.tint, 1.0).with_params(indoor(p)));
         }
     }
     let mut out = vec![];
@@ -223,17 +236,18 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
     for ((id, part), inst) in glass_parts {
         let Some(mesh) = lib.mesh(&id) else { continue };
         let mat = lib.glass(gpu, r);
-        if let Some((v, lists)) = mesh.get(part) {
+        if let Some((v, lists, _)) = mesh.get(part) {
             out.extend(Batch::new(gpu, v, &lists[0], &inst, mat).map(|b| b.transparent()));
         }
     }
     let ids: Vec<String> = part_mat.values().cloned().collect();
     lib.preload(gpu, r, &ids);
-    for ((id, part, lod), inst) in groups {
+    for ((id, part), inst) in groups {
         let Some(mesh) = lib.mesh(&id) else { continue };
         let mat = lib.material(gpu, r, part_mat.get(&(id.clone(), part)).unwrap_or(&id));
-        if let Some((v, lists)) = mesh.get(part) {
-            out.extend(Batch::new(gpu, v, &lists[lod as usize], &inst, mat));
+        if let Some((v, lists, errs)) = mesh.get(part) {
+            let title = lib.catalog.get(&id).map_or(id.clone(), |a| format!("{} [{id}#{part}]", a.title));
+            out.extend(Batch::with_lods(gpu, v, &[(&lists[0], 0.0), (&lists[1], errs[1]), (&lists[2], errs[2]), (&lists[3], errs[3])], &inst, mat).map(|b| b.labelled(&title)));
         }
     }
     out

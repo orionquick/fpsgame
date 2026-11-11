@@ -133,6 +133,96 @@ fn simplify(verts: &[Vertex], idx: &[u32], ratio: f32, error: f32) -> Vec<u32> {
     if out.len() < 3 { idx.to_vec() } else { out }
 }
 
+/// The draw chain for a loaded mesh: coarser index lists at ~25%, ~6% and ~1.5% of the triangles, each with its
+/// measured simplification error in model units (the GPU picks the coarsest level whose error projects to under a
+/// pixel). Borders stay locked where that still reduces (modules keep sealed seams); where locked borders stall
+/// (facade pieces, dense foliage) a level is rebuilt without the lock, then by sloppy clustering. Cached per asset in `out/mesh_lod`.
+pub fn lod_chain(out: &Path, id: &str, parts: &[MeshPart]) -> Vec<[(Vec<u32>, f32); 3]> {
+    let path = out.join("mesh_lod").join(format!("{id}.bin"));
+    if let Some(c) = std::fs::read(&path).ok().and_then(|b| read_lod_cache(&b, parts)) {
+        return c;
+    }
+    let chain: Vec<[(Vec<u32>, f32); 3]> = parts.iter().map(|p| [reduce(&p.verts, &p.idx, 0.25, 0.02), reduce(&p.verts, &p.idx, 0.06, 0.05), reduce(&p.verts, &p.idx, 0.015, 0.1)]).collect();
+    let mut b = LOD_MAGIC.to_vec();
+    b.extend((chain.len() as u32).to_le_bytes());
+    for c in &chain {
+        for (l, e) in c {
+            b.extend(e.to_le_bytes());
+            b.extend((l.len() as u32).to_le_bytes());
+            b.extend(l.iter().flat_map(|i| i.to_le_bytes()));
+        }
+    }
+    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    let _ = std::fs::write(&path, b);
+    chain
+}
+
+const LOD_MAGIC: &[u8; 4] = b"LOD5";
+
+fn read_lod_cache(b: &[u8], parts: &[MeshPart]) -> Option<Vec<[(Vec<u32>, f32); 3]>> {
+    if b.get(..4)? != LOD_MAGIC {
+        return None;
+    }
+    let mut o = 4usize;
+    let u = |o: &mut usize| -> Option<u32> {
+        let v = u32::from_le_bytes(b.get(*o..*o + 4)?.try_into().ok()?);
+        *o += 4;
+        Some(v)
+    };
+    let n = u(&mut o)? as usize;
+    if n != parts.len() {
+        return None;
+    }
+    let mut out = vec![];
+    for p in parts {
+        let mut ls: Vec<(Vec<u32>, f32)> = vec![];
+        for _ in 0..3 {
+            let e = f32::from_bits(u(&mut o)?);
+            let k = u(&mut o)? as usize;
+            let l: Vec<u32> = b.get(o..o + k * 4)?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+            o += k * 4;
+            if l.iter().any(|&i| i as usize >= p.verts.len()) {
+                return None;
+            }
+            ls.push((l, e));
+        }
+        out.push(ls.try_into().ok()?);
+    }
+    Some(out)
+}
+
+/// One coarser level at about `ratio` of the triangles, with its error in model units. Topology simplification
+/// keeps UV seams and thin walls; sloppy clustering (for meshes topology can't reduce, e.g. unwelded hard-edged
+/// modules) does not, and its position error says nothing about smeared textures on flat pieces, so its error is
+/// floored at `sloppy_floor` of the size (such levels only show from far enough away).
+fn reduce(verts: &[Vertex], idx: &[u32], ratio: f32, sloppy_floor: f32) -> (Vec<u32>, f32) {
+    if idx.len() < 300 {
+        return (idx.to_vec(), 0.0);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(verts.as_ptr() as *const u8, std::mem::size_of_val(verts)) };
+    let Ok(adapter) = meshopt::VertexDataAdapter::new(bytes, std::mem::size_of::<Vertex>(), 0) else { return (idx.to_vec(), 0.0) };
+    let scale = meshopt::simplify_scale(&adapter);
+    let target = ((idx.len() as f32 * ratio) as usize / 3 * 3).max(3);
+    let mut err = 0.0f32;
+    let mut out = meshopt::simplify(idx, &adapter, target, 1.0, meshopt::SimplifyOptions::LockBorder, Some(&mut err));
+    if out.len() as f32 > target as f32 * 1.6 {
+        let mut e = 0.0f32;
+        // no Prune here: with an open error cap it would remove every component
+        let o = meshopt::simplify(idx, &adapter, target, 1.0, meshopt::SimplifyOptions::None, Some(&mut e));
+        if o.len() >= 3 && o.len() < out.len() {
+            (out, err) = (o, e);
+        }
+    }
+    if out.len() as f32 > target as f32 * 2.0 {
+        let mut e = 0.0f32;
+        let o = meshopt::simplify_sloppy(idx, &adapter, target, 1.0, Some(&mut e));
+        if o.len() >= 3 && o.len() < out.len() {
+            (out, err) = (o, e.max(sloppy_floor));
+        }
+    }
+    if out.len() < 3 { (idx.to_vec(), 0.0) } else { (out, err * scale) }
+}
+
 fn mesh_path(out: &Path, id: &str) -> PathBuf {
     out.join("mesh").join(format!("{id}.bin"))
 }

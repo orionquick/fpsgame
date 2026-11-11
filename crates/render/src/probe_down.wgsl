@@ -30,3 +30,9 @@ fn fs(v: V) -> @location(0) vec4f {
     }
     return c / w;
 }
+
+// plain bilinear copy (upscaling the internal-resolution frame to the window)
+@fragment
+fn fs_blit(v: V) -> @location(0) vec4f {
+    return textureSampleLevel(src, samp, v.uv, 0.0);
+}
