@@ -740,7 +740,8 @@ fn chandelier(g: &mut Geo, c: Vec2, ceiling: f32, floor: f32, scale: f32) {
     for k in 0..4 {
         g.tube(st, hub, at(rings[0].0, k as f32 * std::f32::consts::FRAC_PI_2 + 0.785, rings[0].1), 0.006, 5);
     }
-    let edison = Key::new(Mat::Light, [0.9, 0.46, 0.15]);
+    // Edison warmth: deep yellow-gold, kept below clipping so the colour survives the exposure
+    let edison = Key::new(Mat::Light, [1.3, 0.82, 0.28]);
     for &(r, ry) in &rings {
         // the ring and the cross through it
         let n_seg = 48;
@@ -769,11 +770,13 @@ fn chandelier(g: &mut Geo, c: Vec2, ceiling: f32, floor: f32, scale: f32) {
                 g.tube(st, base, base + y * 0.025, 0.028, 8);
                 // a clear glass cup (nearly transparent: edges and faint reflections) round an Edison bulb: a warm
                 // glowing globe with a brighter filament in it
-                let clear = Key::new(Mat::Glass, [0.9, 0.88, 0.82]).rough(0.05);
+                // nearly clear (opacity 0.05), lit warm from inside by its bulb (glow 0.025)
+                let clear = Key::new(Mat::Glass, [1.0, 0.72, 0.3]).rough(0.05).tile(0.025);
                 g.tube(clear, base + y * 0.025, base + y * 0.155, 0.05, 14);
                 disc(g, clear, base + y * 0.155, 0.05, 14);
-                g.tube(Key::new(Mat::Light, [0.22, 0.12, 0.045]), base + y * 0.045, base + y * 0.125, 0.024, 10);
-                g.tube(edison, base + y * 0.06, base + y * 0.11, 0.007, 6);
+                // warm light filling the glass, an amber globe, a white-hot gold filament at its heart
+                g.tube(Key::new(Mat::Light, [0.13, 0.068, 0.016]), base + y * 0.045, base + y * 0.125, 0.024, 10);
+                g.tube(edison, base + y * 0.065, base + y * 0.105, 0.006, 6);
             }
         }
         for k in 0..4 {

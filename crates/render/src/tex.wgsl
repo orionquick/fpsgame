@@ -347,5 +347,7 @@ fn fs_glass(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let base_a = select(0.30, i.params.y, i.params.y > 0.0);
     let a = clamp(base_a + f * 0.7, 0.0, 1.0);
     let c = refl * mix(0.45, 1.0, f) + film;
-    return vec4f(tonemap(haze(c, i.world)) * a, a);
+    // lit glassware (params.z): the glass glows with its lamp's light, added on top of what shows through it
+    let glow = tonemap(i.tint * i.params.z) * (1.0 - a);
+    return vec4f(tonemap(haze(c, i.world)) * a + glow, a);
 }
