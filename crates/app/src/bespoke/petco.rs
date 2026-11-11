@@ -934,6 +934,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
     home_gate_front(g, m, &gate_line);
     gate_frame(g, m, &gz_line, cores);
     footbridge(g, m, &gz_line);
+    grand_stair(g, f, m);
     home_towers(g, m);
     sw_offices(g, m);
     // end walls closing the bowl at both foul poles
@@ -1659,7 +1660,7 @@ fn home_gate_front(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)]) {
 
 /// The footbridge from the terrace concourse out to the tower (satellite): its tower end on the tower's north face,
 /// and a point toward the bowl along its axis (world); it starts where the axis crosses the frame.
-const BRIDGE_TOWER: (f32, f32) = (-13.4, 95.9);
+const BRIDGE_TOWER: (f32, f32) = (-15.3, 98.9);
 const BRIDGE_BOWL: (f32, f32) = (0.0, 74.9);
 const BRIDGE_W: f32 = 8.0;
 /// Its top (lidar: 23-24 m along its whole length; 23.4 on the street photo).
@@ -2904,9 +2905,6 @@ fn sw_offices(g: &mut Geo, m: &Mats) {
     prism(g, m, &uv, pale, &[(42.0, -8.0), (90.0, -8.0), (90.0, 2.5), (42.0, 2.5)], 0.0, &flat(8.5), false);
     prism(g, m, &uv, pale, &[(45.0, -6.0), (90.0, -6.0), (90.0, 2.5), (45.0, 2.5)], 8.5, &flat(17.5), false);
     prism(g, m, &uv, pale, &[(42.0, 2.5), (93.0, 2.5), (93.0, 12.5), (42.0, 12.5)], 0.0, &flat(8.5), false);
-    // the stair spine and the sandstone block stepping up to the tower
-    prism(g, m, &uv, m.sandstone, &[(90.0, -8.0), (94.0, -8.0), (94.0, 2.0), (90.0, 2.0)], 0.0, &flat(24.0), true);
-    prism(g, m, &uv, m.sandstone, &[(93.0, 0.0), (104.0, 0.0), (104.0, 12.5), (93.0, 12.5)], 0.0, &flat(26.0), true);
     // the office block's street face: a recessed loggia floor on the podium, then ribbon windows floor by floor
     let (fa, fb) = (uv(42.0, 12.5), uv(93.0, 12.5));
     let out = ev * 0.03;
@@ -3604,5 +3602,132 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
         g.tube(bollard, v3(p, y + 1.05), v3(p, y + 1.1), 0.1, 12);
         g.block_box(Vec3::new(p.x - 0.14, 0.0, p.y - 0.14), Vec3::X * 0.28, Vec3::Z * 0.28, y - 0.3, y + 1.1);
         a += 1.55;
+    }
+}
+
+// ---------------------------------------------------------------- grand stair
+
+/// The grand stair from the home plate plaza up to the concourse level under the footbridge. Plan from the map's
+/// stair flights (thirty mapped lines: three tiers heading 120 degrees, 5.7 / 4.3 / 4.6 m long with landings, the top
+/// edge 12.5 m long under the bridge's centre line, the lower tiers fanning out to the north-east); heights from the
+/// lidar (7-8 m at the top edge, about 5 and 3 m on the landings, an 8 m level round the bridge's bowl end). North-
+/// east of it the same level carries on as a planted terrace behind a stone wall (8.5 m to its top in the street
+/// photo; the lidar's 12-14 m there is its trees). The level runs back to the offices and on under the bridge to
+/// the bowl.
+fn grand_stair(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
+    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let (d, c) = (Vec2::new(0.866, 0.5), Vec2::new(-0.5, 0.866));
+    let uv = |t: f32, w: f32| Vec2::new(-7.7, 88.9) + d * t + c * w - HOME;
+    let wl = |x: f32, z: f32| Vec2::new(x, z) - HOME;
+    let (ri, tr, wide) = (0.165f32, 0.31f32, 12.5f32);
+    let tiers = [(18i32, 0.0f32), (14, 2.2), (16, 6.0)];
+    let lands = [1.8f32, 2.0];
+    let top = ri * tiers.iter().map(|t| t.0).sum::<i32>() as f32;
+    let paving = Key::new(Mat::Surface("vlzlajnfw"), [0.64, 0.62, 0.58]).tile(3.0).rough(0.8);
+    let riser = Key::new(Mat::Plain(200), [0.4, 0.39, 0.37]);
+    let (d3, r3) = (Vec3::new(d.x, 0.0, d.y), Vec3::new(-c.x, 0.0, -c.y));
+    let _ = d3;
+    // the flights: (start along the run, height at its top, risers, north-east extension)
+    let mut flights: Vec<(f32, f32, i32, f32)> = vec![];
+    let (mut t, mut h) = (0.0f32, top);
+    for (i, &(n, ext)) in tiers.iter().enumerate() {
+        flights.push((t, h, n, ext));
+        t += n as f32 * tr;
+        h -= n as f32 * ri;
+        if i < lands.len() {
+            // the landing, as wide as the flight below it
+            let ext2 = tiers[i + 1].1;
+            let q = [uv(t, -ext2), uv(t + lands[i], -ext2), uv(t + lands[i], wide), uv(t, wide)];
+            poly_up(g, paving, &q.map(|p| v3(p, h)));
+            g.block_ring(&q, -0.5, h);
+            t += lands[i];
+        }
+    }
+    let total = t;
+    for &(t0, h0, n, ext) in &flights {
+        for k in 0..n {
+            let (ts, te, y) = (t0 + k as f32 * tr, t0 + (k + 1) as f32 * tr, h0 - (k + 1) as f32 * ri);
+            let q = [uv(ts, -ext), uv(te, -ext), uv(te, wide), uv(ts, wide)];
+            poly_up(g, paving, &q.map(|p| v3(p, y)));
+            g.quad(riser, v3(uv(ts, wide), y), r3 * (wide + ext), Vec3::Y * ri);
+            g.block_ring(&q, -0.5, y);
+        }
+        // handrails: at both sides and the thirds
+        let (y0, y1, t1) = (h0, h0 - n as f32 * ri, t0 + n as f32 * tr);
+        let mut ws = vec![0.25, wide / 3.0, wide * 2.0 / 3.0, wide - 0.25];
+        if ext > 0.5 {
+            ws.push(-ext + 0.25);
+        }
+        for w in ws {
+            g.tube(m.rail, v3(uv(t0, w), y0 + 0.95), v3(uv(t1, w), y1 + 0.95), 0.025, 6);
+            for f in [0.0f32, 0.5, 1.0] {
+                let (tt, yy) = (t0 + (t1 - t0) * f, y0 + (y1 - y0) * f);
+                g.tube(m.rail, v3(uv(tt, w), yy - ri), v3(uv(tt, w), yy + 0.95), 0.02, 6);
+            }
+        }
+    }
+    // the stair's surface height along the run, for the cheek walls
+    let fl = flights.clone();
+    let height = move |t: f32| -> f32 {
+        let mut y = top;
+        for &(t0, h0, n, _) in &fl {
+            if t >= t0 {
+                y = h0 - ((t - t0) / tr).clamp(0.0, n as f32) * ri;
+            }
+        }
+        y
+    };
+    let cheek = |t: f32| height(t) + 1.05;
+    // stone cheeks: along the tower side (tapering with the gap to the tower), and stepping out with the fan
+    prism(g, m, &uv, m.sandstone, &[(0.0, wide), (total, wide), (total, wide + 0.3), (0.0, wide + 1.3)], -0.5, &cheek, false);
+    let (t1, t2) = (flights[1].0 - lands[0], flights[2].0 - lands[1]);
+    prism(g, m, &uv, m.sandstone, &[(0.0, -0.4), (t1, -0.4), (t1, 0.0), (0.0, 0.0)], -0.5, &cheek, false);
+    prism(g, m, &uv, m.sandstone, &[(t1 - 0.4, -2.6), (t2, -2.6), (t2, -2.2), (t1 - 0.4, -2.2)], -0.5, &cheek, false);
+    prism(g, m, &uv, m.sandstone, &[(t1 - 0.4, -2.2), (t1, -2.2), (t1, -0.4), (t1 - 0.4, -0.4)], -0.5, &cheek, false);
+    prism(g, m, &uv, m.sandstone, &[(t2 - 0.4, -6.4), (total, -6.4), (total, -6.0), (t2 - 0.4, -6.0)], -0.5, &cheek, false);
+    prism(g, m, &uv, m.sandstone, &[(t2 - 0.4, -6.0), (t2, -6.0), (t2, -2.6), (t2 - 0.4, -2.6)], -0.5, &cheek, false);
+    // --- the level at the top: back to the offices, and on under the bridge to the bowl
+    let flat = |hh: f32| move |_u: f32| hh;
+    prism(g, m, &uv, m.sandstone, &[(-4.6, 0.0), (0.0, 0.0), (0.0, wide + 1.3), (-4.6, wide + 1.3)], -0.5, &flat(top), false);
+    poly_up(g, paving, &[uv(-4.6, 0.0), uv(0.0, 0.0), uv(0.0, wide + 1.3), uv(-4.6, wide + 1.3)].map(|p| v3(p, top + 0.005)));
+    let (bt, bb) = (Vec2::new(BRIDGE_TOWER.0, BRIDGE_TOWER.1) - HOME, Vec2::new(BRIDGE_BOWL.0, BRIDGE_BOWL.1) - HOME);
+    let be = (bt - bb).normalize();
+    let bs = be.perp() * (BRIDGE_W / 2.0 + 0.3);
+    let near = uv(0.0, 0.0);
+    let s_a = (near - bb).dot(be);
+    let (p0, p1) = (bb + be * 0.6, bb + be * s_a);
+    let id = |x: f32, z: f32| Vec2::new(x, z);
+    let ring = [p0 - bs, p1 - bs, p1 + bs, p0 + bs];
+    prism(g, m, &id, m.sandstone, &ring.map(|p| (p.x, p.y)), -0.5, &flat(top), false);
+    poly_up(g, paving, &ring.map(|p| v3(p, top + 0.005)));
+    // a rail where the level ends at the bowl's frame
+    for y in [0.55f32, 1.05] {
+        g.tube(m.rail, v3(p0 - bs, top + y), v3(p0 + bs, top + y), 0.025, 6);
+    }
+    g.block_ring(&[p0 - bs, p0 + bs, p0 + bs + be * 0.1, p0 - bs + be * 0.1], top, top + 1.05);
+    // --- the planted terrace north-east of the stair: the same level behind a stone wall with a parapet, trees on it
+    let block = [wl(-4.0, 89.6), wl(7.5, 89.6), wl(16.0, 88.5), wl(16.0, 82.0), wl(10.0, 81.5), wl(2.0, 83.5), wl(-2.0, 87.0)];
+    prism(g, m, &id, m.sandstone, &block.map(|p| (p.x, p.y)), 0.0, &flat(top), false);
+    poly_up(g, paving, &block.map(|p| v3(p, top + 0.005)));
+    let centre = block.iter().copied().sum::<Vec2>() / block.len() as f32;
+    for k in 0..3 {
+        let (p, q) = (block[k], block[k + 1]);
+        let e = (q - p).normalize();
+        let n = if e.perp().dot(centre - p) > 0.0 { e.perp() } else { -e.perp() } * 0.4;
+        let ring = [p, q, q + n, p + n];
+        prism(g, m, &id, m.sandstone, &ring.map(|r| (r.x, r.y)), top, &flat(top + 1.0), false);
+    }
+    if let Some((mn, mx)) = f.bounds("sf_380a2c4bfa") {
+        for (k, (x, z)) in [(2.0f32, 86.6f32), (8.0, 86.2), (13.0, 85.6)].into_iter().enumerate() {
+            let sc = 1.6f32;
+            let (cx, cz) = ((mn[0] + mx[0]) * 0.5, (mn[2] + mx[2]) * 0.5);
+            let rot = 40.0 + k as f64 * 75.0;
+            let r = (rot as f32).to_radians();
+            // the trunk is the model's origin: offset the footprint's centre so the trunk stands on the spot
+            let (ux, uz, zx, zz) = (r.sin(), -r.cos(), r.cos(), r.sin());
+            let (ox, oz) = (-cx * sc, -cz * sc);
+            let [wx, wz] = g.world_xz(wl(x, z));
+            f.out.push(crate::library::Placement { asset: "sf_380a2c4bfa".into(), part: crate::library::ALL_PARTS, x: wx - (ox * ux + oz * zx) as f64, z: wz - (ox * uz + oz * zz) as f64, y: g.world_y(top), rot, scale: [sc; 3], tint: [0.72; 3], lod: 0, indoor: false });
+        }
     }
 }
