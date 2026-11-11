@@ -2265,8 +2265,16 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
     let roof = 39.2;
     // truss bands (bottom chord, top chord, diagonal pattern: true = six panels leaning in with verticals, false = a
     // twelve-panel zig-zag) and V levels (foot, head, reach of each arm as a fraction of the bay)
-    let bands = [(13.0, d1 - 1.35, true), (18.9, GZ_UPPER_CONCOURSE - 1.4, true), (31.5, 33.4, true), (top_row + 1.15, roof, true)];
-    let vees = [(8.5, 13.0, 0.2, 0.42), (d1, 18.9, 0.18, 0.42), (GZ_UPPER_CONCOURSE, 31.5, 0.35, 0.55)];
+    // (bottom chord, top chord, panels whose diagonal is a big arm running through the band)
+    let bands: [(f32, f32, &[usize]); 4] = [(13.0, d1 - 1.35, &[2, 3]), (18.9, GZ_UPPER_CONCOURSE - 1.4, &[1, 4]), (31.5, 33.4, &[]), (top_row + 1.15, roof, &[])];
+    // the big arms, left half of the bay (mirrored for the right): foot (fraction, height) to head, section. Each is
+    // the extension of a truss diagonal through its band (photos): under the upper concourse from the column just
+    // above the terrace deck through the truss's second panel point; at the bottom a Λ from the bay's middle under the
+    // terrace deck down through the truss to the column at the street-level wall's top; the tall bay's from the
+    // column at the upper concourse to the letter truss.
+    let (mid_lo, mid_hi) = (18.9, GZ_UPPER_CONCOURSE - 1.4);
+    let mid_foot = mid_lo - (mid_hi - mid_lo);
+    let arms = [(0.0, 6.0, 0.5, d1 - 1.35, 0.6), (0.0, mid_foot, 2.0 / 6.0, mid_hi, 0.5), (0.0, GZ_UPPER_CONCOURSE + 0.1, 0.35, 31.5, 0.55)];
     for w in cols.windows(2) {
         let ((pa, na), (pb, nb)) = (place(w[0]), place(w[1]));
         if (pb - pa).length() < 1.0 {
@@ -2303,33 +2311,28 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
                 }
             }
         };
-        for &(y0, y1, lean) in &bands {
+        for &(y0, y1, arm_panels) in &bands {
             // chords in front of the deck fascias
             member(g, pa, y0, pb, y0, 0.45, 0.4);
             member(g, pa, y1, pb, y1, 0.45, 0.4);
-            if lean {
-                for i in 0..6 {
-                    let (f0, f1) = (i as f32 / 6.0, (i + 1) as f32 / 6.0);
-                    if i > 0 {
-                        member(g, at(f0), y0, at(f0), y1, 0.26, 0.26);
-                    }
-                    if i < 3 {
-                        member(g, at(f0), y0, at(f1), y1, 0.26, 0.26);
-                    } else {
-                        member(g, at(f0), y1, at(f1), y0, 0.26, 0.26);
-                    }
+            for i in 0..6 {
+                let (f0, f1) = (i as f32 / 6.0, (i + 1) as f32 / 6.0);
+                if i > 0 {
+                    member(g, at(f0), y0, at(f0), y1, 0.26, 0.26);
                 }
-            } else {
-                for i in 0..12 {
-                    let (f0, f1) = (i as f32 / 12.0, (i + 1) as f32 / 12.0);
-                    let (ya, yb) = if i % 2 == 0 { (y0, y1) } else { (y1, y0) };
-                    member(g, at(f0), ya, at(f1), yb, 0.2, 0.2);
+                if arm_panels.contains(&i) {
+                    continue;
+                }
+                if i < 3 {
+                    member(g, at(f0), y0, at(f1), y1, 0.26, 0.26);
+                } else {
+                    member(g, at(f0), y1, at(f1), y0, 0.26, 0.26);
                 }
             }
         }
-        for &(foot, head, reach, size) in &vees {
-            member(g, pa, foot, at(reach), head, size, size * 0.9);
-            member(g, pb, foot, at(1.0 - reach), head, size, size * 0.9);
+        for &(f0, y0, f1, y1, size) in &arms {
+            member(g, at(f0), y0, at(f1), y1, size, size * 0.9);
+            member(g, at(1.0 - f0), y0, at(1.0 - f1), y1, size, size * 0.9);
         }
         // the top rows overhang the frame: their walk out to a white box edge with the rail, carried on angled struts
         // from the letter truss's foot at every panel point, with outriggers under the box
