@@ -221,6 +221,9 @@ struct Mats {
     soffit: Key,
     letters: Key,
     interior: Key,
+    /// Warm light strips, and the decks' glass guards.
+    led_warm: Key,
+    guard: Key,
 }
 
 fn mats() -> Mats {
@@ -248,6 +251,8 @@ fn mats() -> Mats {
         soffit: Key::new(Mat::Plain(170), [0.26, 0.26, 0.26]),
         letters: Key::new(Mat::Plain(80), [0.3, 0.02, 0.03]),
         interior: s("tjeneevfw", [0.8, 0.64, 0.48]).tile(2.0),
+        led_warm: Key::new(Mat::Light, [1.2, 1.05, 0.8]),
+        guard: Key::new(Mat::Glass, [0.18, 0.22, 0.24]),
     }
 }
 
@@ -788,7 +793,10 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
             // concourse, out from under the low end of the soffit; each out to the frame
             let mut decks = vec![];
             if !at_gate_stair {
-                decks.push((CONCOURSE_Y, a.terrace + 9.0, b.terrace + 9.0, up_back_a - 4.0, up_back_b - 4.0, 0.45));
+                decks.push((CONCOURSE_Y, a.terrace + 9.0, b.terrace + 9.0, up_back_a + edge, up_back_b + edge, 0.8));
+                // a strip of lights under its edge
+                let (la, lb) = (at(&a, up_back_a + edge - 0.6), at(&b, up_back_b + edge - 0.6));
+                poly_down(g, m.led_warm, &[v(la, CONCOURSE_Y - 0.82), v(lb, CONCOURSE_Y - 0.82), v(lb + b.n * 0.25, CONCOURSE_Y - 0.82), v(la + a.n * 0.25, CONCOURSE_Y - 0.82)]);
             }
             decks.push((t_tread + 0.25, t_back_a + 0.3, t_back_b + 0.3, up_back_a + edge, up_back_b + edge, 1.35));
             let (ri_a, ri_b) = (a.upper + 0.36 * (up_back_a - a.upper), b.upper + 0.36 * (up_back_b - b.upper));
@@ -802,9 +810,8 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                 // white fascia, and the rail along the deck edge (none where a stair core's bridge meets it)
                 g.poly(m.white, &[v(oa, y - fascia), v(ob, y - fascia), v(ob, y + 0.1), v(oa, y + 0.1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
                 if !cores.iter().any(|c| c.covers((oa + ob) / 2.0)) && !point_in(&bridge_ring(), (oa + ob) / 2.0) {
-                    for hh in [0.5, 1.05] {
-                        g.tube(m.rail, v(oa, y + hh), v(ob, y + hh), 0.025, 5);
-                    }
+                    g.tube(m.rail, v(oa, y + 1.05), v(ob, y + 1.05), 0.03, 5);
+                    g.poly(m.guard, &[v(oa, y + 0.05), v(ob, y + 0.05), v(ob, y + 1.0), v(oa, y + 1.0)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
                     g.block_ring(&[oa, ob, ob + b.n * 0.1, oa + a.n * 0.1], y, y + 1.05);
                 }
                 // the concourse's back wall (pale plaster, lit) up to the soffit or the deck above
@@ -2267,14 +2274,22 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
     // twelve-panel zig-zag) and V levels (foot, head, reach of each arm as a fraction of the bay)
     // (bottom chord, top chord, panels whose diagonal is a big arm running through the band)
     let bands: [(f32, f32, &[usize]); 4] = [(13.0, d1 - 1.35, &[2, 3]), (18.9, GZ_UPPER_CONCOURSE - 1.4, &[1, 4]), (31.5, 33.4, &[]), (top_row + 1.15, roof, &[])];
-    // the big arms, left half of the bay (mirrored for the right): foot (fraction, height) to head, section. Each is
-    // the extension of a truss diagonal through its band (photos): under the upper concourse from the column just
-    // above the terrace deck through the truss's second panel point; at the bottom a Λ from the bay's middle under the
-    // terrace deck down through the truss to the column at the street-level wall's top; the tall bay's from the
-    // column at the upper concourse to the letter truss.
+    // the big arms, left half of the bay (mirrored for the right): (fraction, height) to (fraction, height), section.
+    // From the photos: at the bottom, arms from near the bay's middle under the terrace deck down through the truss
+    // to the street-level deck's edge by the columns, crossed by legs from each column's foot of the truss; under
+    // the upper concourse, arms from the terrace deck by the column up through the truss to the fascia; the tall
+    // bay's from the upper concourse by the column to the letter truss. Where an arm crosses a truss it is that
+    // panel's diagonal.
     let (mid_lo, mid_hi) = (18.9, GZ_UPPER_CONCOURSE - 1.4);
     let mid_foot = mid_lo - (mid_hi - mid_lo);
-    let arms = [(0.0, 6.0, 0.5, d1 - 1.35, 0.6), (0.0, mid_foot, 2.0 / 6.0, mid_hi, 0.5), (0.0, GZ_UPPER_CONCOURSE + 0.1, 0.35, 31.5, 0.55)];
+    let _ = mid_foot;
+    // each reaches the floor of the level below; steep (about 60 degrees), not 45
+    let arms = [
+        (0.42, d1 - 1.35, 0.04, CONCOURSE_Y, 0.6),
+        (0.0, 13.0, 0.36, CONCOURSE_Y, 0.42),
+        (0.07, d1, 0.29, mid_hi, 0.5),
+        (0.05, GZ_UPPER_CONCOURSE, 0.33, 31.5, 0.55),
+    ];
     for w in cols.windows(2) {
         let ((pa, na), (pb, nb)) = (place(w[0]), place(w[1]));
         if (pb - pa).length() < 1.0 {
@@ -2400,23 +2415,28 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
             }
         }
         {
-            // the V: in an upright plane at the upper deck's back, in front of the stepped underside: 45 degree arms
-            // from the chord under the letter truss near each column down to a gusset at mid-bay, sitting on a
-            // horizontal that runs column to column
+            // the V: parallel to the bowl, in the plane of the raker trusses' bottom chords (2.3 m under the rows'
+            // stepped underside): 45 degree arms (seen from the street) from near each raker down to a gusset at
+            // mid-bay, sitting on a horizontal that runs raker to raker
+            let plane = |r: f32| under_rows(r) - 0.22 - depth;
+            let rake_dir = (Vec3::new(-nrm.x, 0.0, -nrm.y) + Vec3::new(0.0, -UP_RISE / UP_PITCH, 0.0)).normalize();
+            let pn = side.cross(rake_dir).normalize();
             let reach = 0.35;
-            let top_y = 31.5;
-            let apex_y = top_y - reach * (pb - pa).length();
-            let dn = Vec3::new(nrm.x, 0.0, nrm.y);
-            for (f0, y0, f1, y1, sz) in [(0.0, apex_y, 1.0, apex_y, 0.42), (0.5 - reach, top_y, 0.5, apex_y + 0.2, 0.4), (0.5 + reach, top_y, 0.5, apex_y + 0.2, 0.4)] {
-                let (p, q) = (pt(f0, 0.0), pt(f1, 0.0));
+            let r_top = (top_row - 0.22 - depth - 31.5) * UP_PITCH / UP_RISE;
+            let drop = reach * (pb - pa).length();
+            let r_apex = r_top + drop * UP_PITCH / UP_RISE;
+            for (f0, r0, f1, r1, sz) in [(0.0, r_apex, 1.0, r_apex, 0.42), (0.5 - reach, r_top, 0.5, r_apex, 0.4), (0.5 + reach, r_top, 0.5, r_apex, 0.4)] {
+                let (p, q) = (pt(f0, r0), pt(f1, r1));
                 if blocked(p) || blocked(q) {
                     continue;
                 }
-                g.member(k, v(p, y0), v(q, y1), sz, sz * 0.9, dn);
+                g.member(k, v(p, plane(r0) - 0.2), v(q, plane(r1) - 0.2), sz, sz * 0.9, pn);
             }
-            let c = pt(0.5, 0.0);
+            let c = pt(0.5, r_apex);
             if !blocked(c) {
-                g.member(k, v(c, apex_y - 0.1), v(c, apex_y + 0.75), 1.0, 0.5, dn);
+                let up_rake = -rake_dir;
+                let cp = v(c, plane(r_apex) - 0.2);
+                g.member(k, cp - up_rake * 0.1, cp + up_rake * 0.9, 1.0, 0.5, pn);
             }
         }
         // the roof's white edge over the frame
