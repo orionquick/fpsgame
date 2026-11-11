@@ -91,3 +91,7 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Security Camera (with Animations & Textures)" by TampaJoey, CC Attribution, https://sketchfab.com/3d-models/631834aba23f43a482e4de7120d68d19
 - "Crowd control barrier. Metallic rusty old. Fence" by Rylae Shylna, CC Attribution, https://sketchfab.com/3d-models/3a3345997371447fb74362c066f254ac
 - "JACARANDA_TREE" by Uncanny Bingchilling, CC Attribution, https://sketchfab.com/3d-models/380a2c4bfa6d4ac5b73dc6b001651b4c
+
+## Made for this project
+
+- Ballpark chair (`pm_ballpark_seat`, its end standard and row plate): modelled in `crates/app/src/procmodel.rs`, written out by `fps proctex`. Shape and colours follow photos of the ballpark's seating and a seating maker's product photos of this kind of fixed tip-up chair, used as visual reference only. Seat numbers are set in Montserrat (credited above).

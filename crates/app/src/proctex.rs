@@ -499,6 +499,7 @@ fn signs() -> std::io::Result<()> {
 }
 
 pub fn all() -> std::io::Result<()> {
+    crate::procmodel::all()?;
     ashlar()?;
     cleft()?;
     signs()?;

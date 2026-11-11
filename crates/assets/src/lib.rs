@@ -137,29 +137,41 @@ fn simplify(verts: &[Vertex], idx: &[u32], ratio: f32, error: f32) -> Vec<u32> {
 /// measured simplification error in model units (the GPU picks the coarsest level whose error projects to under a
 /// pixel). Borders stay locked where that still reduces (modules keep sealed seams); where locked borders stall
 /// (facade pieces, dense foliage) a level is rebuilt without the lock, then by sloppy clustering. Cached per asset in `out/mesh_lod`.
-pub fn lod_chain(out: &Path, id: &str, parts: &[MeshPart]) -> Vec<[(Vec<u32>, f32); 3]> {
+pub fn lod_chain(out: &Path, id: &str, parts: &[MeshPart]) -> Vec<LodChain> {
+    // models that bring their own levels (written at compile time)
+    if let Some(c) = std::fs::read(mesh_path(out, id).with_extension("lods")).ok().and_then(|b| read_lod_cache(&b, parts)) {
+        return c;
+    }
     let path = out.join("mesh_lod").join(format!("{id}.bin"));
     if let Some(c) = std::fs::read(&path).ok().and_then(|b| read_lod_cache(&b, parts)) {
         return c;
     }
-    let chain: Vec<[(Vec<u32>, f32); 3]> = parts.iter().map(|p| [reduce(&p.verts, &p.idx, 0.25, 0.02), reduce(&p.verts, &p.idx, 0.06, 0.05), reduce(&p.verts, &p.idx, 0.015, 0.1)]).collect();
+    let chain: Vec<LodChain> = parts.iter().map(reduced).collect();
+    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    let _ = std::fs::write(&path, lod_bytes(&chain));
+    chain
+}
+
+fn reduced(p: &MeshPart) -> LodChain {
+    [reduce(&p.verts, &p.idx, 0.25, 0.02), reduce(&p.verts, &p.idx, 0.06, 0.05), reduce(&p.verts, &p.idx, 0.015, 0.1)]
+}
+
+fn lod_bytes(chain: &[LodChain]) -> Vec<u8> {
     let mut b = LOD_MAGIC.to_vec();
     b.extend((chain.len() as u32).to_le_bytes());
-    for c in &chain {
+    for c in chain {
         for (l, e) in c {
             b.extend(e.to_le_bytes());
             b.extend((l.len() as u32).to_le_bytes());
             b.extend(l.iter().flat_map(|i| i.to_le_bytes()));
         }
     }
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
-    let _ = std::fs::write(&path, b);
-    chain
+    b
 }
 
 const LOD_MAGIC: &[u8; 4] = b"LOD5";
 
-fn read_lod_cache(b: &[u8], parts: &[MeshPart]) -> Option<Vec<[(Vec<u32>, f32); 3]>> {
+fn read_lod_cache(b: &[u8], parts: &[MeshPart]) -> Option<Vec<LodChain>> {
     if b.get(..4)? != LOD_MAGIC {
         return None;
     }
@@ -327,7 +339,10 @@ fn read_zip_file(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Res<Ve
 }
 
 /// Extracts every mesh node of a glTF in the zip, transformed by its node chain (cm Z-up → m Y-up).
-type Extracted = (Vec<MeshPart>, Vec<Part>, Vec<Maps>, Vec<Option<usize>>, Vec<String>);
+type Extracted = (Vec<MeshPart>, Vec<Part>, Vec<Maps>, Vec<Option<usize>>, Vec<String>, Vec<Option<LodChain>>);
+
+/// A part's coarser index lists (over its own vertices) with each one's error in model units.
+pub type LodChain = [(Vec<u32>, f32); 3];
 
 /// `megascans`: apply the Megascans centimetre Z-up fix; `split`: break a prop pack into one object per child of
 /// its root node (returned per part, with the object names).
@@ -364,6 +379,23 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
             o.remove("extensions");
         }
     }
+    // levels of detail a model brings itself (the project's own models): per mesh and primitive,
+    // `extras.lods = [{"error": metres, "indices": [...]}; 3]`, index lists over the primitive's vertices
+    let authored: Vec<Vec<Option<LodChain>>> = v["meshes"].as_array().map_or(vec![], |a| {
+        a.iter()
+            .map(|m| {
+                m["primitives"].as_array().map_or(vec![], |ps| {
+                    ps.iter()
+                        .map(|p| {
+                            let l = p["extras"]["lods"].as_array()?;
+                            let level = |k: usize| -> Option<(Vec<u32>, f32)> { Some((l.get(k)?["indices"].as_array()?.iter().filter_map(|i| i.as_u64().map(|i| i as u32)).collect(), l[k]["error"].as_f64()? as f32)) };
+                            Some([level(0)?, level(1)?, level(2)?])
+                        })
+                        .collect()
+                })
+            })
+            .collect()
+    });
     let doc = gltf::Gltf::from_slice(&serde_json::to_vec(&v)?)?;
     let dir = gltf_name.rsplit_once('/').map_or(String::new(), |(d, _)| format!("{d}/"));
     let mut buffers = vec![];
@@ -414,6 +446,7 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
     // Megascans centimetre exports are Z-up; some nodes carry the +90° X rotation to Y-up and some don't.
     let to_y_up: M4 = [[1., 0., 0., 0.], [0., 0., 1., 0.], [0., -1., 0., 0.], [0., 0., 0., 1.]];
     let mut part_obj = vec![];
+    let mut part_lods: Vec<Option<LodChain>> = vec![];
     for (node, m, obj) in nodes {
         let Some(mesh) = node.mesh() else { continue };
         // Only the centimetre Z-up exports (node scale 0.01) lack it; metre exports without a node scale are already Y-up.
@@ -427,14 +460,23 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
         for group in groups {
         let mut verts = vec![];
         let mut idx = vec![];
+        let mut own: Option<LodChain> = None;
         for prim in mesh.primitives().filter(|p| !multi || p.material().index() == group) {
             let r = prim.reader(|b| buffers.get(b.index()).map(|v| v.as_slice()));
             let Some(pos) = r.read_positions() else { continue };
             let pos: Vec<[f32; 3]> = pos.collect();
             let nrm: Vec<[f32; 3]> = r.read_normals().map_or(vec![[0., 1., 0.]; pos.len()], |n| n.collect());
             let uv: Vec<[f32; 2]> = r.read_tex_coords(0).map_or(vec![[0., 0.]; pos.len()], |t| t.into_f32().collect());
-            let tan: Vec<[f32; 4]> = r.read_tangents().map_or(vec![[1., 0., 0., 1.]; pos.len()], |t| t.collect());
+            // without tangents: any direction across the normal (one along it would break the shading basis)
+            let tan: Vec<[f32; 4]> = r.read_tangents().map_or_else(|| nrm.iter().map(|n| if n[0].abs() > 0.9 { [0., 0., 1., 1.] } else { [1., 0., 0., 1.] }).collect(), |t| t.collect());
             let base = verts.len() as u32;
+            if let Some(Some(chain)) = authored.get(mesh.index()).and_then(|m| m.get(prim.index())) {
+                let o = own.get_or_insert_with(Default::default);
+                for (k, (l, e)) in chain.iter().enumerate() {
+                    o[k].0.extend(l.iter().map(|i| i + base));
+                    o[k].1 = o[k].1.max(*e);
+                }
+            }
             for i in 0..pos.len() {
                 let t = norm3(xform(&m, [tan[i][0], tan[i][1], tan[i][2]], 0.0));
                 verts.push(Vertex { pos: xform(&m, pos[i], 1.0), nrm: norm3(xform(&m, nrm[i], 0.0)), uv: uv[i], tan: [t[0], t[1], t[2], tan[i][3]] });
@@ -451,6 +493,7 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
         let max = verts.iter().fold([f32::MIN; 3], |a, v| [a[0].max(v.pos[0]), a[1].max(v.pos[1]), a[2].max(v.pos[2])]);
         infos.push(Part { name: node.name().unwrap_or("").to_string(), min, max, tris: idx.len() as u32 / 3, material: group });
         part_obj.push(obj);
+        part_lods.push(own.filter(|o| o.iter().all(|(l, _)| l.len() >= 3 && l.iter().all(|&i| (i as usize) < verts.len()))));
         let lods = [simplify(&verts, &idx, 0.25, 0.02), simplify(&verts, &idx, 0.06, 0.08)];
         parts.push(MeshPart { verts, idx, lods });
         }
@@ -499,7 +542,7 @@ fn extract_model(zip: &mut zip::ZipArchive<std::fs::File>, gltf_name: &str, mega
             }
         })
         .collect();
-    Ok((parts, infos, mats, part_obj, objs))
+    Ok((parts, infos, mats, part_obj, objs, part_lods))
 }
 
 /// Unit fixes for third-party models modelled at the wrong scale (by id prefix; checked with `fps gallery`).
@@ -588,7 +631,7 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
     if let Some(g) = names.iter().find(|n| n.ends_with(".gltf")).cloned() {
         let third_party = group == "polyhaven" || group == "sketchfab";
         let pack = group == "sketchfab" && { let t = title.to_lowercase(); ["pack", "assets", "props", "collection", "kit", "lounge set", "sofa set", "lamps", "arena seats"].iter().any(|k| t.contains(k)) };
-        let (mut parts, mut infos, gmats, part_obj, objs) = extract_model(&mut zip, &g, !third_party, pack)?;
+        let (mut parts, mut infos, gmats, part_obj, objs, part_lods) = extract_model(&mut zip, &g, !third_party, pack)?;
         if let Some(&(_, k)) = SCALE.iter().find(|(p, _)| id.starts_with(p)) {
             rescale(&mut parts, &mut infos, k);
         }
@@ -613,6 +656,14 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
             }
         }
         write_parts(&mesh_path(out, &id), &parts)?;
+        // a model's own levels of detail are kept beside its mesh (parts without any get the usual reduction)
+        let own_lods = mesh_path(out, &id).with_extension("lods");
+        if part_lods.iter().any(|l| l.is_some()) {
+            let chain: Vec<LodChain> = parts.iter().zip(&part_lods).map(|(p, l)| l.clone().unwrap_or_else(|| reduced(p))).collect();
+            std::fs::write(&own_lods, lod_bytes(&chain))?;
+        } else {
+            let _ = std::fs::remove_file(&own_lods);
+        }
         let ort = suffix_map(&names, &["_ort"]);
         let maps = Maps {
             base: suffix_map(&names, &["_b-o"]).filter(|n| !n.to_lowercase().contains("billboard")).or_else(|| suffix_map(&names, &["_b"])),

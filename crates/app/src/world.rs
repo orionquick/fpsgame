@@ -306,6 +306,24 @@ mod tests {
         assert!(y > 4.3 && y < 6.6, "under the terrace the rows should be between the open bowl and the concourse: {y:.2}");
     }
 
+    #[test]
+    fn ballpark_seats_face_the_field() {
+        let c = city();
+        let park = crate::bespoke::all(&c).into_iter().find(|b| b.osm == crate::bespoke::petco::OSM).expect("ballpark");
+        let ring = crate::bespoke::petco::field_ring();
+        let n = ring.len() as f64;
+        let (cx, cz) = (ring.iter().map(|p| p[0]).sum::<f64>() / n, ring.iter().map(|p| p[1]).sum::<f64>() / n);
+        let seats: Vec<_> = park.furniture.iter().filter(|p| p.asset == crate::procmodel::SEAT).collect();
+        assert!(seats.len() > 20_000, "only {} chairs placed (run `fps proctex` and `fps assets` for the chair model)", seats.len());
+        for p in seats {
+            // a model's front (+z) points along the heading a quarter turn on from its `rot`
+            let h = (p.rot + 90.0).to_radians();
+            let (to_x, to_z) = (cx - p.x, cz - p.z);
+            let facing = (h.sin() * to_x - h.cos() * to_z) / to_x.hypot(to_z);
+            assert!(facing > 0.25, "the chair at ({:.1}, {:.1}) faces away from the field ({facing:.2})", p.x, p.z);
+        }
+    }
+
     /// Walks a route of waypoints with the player's collision; returns the floor height at the end.
     fn walk(c: &city::City, col: &Collision, name: &str, route: &[([f32; 2], Option<f32>)]) -> f32 {
         let mut p = route[0].0;

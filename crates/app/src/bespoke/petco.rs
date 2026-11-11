@@ -21,8 +21,10 @@ pub const WESTERN_METAL: &str = "way/769800588";
 /// Home plate (world x, z): the centre of the dirt circle on the aerial.
 const HOME: Vec2 = Vec2::new(-2.1, 8.1);
 /// Seat model (folding seat with arms, 0.49 m wide) and the navy it is painted.
-const SEAT: &str = "sf_6bbe4c85d2_03";
-const NAVY: [f32; 3] = [0.035, 0.055, 0.13];
+use crate::library::ALL_PARTS;
+use crate::procmodel::{SEAT, SEAT_END, SEAT_MODULE, SEAT_NUMBERS, SEAT_ROW_PLATE};
+/// Chairs stand with the middle of their standards this far in front of the riser behind them.
+const SEAT_SETBACK: f32 = 0.24;
 
 /// Plan direction of a compass bearing (degrees clockwise from north) in local x-east / z-south.
 fn dir(b: f32) -> Vec2 {
@@ -660,6 +662,10 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let (a, b) = (st[i], st[i + 1]);
         let mid_s = (arc[i] + arc[i + 1]) / 2.0;
         let in_aisle = aisle(mid_s);
+        // which ends of this stretch of row stand on an aisle (or the end of the stand)
+        let ends = (i == 0 || aisle((arc[i - 1] + arc[i]) / 2.0), i + 2 >= st.len() || aisle((arc[i + 1] + arc[i + 2]) / 2.0));
+        // how far this stretch starts from its section's aisle
+        let along = arc[i] - ((mid_s / 11.5).floor() * 11.5 + 0.65);
         // --- front wall (true front line): padded, 1.1 m; in the dugout spans the dugout's roof edge instead
         let (fa, fb) = (at(&a, a.front), at(&b, b.front));
         let e = (fb - fa).normalize_or_zero();
@@ -691,7 +697,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
             g.block_ring(&[at(&a, n0a), at(&a, n1), at(&b, n1), at(&b, n0b)], 0.0, ya.min(yb));
             // seats, facing the field
             if !in_aisle && n0 > a.front + 0.9 {
-                seat_row(g, f, at(&a, n0 + 0.42), at(&b, n0 + 0.42), (ya + yb) / 2.0, -(a.n + b.n).normalize());
+                seat_row(g, f, at(&a, n0 + LB_PITCH - SEAT_SETBACK), at(&b, n0 + LB_PITCH - SEAT_SETBACK), (ya + yb) / 2.0, -(a.n + b.n).normalize(), ends, along);
             }
         }
         let lba = 0.8 + rows as f32 * LB_PITCH;
@@ -704,7 +710,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
             g.poly(m.riser, &[v(at(&a, n1), y), v(at(&b, n1), y), v(at(&b, n1), y + ext_rise), v(at(&a, n1), y + ext_rise)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             g.block_ring(&[at(&a, n0), at(&a, n1), at(&b, n1), at(&b, n0)], 0.0, y);
             if !in_aisle {
-                seat_row(g, f, at(&a, n0 + 0.42), at(&b, n0 + 0.42), y, -(a.n + b.n).normalize());
+                seat_row(g, f, at(&a, n0 + LB_PITCH - SEAT_SETBACK), at(&b, n0 + LB_PITCH - SEAT_SETBACK), y, -(a.n + b.n).normalize(), ends, along);
             }
         }
         // where the concourse begins
@@ -722,7 +728,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
             let y = TERR_Y + j as f32 * TERR_RISE;
             step_row(g, m, &a, &b, n0a, n0b, TERR_PITCH, y, TERR_RISE, in_aisle);
             if !in_aisle {
-                seat_row(g, f, at(&a, n0a + 0.42), at(&b, n0b + 0.42), y, -(a.n + b.n).normalize());
+                seat_row(g, f, at(&a, n0a + TERR_PITCH - SEAT_SETBACK), at(&b, n0b + TERR_PITCH - SEAT_SETBACK), y, -(a.n + b.n).normalize(), ends, along);
             }
         }
         let t_back_a = a.terrace + 0.3 + t_rows as f32 * TERR_PITCH;
@@ -753,7 +759,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
             let y = UP_Y + j as f32 * UP_RISE;
             step_row(g, m, &a, &b, n0a, n0b, UP_PITCH, y, UP_RISE, in_aisle);
             if !in_aisle {
-                seat_row(g, f, at(&a, n0a + 0.4), at(&b, n0b + 0.4), y, -(a.n + b.n).normalize());
+                seat_row(g, f, at(&a, n0a + UP_PITCH - SEAT_SETBACK), at(&b, n0b + UP_PITCH - SEAT_SETBACK), y, -(a.n + b.n).normalize(), ends, along);
             }
         }
         if in_aisle {
@@ -1019,13 +1025,39 @@ fn step_row(g: &mut Geo, m: &Mats, a: &Station, b: &Station, n0a: f32, n0b: f32,
     }
 }
 
-/// Seats every 0.5 m along a row segment (centred so neighbouring segments line up), facing `face`.
-fn seat_row(g: &mut Geo, f: &mut Furnisher, a: Vec2, b: Vec2, y: f32, face: Vec2) {
+/// A row of chairs standing on the line `a`-`b` (the middle of their standards' feet), facing `face`.
+/// Each chair carries the standard on its left, so the next stretch of row closes this one; where the row stops
+/// (`ends`: at `a`, at `b`) the last chair gets an end standard, and both ends show their aisle face.
+/// `along` is how far `a` is from the section's aisle, which numbers the seats.
+fn seat_row(g: &mut Geo, f: &mut Furnisher, a: Vec2, b: Vec2, y: f32, face: Vec2, ends: (bool, bool), along: f32) {
     let l = (b - a).length();
-    let n = (l / 0.5).round() as i32;
+    let n = (l / SEAT_MODULE).round() as i32;
+    if n < 1 {
+        return;
+    }
+    let e = (b - a) / l;
+    let mut fwd = Vec2::new(-e.y, e.x);
+    if fwd.dot(face) < 0.0 {
+        fwd = -fwd;
+    }
+    // chairs are set out along the model's +x
+    let flip = Vec2::new(fwd.y, -fwd.x).dot(e) < 0.0;
+    let (from, step, ends) = if flip { (b, -e, (ends.1, ends.0)) } else { (a, e, ends) };
+    let w = l / n as f32;
+    let sx = w / SEAT_MODULE;
     for k in 0..n {
-        let t = (k as f32 + 0.5) / n as f32;
-        f.put_tint(g, SEAT, a + (b - a) * t, y, face, NAVY);
+        let d = w * (k as f32 + 0.5);
+        let o = from + step * d;
+        let number = ((along + if flip { l - d } else { d }) / SEAT_MODULE).floor().clamp(0.0, SEAT_NUMBERS as f32 - 1.0) as usize;
+        // moulded plastic weathers a little unevenly from chair to chair
+        let h = ((o.x * 12.9898 + o.y * 78.233 + y * 37.719).sin() * 43758.547).fract().abs();
+        f.put_origin(g, SEAT, number, o, y, fwd, [sx, 1.0, 1.0], [0.93 + 0.14 * h; 3]);
+    }
+    if ends.1 {
+        f.put_origin(g, SEAT_END, ALL_PARTS, from + step * l, y, fwd, [1.0; 3], [1.0; 3]);
+    }
+    if ends.0 {
+        f.put_origin(g, SEAT_ROW_PLATE, ALL_PARTS, from, y, fwd, [1.0; 3], [1.0; 3]);
     }
 }
 
@@ -1075,14 +1107,18 @@ fn tier(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], n0: f32, n1: f
         let (a, b) = (st[i], st[i + 1]);
         let e = (b.p - a.p).normalize_or_zero();
         let ev = Vec3::new(e.x, 0.0, e.y);
+        let prev = arc;
         arc += (b.p - a.p).length();
-        let in_aisle = ((arc / 11.5).round() * 11.5 - arc).abs() < 0.65;
+        let on_aisle = |s: f32| ((s / 11.5).round() * 11.5 - s).abs() < 0.65;
+        let in_aisle = on_aisle(arc);
+        let ends = (i == 0 || on_aisle(prev), i + 2 >= st.len() || on_aisle(arc + (st[i + 2].p - b.p).length()));
+        let along = prev - (((prev + arc) / 2.0 / 11.5).floor() * 11.5 + 0.65);
         for j in 0..rows {
             let n = n0 + j as f32 * LB_PITCH;
             let y = y0 + j as f32 * rise;
             step_row(g, m, &a, &b, n, n, LB_PITCH, y, rise, in_aisle && rise > 0.3);
             if !in_aisle {
-                seat_row(g, f, at(&a, n + 0.42), at(&b, n + 0.42), y, -(a.n + b.n).normalize());
+                seat_row(g, f, at(&a, n + LB_PITCH - SEAT_SETBACK), at(&b, n + LB_PITCH - SEAT_SETBACK), y, -(a.n + b.n).normalize(), ends, along);
             }
         }
         // facia under the front row and the rail on it

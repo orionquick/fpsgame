@@ -5,6 +5,7 @@ mod gi;
 mod library;
 mod mcp;
 mod play;
+mod procmodel;
 mod proctex;
 mod review;
 mod service;

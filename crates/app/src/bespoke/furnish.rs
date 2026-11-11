@@ -92,6 +92,19 @@ impl<'a> Furnisher<'a> {
         self.out.push(Placement { asset: id.to_string(), part: ALL_PARTS, x, z, y: g.world_y(y), rot, scale: [1.0; 3], tint, lod: 0, indoor: self.indoor });
     }
 
+    /// Places a model (or one `part` of it) so that its own origin, not the centre of its bounds, stands at local `o`
+    /// on level `y`, facing `face`, scaled along its own axes. For models whose parts share one bounding box.
+    pub fn put_origin(&mut self, g: &mut Geo, id: &str, part: usize, o: Vec2, y: f32, face: Vec2, scale: [f32; 3], tint: [f32; 3]) {
+        let Some((mn, mx)) = self.bounds(id) else { return };
+        let fwd = face.normalize();
+        // the model's +x once its +z faces `fwd`
+        let right = Vec2::new(fwd.y, -fwd.x);
+        let c = o + right * ((mn[0] + mx[0]) / 2.0 * scale[0]) + fwd * ((mn[2] + mx[2]) / 2.0 * scale[2]);
+        let [x, z] = g.world_xz(c);
+        let rot = g.heading(face) - 90.0 + FRONT;
+        self.out.push(Placement { asset: id.to_string(), part, x, z, y: g.world_y(y + mn[1] * scale[1]), rot, scale, tint, lod: 0, indoor: self.indoor });
+    }
+
     /// Bounds (min, max) of an asset's parts in its own (unrecentred) coordinates.
     pub fn bounds(&self, id: &str) -> Option<([f32; 3], [f32; 3])> {
         let a = self.cat.get(id)?;
