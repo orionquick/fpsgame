@@ -297,7 +297,15 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         let b: Vec<String> = st.iter().step_by(10).map(|s| format!("{:.0}@({:.0},{:.0}) f{:.1}", s.bearing, s.p.x, s.p.y, s.front)).collect();
         eprintln!("stations {}: {}", st.len(), b.join(" "));
     }
-    bowl(&mut g, &mut f, &m, &st, &front);
+    let cores = cores(c, &st);
+    bowl(&mut g, &mut f, &m, &st, &front, &cores);
+    for c in &cores {
+        if std::env::var("FPS_PETCO_DEBUG").is_ok() {
+            let w = |q: Vec2| ((q.x + HOME.x) as i32, (q.y + HOME.y) as i32);
+            eprintln!("core street {:?} bridge {:?} y{:.1} top {:?} y{:.1} sides {} {}", w(c.at(-CORE_HALF + LAND / 2.0, c.r0 + CORE_DEPTH + 1.5)), w(c.at(c.terrace_side * (CORE_HALF - LAND / 2.0), c.t_back)), c.t_tread, w(c.at(c.top_side * (CORE_HALF - LAND / 2.0), c.up_back)), c.up_tread, c.terrace_side, c.top_side);
+        }
+        stair_core(&mut g, &m, c);
+    }
     outfield(&mut g, &mut f, &m);
     backstop_net(&mut g, &m, &st);
     for b in [95.0f32, 265.0] {
@@ -580,7 +588,7 @@ fn lb_y(n: f32, end: f32) -> f32 {
 /// The seating bowl from foul pole to foul pole: the lower bowl's concrete steps and seats behind a padded front
 /// wall, the concourse under the terrace with suite glazing, the terrace, the upper deck with stepped aisles and
 /// rails, its soffit, the white steel canopy with lights, and the sandstone back wall.
-fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]) {
+fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2], cores: &[Core]) {
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let at = |s: &Station, n: f32| s.p + s.n * n;
     // aisles: every 11.5 m along the guide, 1.3 m wide
@@ -661,9 +669,18 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let t_back_a = a.terrace + 0.3 + t_rows as f32 * TERR_PITCH;
         let t_back_b = b.terrace + 0.3 + t_rows as f32 * TERR_PITCH;
         let t_top = TERR_Y + t_rows as f32 * TERR_RISE;
-        // club-level back wall behind the terrace, up to the upper deck's soffit
-        g.poly(m.stucco, &[v(at(&b, t_back_b), t_top), v(at(&a, t_back_a), t_top), v(at(&a, t_back_a), UP_Y - 1.0), v(at(&b, t_back_b), UP_Y - 1.0)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
-        g.block_ring(&[at(&a, t_back_a), at(&b, t_back_b), at(&b, t_back_b + 0.3), at(&a, t_back_a + 0.3)], t_top - 0.1, UP_Y);
+        // club-level back wall behind the terrace, up to the upper deck's soffit (open where a stair core's bridge
+        // comes through)
+        let (ca, cb) = (at(&a, t_back_a), at(&b, t_back_b));
+        let (ca1, cb1) = (at(&a, t_back_a + 0.3), at(&b, t_back_b + 0.3));
+        for (f0, f1, hole) in runs(|f| cores.iter().any(|c| c.door(ca.lerp(cb, f), c.terrace_side))) {
+            if hole {
+                continue;
+            }
+            let (p0, p1) = (ca.lerp(cb, f0), ca.lerp(cb, f1));
+            g.poly(m.stucco, &[v(p1, t_top), v(p0, t_top), v(p0, UP_Y - 1.0), v(p1, UP_Y - 1.0)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+            g.block_ring(&[p0, p1, ca1.lerp(cb1, f1), ca1.lerp(cb1, f0)], t_top - 0.1, UP_Y);
+        }
         // --- upper deck: facia, rows with stepped aisles, rails
         let (ua, ub) = (at(&a, a.upper), at(&b, b.upper));
         g.poly(m.navy, &[v(ub, UP_Y - 2.3), v(ua, UP_Y - 2.3), v(ua, UP_Y + 0.25), v(ub, UP_Y + 0.25)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
@@ -690,14 +707,24 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         // soffit under the upper deck (from the facia's foot back and up, parallel to the rake)
         g.poly(m.riser, &[v(ua, UP_Y - 2.3), v(ub, UP_Y - 2.3), v(at(&b, up_back_b), up_top - 2.3), v(at(&a, up_back_a), up_top - 2.3)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, -0.6, a.n.y).normalize());
         // back rail and the sandstone back wall down to the ground
-        g.tube(m.rail, v(at(&a, up_back_a), up_top + 1.1), v(at(&b, up_back_b), up_top + 1.1), 0.03, 6);
         // the back: a stucco parapet band behind the top rows only; below it the white steel frame stands open
-        // over sandstone concourse blocks at street level (as in the exterior photos)
+        // over sandstone concourse blocks at street level (as in the exterior photos); a doorway where a stair core
+        // reaches the top row
         let (wa, wb) = (at(&a, up_back_a + 0.2), at(&b, up_back_b + 0.2));
         let band = up_top - 3.0;
-        g.poly(m.stucco, &[v(wa, band), v(wb, band), v(wb, up_top + 1.4), v(wa, up_top + 1.4)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-        g.poly(m.stucco, &[v(wb, band), v(wa, band), v(wa, up_top + 1.4), v(wb, up_top + 1.4)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
-        g.block_ring(&[wa, wb, wb + b.n * 0.4, wa + a.n * 0.4], band, up_top + 1.4);
+        let (ra, rb) = (at(&a, up_back_a), at(&b, up_back_b));
+        let (wa1, wb1) = (wa + a.n * 0.4, wb + b.n * 0.4);
+        for (f0, f1, door) in runs(|f| cores.iter().any(|c| c.door(wa.lerp(wb, f), c.top_side))) {
+            let (p0, p1) = (wa.lerp(wb, f0), wa.lerp(wb, f1));
+            let (q0, q1) = (wa1.lerp(wb1, f0), wa1.lerp(wb1, f1));
+            let h = if door { up_top - 0.5 } else { up_top + 1.4 };
+            g.poly(m.stucco, &[v(p0, band), v(p1, band), v(p1, h), v(p0, h)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            g.poly(m.stucco, &[v(p1, band), v(p0, band), v(p0, h), v(p1, h)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+            g.block_ring(&[p0, p1, q1, q0], band, h);
+            if !door {
+                g.tube(m.rail, v(ra.lerp(rb, f0), up_top + 1.1), v(ra.lerp(rb, f1), up_top + 1.1), 0.03, 6);
+            }
+        }
         if i % 7 == 0 && i + 7 < st.len() {
             // raker beam under the deck, and the lattice bay to the next column: cross braces and a mid girder
             g.tube(m.steel, v(ua, UP_Y - 3.0), v(at(&a, up_back_a), up_top - 3.0), 0.28, 6);
@@ -720,7 +747,19 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let blk = 9.0 + 5.0 * (((arc[i] / 23.0).floor() as i32).rem_euclid(3) as f32);
         let (ga, gb) = (at(&a, up_back_a - 6.0), at(&b, up_back_b - 6.0));
         let (oa, ob) = (wa + a.n * 4.0, wb + b.n * 4.0);
-        if GATES.iter().any(|&gb| (a.bearing - gb).abs() < 2.2) {
+        let pieces = runs(|f| cores.iter().any(|c| c.covers(oa.lerp(ob, f))));
+        if pieces.len() > 1 || pieces[0].2 {
+            // a stair core stands here: blocks either side of it only
+            for (f0, f1, hole) in pieces {
+                if hole {
+                    continue;
+                }
+                let (pa, pb, qa, qb) = (oa.lerp(ob, f0), oa.lerp(ob, f1), ga.lerp(gb, f0), ga.lerp(gb, f1));
+                g.poly(m.sandstone, &[v(pa, 0.0), v(pb, 0.0), v(pb, blk), v(pa, blk)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                poly_up(g, m.concrete, &[v(qa, blk), v(qb, blk), v(pb, blk), v(pa, blk)]);
+                g.block_ring(&[qa, qb, pb, pa], 0.0, blk);
+            }
+        } else if GATES.iter().any(|&gb| (a.bearing - gb).abs() < 2.2) {
             // a gate: the blocks open and a stair climbs from the sidewalk to the concourse under the decks
             gate_stair(g, m, &a, &b, up_back_a + 4.0, a.terrace + 9.0);
         } else {
@@ -1121,4 +1160,257 @@ fn gate_stair(g: &mut Geo, m: &Mats, a: &Station, b: &Station, n_out: f32, n_in:
         g.poly(m.riser, &[v(at(a, n0), y - rise), v(at(b, n0), y - rise), v(at(b, n0), y), v(at(a, n0), y)], ev, Vec3::Y);
         g.block_ring(&[at(a, n0), at(b, n0), at(b, n1), at(a, n1)], 0.0, y);
     }
+}
+
+// ---------------------------------------------------------------- stair cores
+
+/// A stair core behind the bowl: a sandstone tower whose switchback stair climbs from the street to a bridge onto the
+/// terrace's top row and on to the upper deck's back row, both through doorways.
+struct Core {
+    /// Reference point on the guide, tangent and outward normal.
+    p: Vec2,
+    t: Vec2,
+    n: Vec2,
+    /// Inner face of the tower (offset along n), the terrace's back and its top row's height, the upper deck's back
+    /// and its top row's height.
+    r0: f32,
+    t_back: f32,
+    t_tread: f32,
+    up_back: f32,
+    up_tread: f32,
+    /// Street level at the door.
+    base: f32,
+    /// Which end of the tower (-1 along -t, +1 along +t) each landing is at.
+    terrace_side: f32,
+    top_side: f32,
+}
+
+const CORE_HALF: f32 = 3.9;
+const CORE_DEPTH: f32 = 3.4;
+const LANE: f32 = 1.6;
+const LAND: f32 = 1.8;
+const FLIGHT_H: f32 = 2.6;
+
+impl Core {
+    fn local(&self, q: Vec2) -> (f32, f32) {
+        ((q - self.p).dot(self.t), (q - self.p).dot(self.n))
+    }
+    /// Whether a wall at `q` is in this core's doorway at landing end `side`.
+    fn door(&self, q: Vec2, side: f32) -> bool {
+        let (t, r) = self.local(q);
+        let (t0, t1) = if side < 0.0 { (-CORE_HALF, -CORE_HALF + LAND) } else { (CORE_HALF - LAND, CORE_HALF) };
+        t > t0 - 0.7 && t < t1 + 0.7 && r > self.t_back - 2.0 && r < self.r0 + 1.0
+    }
+    /// Whether the tower stands over `q` (the street-level blocks give way).
+    fn covers(&self, q: Vec2) -> bool {
+        let (t, r) = self.local(q);
+        t.abs() < CORE_HALF + 1.0 && r > self.r0 - 8.0 && r < self.r0 + CORE_DEPTH + 6.0
+    }
+    fn at(&self, t: f32, r: f32) -> Vec2 {
+        self.p + self.t * t + self.n * r
+    }
+    /// Flights to rise from y0 to y1 (each ~2.6 m) and the end the last one lands at, given the end it starts at.
+    fn flights(y0: f32, y1: f32) -> i32 {
+        ((y1 - y0) / FLIGHT_H).round().max(1.0) as i32
+    }
+}
+
+/// Walking routes up each stair core (world plan points), each with the floor height expected at its end points:
+/// outside the street door (ground), on the terrace's top row past the bridge, and on the upper deck's back row.
+pub fn core_routes(city: &city::City) -> Vec<Vec<([f32; 2], Option<f32>)>> {
+    let front: Vec<Vec2> = FRONT.iter().map(|&(x, z)| Vec2::new(x, z) - HOME).collect();
+    let st = stations(&front);
+    let w = |q: Vec2| [q.x + HOME.x, q.y + HOME.y];
+    cores(city, &st).into_iter().map(|c| {
+        let y_terr = c.t_tread + 0.25;
+        let n1 = Core::flights(c.base, y_terr);
+        let n2 = Core::flights(y_terr, c.up_tread + 0.2);
+        let (ta, tb) = (-(CORE_HALF - LAND / 2.0), CORE_HALF - LAND / 2.0);
+        let (la, lb) = (c.r0 + LANE / 2.0, c.r0 + CORE_DEPTH - LANE / 2.0);
+        let mut r = vec![(w(c.at(ta, c.r0 + CORE_DEPTH + 2.5)), None), (w(c.at(ta, lb)), None)];
+        let mut climb = |r: &mut Vec<([f32; 2], Option<f32>)>, n: i32| {
+            for k in 0..n {
+                if k % 2 == 0 {
+                    r.push((w(c.at(ta, la)), None));
+                    r.push((w(c.at(tb, la)), None));
+                } else {
+                    r.push((w(c.at(tb, lb)), None));
+                    r.push((w(c.at(ta, lb)), None));
+                }
+            }
+        };
+        climb(&mut r, n1);
+        r.push((w(c.at(ta, c.r0 - 1.0)), None));
+        r.push((w(c.at(ta, c.t_back - 0.45)), Some(c.t_tread)));
+        r.push((w(c.at(ta, c.r0 - 1.0)), None));
+        r.push((w(c.at(ta, lb)), None));
+        climb(&mut r, n2);
+        r.push((w(c.at(ta, c.r0 - 1.0)), None));
+        r.push((w(c.at(ta, c.up_back - 0.4)), Some(c.up_tread)));
+        r
+    })
+    .collect()
+}
+
+/// The stair cores, one a little clockwise of each gate, standing on the street.
+fn cores(city: &city::City, st: &[Station]) -> Vec<Core> {
+    GATES.iter().filter_map(|&gb| core_at(st, gb + 6.0)).map(|mut c| {
+        // the ground floor is a level slab at the highest street point round the footprint
+        let pts = [(-CORE_HALF, c.r0), (CORE_HALF, c.r0), (CORE_HALF, c.r0 + CORE_DEPTH + 1.0), (-CORE_HALF, c.r0 + CORE_DEPTH + 1.0), (0.0, c.r0 + CORE_DEPTH / 2.0)];
+        c.base = pts.iter().map(|&(t, r)| {
+            let q = c.at(t, r) + HOME;
+            city.terrain.at(q.x as f64, q.y as f64) as f32
+        })
+        .fold(f32::MIN, f32::max) + 0.05;
+        let side = |k: i32| if k % 2 == 0 { -1.0 } else { 1.0 };
+        let n1 = Core::flights(c.base, c.t_tread + 0.25);
+        let n2 = Core::flights(c.t_tread + 0.25, c.up_tread + 0.2);
+        c.terrace_side = side(n1);
+        c.top_side = side(n1 + n2);
+        c
+    })
+    .collect()
+}
+
+fn core_at(st: &[Station], bearing: f32) -> Option<Core> {
+    let s = *st.iter().min_by(|a, b| (a.bearing - bearing).abs().total_cmp(&(b.bearing - bearing).abs()))?;
+    let t_rows = (((s.upper + 3.5) - (s.terrace + 0.3)) / TERR_PITCH).floor().clamp(4.0, 12.0);
+    let t_back = s.terrace + 0.3 + t_rows * TERR_PITCH;
+    let t_tread = TERR_Y + (t_rows - 1.0) * TERR_RISE;
+    let up_back = s.upper + 0.3 + UP_ROWS * UP_PITCH;
+    let up_tread = UP_Y + (UP_ROWS - 1.0) * UP_RISE;
+    // flight k goes +t if k is even: an even count lands back at the start end (-t)
+    let n1 = Core::flights(0.0, t_tread + 0.25);
+    let n2 = Core::flights(t_tread + 0.25, up_tread + 0.2);
+    let side = |k: i32| if k % 2 == 0 { -1.0 } else { 1.0 };
+    Some(Core { p: s.p, t: s.n.perp(), n: s.n, r0: up_back + 0.7, t_back, t_tread, up_back, up_tread, base: 0.0, terrace_side: side(n1), top_side: side(n1 + n2) })
+}
+
+fn stair_core(g: &mut Geo, m: &Mats, c: &Core) {
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let y_terr = c.t_tread + 0.25;
+    let y_top = c.up_tread + 0.2;
+    let n1 = Core::flights(c.base, y_terr);
+    let n2 = Core::flights(y_terr, y_top);
+    let run = 2.0 * CORE_HALF - 2.0 * LAND;
+    // the ground floor, and a threshold out to the street
+    let gq = [c.at(-CORE_HALF, c.r0), c.at(CORE_HALF, c.r0), c.at(CORE_HALF, c.r0 + CORE_DEPTH + 0.3), c.at(-CORE_HALF, c.r0 + CORE_DEPTH + 0.3)];
+    poly_up(g, m.concrete, &gq.map(|p| v(p, c.base)));
+    g.block_ring(&gq, c.base - 1.0, c.base);
+    let mut y = c.base;
+    let mut k = 0;
+    for (count, y_end) in [(n1, y_terr), (n2, y_top)] {
+        let h = (y_end - y) / count as f32;
+        for _ in 0..count {
+            let dir = if k % 2 == 0 { 1.0 } else { -1.0 };
+            let (r_a, r_b) = if k % 2 == 0 { (c.r0, c.r0 + LANE) } else { (c.r0 + CORE_DEPTH - LANE, c.r0 + CORE_DEPTH) };
+            let steps = (h / 0.18).ceil() as i32;
+            let (rise, tread) = (h / steps as f32, run / steps as f32);
+            let t_start = -dir * (CORE_HALF - LAND);
+            for j in 0..steps {
+                let (t0, t1) = (t_start + dir * j as f32 * tread, t_start + dir * (j + 1) as f32 * tread);
+                let top = y + (j + 1) as f32 * rise;
+                let q = [c.at(t0, r_a), c.at(t1, r_a), c.at(t1, r_b), c.at(t0, r_b)];
+                poly_up(g, m.concrete, &q.map(|p| v(p, top)));
+                let (p0, p1) = (c.at(t0, r_a), c.at(t0, r_b));
+                let e = (p1 - p0).normalize();
+                g.quad(m.riser, v(p0, top - rise), Vec3::new(e.x, 0.0, e.y) * LANE, Vec3::Y * rise);
+                g.block_ring(&q, top - 0.5, top);
+            }
+            y += h;
+            k += 1;
+            // landing at the far end, across both lanes
+            let (t0, t1) = if dir > 0.0 { (CORE_HALF - LAND, CORE_HALF) } else { (-CORE_HALF, -CORE_HALF + LAND) };
+            let q = [c.at(t0, c.r0), c.at(t1, c.r0), c.at(t1, c.r0 + CORE_DEPTH), c.at(t0, c.r0 + CORE_DEPTH)];
+            poly_up(g, m.concrete, &q.map(|p| v(p, y)));
+            g.block_ring(&q, y - 0.3, y);
+            // a lamp on each landing
+            let ctr = c.at((t0 + t1) / 2.0, c.r0 + CORE_DEPTH / 2.0);
+            g.light(v(ctr, y + 2.4), 6.0, [1.2, 1.1, 0.95]);
+        }
+    }
+    // the bridge to the terrace's top row, under the upper deck
+    let (t0, t1) = if c.terrace_side < 0.0 { (-CORE_HALF, -CORE_HALF + LAND) } else { (CORE_HALF - LAND, CORE_HALF) };
+    let bq = [c.at(t0, c.t_back - 0.5), c.at(t1, c.t_back - 0.5), c.at(t1, c.r0), c.at(t0, c.r0)];
+    poly_up(g, m.concrete, &bq.map(|p| v(p, y_terr)));
+    g.block_ring(&bq, y_terr - 0.35, y_terr);
+    for tt in [t0, t1] {
+        g.tube(m.rail, v(c.at(tt, c.t_back), y_terr + 1.05), v(c.at(tt, c.r0), y_terr + 1.05), 0.03, 6);
+        g.block_ring(&[c.at(tt - 0.05, c.t_back), c.at(tt + 0.05, c.t_back), c.at(tt + 0.05, c.r0), c.at(tt - 0.05, c.r0)], y_terr, y_terr + 1.1);
+    }
+    // the top landing reaches over the parapet line onto the upper deck's back row
+    let (t0, t1) = if c.top_side < 0.0 { (-CORE_HALF, -CORE_HALF + LAND) } else { (CORE_HALF - LAND, CORE_HALF) };
+    // (the rows are chords between stations, so it laps well over the top row)
+    let tq = [c.at(t0, c.up_back - 0.6), c.at(t1, c.up_back - 0.6), c.at(t1, c.r0), c.at(t0, c.r0)];
+    poly_up(g, m.concrete, &tq.map(|p| v(p, y_top)));
+    g.block_ring(&tq, y_top - 0.35, y_top);
+    // the tower: sandstone walls round it with doorways (street, bridge, top), and a roof
+    let top = y_top + 3.2;
+    let corners = [c.at(-CORE_HALF - 0.3, c.r0 - 0.3), c.at(CORE_HALF + 0.3, c.r0 - 0.3), c.at(CORE_HALF + 0.3, c.r0 + CORE_DEPTH + 0.3), c.at(-CORE_HALF - 0.3, c.r0 + CORE_DEPTH + 0.3)];
+    let door_t = |side: f32| if side < 0.0 { (0.3, 0.3 + LAND) } else { (2.0 * CORE_HALF + 0.6 - 0.3 - LAND, 2.0 * CORE_HALF + 0.6 - 0.3) };
+    // inner wall (corners[0] -> corners[1]): doors to the bridge and the top landing
+    let y0 = c.base - 0.5;
+    walled(g, m.sandstone, corners[0], corners[1], y0, top, &[(door_t(c.terrace_side), (y_terr, y_terr + 2.5)), (door_t(c.top_side), (y_top, y_top + 2.5))]);
+    walled(g, m.sandstone, corners[1], corners[2], y0, top, &[]);
+    // outer wall (corners[2] -> corners[3], running -t): the street door at the start end (-t)
+    let len = 2.0 * CORE_HALF + 0.6;
+    walled(g, m.sandstone, corners[2], corners[3], y0, top, &[((len - 0.3 - LAND, len - 0.3), (y0, c.base + 2.6))]);
+    walled(g, m.sandstone, corners[3], corners[0], y0, top, &[]);
+    poly_up(g, m.concrete, &corners.map(|p| v(p, top)));
+}
+
+/// A straight 0.3 m wall from a to b (its outside to the right of a->b seen from above), with rectangular doorways
+/// given as (along-wall span, height span); drawn both sides, collidable except in the doorways.
+fn walled(g: &mut Geo, k: Key, a: Vec2, b: Vec2, y0: f32, y1: f32, doors: &[((f32, f32), (f32, f32))]) {
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let len = (b - a).length();
+    let e = (b - a) / len;
+    let out = Vec2::new(-e.y, e.x) * -1.0;
+    // cut the wall into vertical strips at the door edges, then each strip into solid spans
+    let mut cuts = vec![0.0, len];
+    for &((u0, u1), _) in doors {
+        cuts.push(u0.clamp(0.0, len));
+        cuts.push(u1.clamp(0.0, len));
+    }
+    cuts.sort_by(f32::total_cmp);
+    cuts.dedup_by(|x, y| (*x - *y).abs() < 1e-3);
+    for w in cuts.windows(2) {
+        let (u0, u1) = (w[0], w[1]);
+        let mid = (u0 + u1) / 2.0;
+        let mut spans = vec![(y0, y1)];
+        for &((d0, d1), (h0, h1)) in doors {
+            if mid > d0 && mid < d1 {
+                spans = spans.into_iter().flat_map(|(s0, s1)| {
+                    let mut out = vec![];
+                    if h0 > s0 { out.push((s0, h0.min(s1))); }
+                    if h1 < s1 { out.push((h1.max(s0), s1)); }
+                    out
+                }).collect();
+            }
+        }
+        let (p0, p1) = (a + e * u0, a + e * u1);
+        for (s0, s1) in spans {
+            if s1 - s0 < 0.05 {
+                continue;
+            }
+            g.poly(k, &[v(p0, s0), v(p1, s0), v(p1, s1), v(p0, s1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            g.poly(k, &[v(p1 + out * 0.3, s0), v(p0 + out * 0.3, s0), v(p0 + out * 0.3, s1), v(p1 + out * 0.3, s1)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            g.block_ring(&[p0, p1, p1 + out * 0.3, p0 + out * 0.3], s0, s1);
+        }
+    }
+}
+
+/// Splits a wall segment (fractions 0..1 along it) into runs that are or are not cut by `hole`, sampled finely.
+fn runs(hole: impl Fn(f32) -> bool) -> Vec<(f32, f32, bool)> {
+    const N: usize = 32;
+    let mut out: Vec<(f32, f32, bool)> = vec![];
+    for k in 0..N {
+        let (f0, f1) = (k as f32 / N as f32, (k + 1) as f32 / N as f32);
+        let h = hole((f0 + f1) / 2.0);
+        match out.last_mut() {
+            Some(l) if l.2 == h => l.1 = f1,
+            _ => out.push((f0, f1, h)),
+        }
+    }
+    out
 }

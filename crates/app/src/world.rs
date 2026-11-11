@@ -290,6 +290,46 @@ mod tests {
     }
 
     #[test]
+    fn ballpark_stair_cores_reach_the_terrace_and_upper_deck() {
+        let c = city();
+        let col = Collision::new(&c, None);
+        for (i, route) in crate::bespoke::petco::core_routes(&c).into_iter().enumerate() {
+            let mut p = route[0].0;
+            let mut y = c.terrain.at(p[0] as f64, p[1] as f64) as f32;
+            for (j, &(target, expect)) in route.iter().enumerate().skip(1) {
+                for _ in 0..600 {
+                    let (dx, dz) = (target[0] - p[0], target[1] - p[1]);
+                    let d = dx.hypot(dz);
+                    if d < 0.15 {
+                        break;
+                    }
+                    let s = d.min(0.1);
+                    let mut q = [p[0] + dx / d * s, p[1] + dz / d * s];
+                    col.push_out(&mut q, y + 0.45, 1.35, 0.35);
+                    p = q;
+                    let ground = c.terrain.at(p[0] as f64, p[1] as f64) as f32;
+                    // fall at most 0.5 m a tick (gravity), land on the highest floor within a step
+                    let floor = col.roof_under(p, y, 0.45).map_or(ground, |r| r.max(ground));
+                    y = floor.max(y - 0.5);
+                }
+                let miss = (target[0] - p[0]).hypot(target[1] - p[1]);
+                if miss >= 0.6 {
+                    for s in &col.solids {
+                        let q = [p[0] + (target[0] - p[0]) / miss * 0.4, p[1] + (target[1] - p[1]) / miss * 0.4];
+                        if point_in(&s.ring, q) && s.y1 > y + 0.45 && s.y0 < y + 1.8 {
+                            eprintln!("blocker y {:.2}..{:.2} ring {:?}", s.y0, s.y1, s.ring);
+                        }
+                    }
+                }
+                assert!(miss < 0.6, "core {i}: stuck before waypoint {j} at {p:?} y {y:.2} (target {target:?})");
+                if let Some(e) = expect {
+                    assert!((y - e).abs() < 0.3, "core {i}: at waypoint {j} floor {y:.2}, expected {e:.2}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn push_out_resolves_a_point_inside_a_footprint() {
         let c = city();
         let col = Collision::new(&c, None);
