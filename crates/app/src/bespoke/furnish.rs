@@ -85,6 +85,13 @@ impl<'a> Furnisher<'a> {
         Some(s)
     }
 
+    /// Like `put` (no collision), with a colour tint (for models drawn with a plain, tint-coloured material).
+    pub fn put_tint(&mut self, g: &mut Geo, id: &str, c: Vec2, y: f32, face: Vec2, tint: [f32; 3]) {
+        let [x, z] = g.world_xz(c);
+        let rot = g.heading(face) - 90.0 + FRONT;
+        self.out.push(Placement { asset: id.to_string(), part: ALL_PARTS, x, z, y: g.world_y(y), rot, scale: [1.0; 3], tint, lod: 0, indoor: self.indoor });
+    }
+
     /// Bounds (min, max) of an asset's parts in its own (unrecentred) coordinates.
     pub fn bounds(&self, id: &str) -> Option<([f32; 3], [f32; 3])> {
         let a = self.cat.get(id)?;

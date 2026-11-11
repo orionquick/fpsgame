@@ -143,7 +143,7 @@ fn build_all(lib: &Library, c: &City, focus: [f64; 4]) -> (Vec<Placement>, Stats
     let roof_tile = piece(lib, "Urban Modular Building Roof Set", 2, 0, false).or_else(|| piece(lib, "Modular Building Flat Roof Kit", 1, 0, false));
     let spans: std::collections::HashMap<&str, (f64, f64)> = c.buildings.iter().map(|b| (b.osm.as_str(), city::mesh::building_span(b, &c.terrain))).collect();
     for b in &c.buildings {
-        if crate::bespoke::OSM_IDS.contains(&b.osm.as_str()) || b.part_of.as_deref().is_some_and(|p| crate::bespoke::OSM_IDS.contains(&p)) {
+        if crate::bespoke::claimed(c, b) {
             continue;
         }
         let (y0, y1) = city::mesh::building_span(b, &c.terrain);

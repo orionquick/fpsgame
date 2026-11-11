@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 assets = { version = "0.1.0", path = "../assets" }
 base64 = "0.23.1"
+bytemuck = "1"
 city = { version = "0.1.0", path = "../city" }
 editor = { version = "0.1.0", path = "../editor" }
 glam = "0.30"

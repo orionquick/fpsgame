@@ -5,6 +5,7 @@ pub mod furnish;
 pub mod beerloft;
 pub mod geom;
 pub mod loft;
+pub mod petco;
 pub mod plan;
 
 use geom::{Geo, Hole, Key, Mat};
@@ -41,12 +42,52 @@ pub struct Building {
 }
 
 /// OSM ids built here instead of by the generic prefab assembler.
-pub const OSM_IDS: &[&str] = &[factory::OSM];
+pub const OSM_IDS: &[&str] = &[factory::OSM, petco::OSM, petco::WESTERN_METAL];
+
+/// Whether a city building is replaced by a bespoke one: listed ids, parts of them, and anything standing inside
+/// the ballpark's outline or (lidar-derived only) within 30 m of it: its concourse blocks, gates, plaza canopies.
+pub fn claimed(c: &city::City, b: &city::model::Building) -> bool {
+    if OSM_IDS.contains(&b.osm.as_str()) || b.part_of.as_deref().is_some_and(|p| OSM_IDS.contains(&p)) {
+        return true;
+    }
+    static RING: std::sync::OnceLock<Vec<[f64; 2]>> = std::sync::OnceLock::new();
+    let ring = RING.get_or_init(|| c.buildings.iter().find(|x| x.osm == petco::OSM).map(|x| x.outer.clone()).unwrap_or_default());
+    if ring.len() < 3 || b.outer.is_empty() {
+        return false;
+    }
+    let n = b.outer.len() as f64;
+    let p = [b.outer.iter().map(|q| q[0]).sum::<f64>() / n, b.outer.iter().map(|q| q[1]).sum::<f64>() / n];
+    let mut inside = false;
+    let mut j = ring.len() - 1;
+    for i in 0..ring.len() {
+        let (a, q) = (ring[i], ring[j]);
+        if (a[1] > p[1]) != (q[1] > p[1]) && p[0] < (q[0] - a[0]) * (p[1] - a[1]) / (q[1] - a[1]) + a[0] {
+            inside = !inside;
+        }
+        j = i;
+    }
+    if inside {
+        return true;
+    }
+    // lidar-derived blocks hugging the outline are its plaza structures and canopy, not buildings of their own
+    b.osm.starts_with("lidar/")
+        && ring.iter().zip(ring.iter().cycle().skip(1)).any(|(a, q)| {
+            let (dx, dz) = (q[0] - a[0], q[1] - a[1]);
+            let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / (dx * dx + dz * dz).max(1e-9)).clamp(0.0, 1.0);
+            let (cx, cz) = (a[0] + dx * t - p[0], a[1] + dz * t - p[1]);
+            cx * cx + cz * cz < 30.0 * 30.0
+        })
+}
 
 /// All bespoke buildings in the city (only the ones already matched to reference).
 pub fn all(c: &city::City) -> Vec<Building> {
     let cat = assets::Catalog::load(&crate::root().join("data/assets")).unwrap_or_default();
-    factory::build(c, &cat).into_iter().collect()
+    factory::build(c, &cat).into_iter().chain(petco::build(c, &cat)).collect()
+}
+
+/// World plan rings where hand-built ground replaces the city's (the ballpark's field).
+pub fn ground_holes() -> Vec<Vec<[f64; 2]>> {
+    vec![petco::field_ring()]
 }
 
 pub const PARTITION_T: f32 = 0.12;

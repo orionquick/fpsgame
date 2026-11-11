@@ -179,6 +179,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let scene = scene_arg(&args).map(|n| editor::Store::new(&scenes_dir(), &n).load(&editor::World::new(c.clone()))).transpose()?;
             play::run(c, scene, (arg(&args, "--x", -291.5), arg(&args, "--z", -250.0)), arg(&args, "--yaw", 0.0))?;
         }
+        Some("dsm") => {
+            // fps dsm X0 Z0 X1 Z1: lidar surface (highest return) over a rect at 0.5 m -> out/dsm.bin (f32 metres above
+            // home plate, row-major, NaN = no return) + out/dsm.json, a shaded height image, and the NAIP aerial crop
+            let f = |i: usize| args.get(i).and_then(|v| v.parse::<f64>().ok()).ok_or("usage: fps dsm X0 Z0 X1 Z1");
+            let rect = [f(1)?, f(2)?, f(3)?, f(4)?];
+            let c = city::City::load(&city_path())?;
+            let g = city::lidar::rasterize(&city::lidar::tile_paths(&root().join("data/raw/lidar")), &c.frame, rect)?;
+            let rel: Vec<f32> = g.top.iter().map(|v| v - c.origin_elev as f32).collect();
+            std::fs::write(out_dir().join("dsm.bin"), bytemuck::cast_slice(&rel))?;
+            std::fs::write(out_dir().join("dsm.json"), format!("{{\"rect\": {:?}, \"w\": {}, \"h\": {}, \"res\": {}}}", rect, g.w, g.h, city::lidar::RES))?;
+            // shaded relief coloured by height (0 m blue .. 45 m red)
+            let at = |i: usize, j: usize| rel[j.min(g.h - 1) * g.w + i.min(g.w - 1)];
+            let img = image::RgbImage::from_fn(g.w as u32, g.h as u32, |i, j| {
+                let (i, j) = (i as usize, j as usize);
+                let z = at(i, j);
+                if !z.is_finite() {
+                    return image::Rgb([0, 0, 0]);
+                }
+                let dx = at(i + 1, j) - at(i.saturating_sub(1), j);
+                let dz = at(i, j + 1) - at(i, j.saturating_sub(1));
+                let shade = (0.75 - 0.25 * (dx - dz)).clamp(0.25, 1.0);
+                let t = (z / 45.0).clamp(0.0, 1.0);
+                let col = [(255.0 * t), (255.0 * (1.0 - (2.0 * t - 1.0).abs())), (255.0 * (1.0 - t))];
+                image::Rgb(col.map(|c| (c * shade) as u8))
+            });
+            img.save(out_dir().join("dsm.png"))?;
+            // the aerial over the same rect
+            let naip = image::open(root().join("data/raw").join(city::import::naip_name(&c.import_box)))?.to_rgb8();
+            let ib = c.import_box;
+            let crop = image::RgbImage::from_fn(g.w as u32, g.h as u32, |i, j| {
+                let (x, z) = (rect[0] + (i as f64 + 0.5) * city::lidar::RES, rect[1] + (j as f64 + 0.5) * city::lidar::RES);
+                let (lat, lon) = c.frame.to_latlon(x, z);
+                // the image server keeps square-degree pixels: the requested width holds, the height is centred
+                let dpp = (ib.e - ib.w) / naip.width() as f64;
+                let top = (ib.n + ib.s) / 2.0 + dpp * naip.height() as f64 / 2.0;
+                let u = ((lon - ib.w) / dpp) as u32;
+                let v = ((top - lat) / dpp) as u32;
+                *naip.get_pixel(u.min(naip.width() - 1), v.min(naip.height() - 1))
+            });
+            crop.save(out_dir().join("naip_crop.png"))?;
+            std::fs::write(out_dir().join("naip_crop.rgb"), crop.as_raw())?;
+            println!("dsm {}x{} over {:?} -> out/dsm.bin, dsm.png, naip_crop.png", g.w, g.h, rect);
+        }
         Some("bench") => {
             // fps bench [--scene NAME] [--w 1440 --h 900 --frames 60]: headless frame timing at fixed views
             let c = city::City::load(&city_path())?;
@@ -193,6 +236,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             views.push((glam::Vec3::new(73.4, 5.04 + 1.65, -163.9), 80.0, 9.0));
             views.push((eye(-291.5, -250.0, 1.7), 0.0, 0.0));
             views.push((eye(40.0, -120.0, 60.0), 300.0, -20.0));
+            // the ballpark: an upper-deck seat behind home, and the batter's box
+            views.push((eye(-24.0, 50.0, 30.5), 18.0, -15.0));
+            views.push((eye(-2.1, 8.6, 1.7), 0.0, 2.0));
             play::bench(&c, scene.as_ref(), &views, arg(&args, "--w", 1440), arg(&args, "--h", 900), arg(&args, "--frames", 40));
         }
         Some("ops") => {

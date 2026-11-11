@@ -315,6 +315,26 @@ pub fn build(c: &City) -> Mesh {
 
 /// Static city geometry split by material slot, with world-space UVs. Textured slots carry a near-white tint.
 pub fn build_slots(c: &City) -> Vec<(Slot, Mesh)> {
+    build_slots_ex(c, &[])
+}
+
+fn in_ring(r: &[[f64; 2]], p: [f64; 2]) -> bool {
+    let mut c = false;
+    let mut j = r.len() - 1;
+    for i in 0..r.len() {
+        let (a, b) = (r[i], r[j]);
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+            c = !c;
+        }
+        j = i;
+    }
+    c
+}
+
+/// `build_slots` leaving out the ground, areas and paths inside `holes` (where a hand-built surface replaces them,
+/// e.g. a ballpark's field).
+pub fn build_slots_ex(c: &City, holes: &[Vec<[f64; 2]>]) -> Vec<(Slot, Mesh)> {
+    let inside = |p: [f64; 2]| holes.iter().any(|h| in_ring(h, p));
     let mut ms: std::collections::BTreeMap<Slot, Mesh> = Default::default();
     let white = [1.0f32, 1.0, 1.0];
     let ter = &c.terrain;
@@ -338,12 +358,21 @@ pub fn build_slots(c: &City) -> Vec<(Slot, Mesh)> {
     let row = gw as u32 + 1;
     for j in 0..gh as u32 {
         for i in 0..gw as u32 {
+            let ctr = [r[0] + (i as f64 + 0.5) * (r[2] - r[0]) / gw as f64, r[1] + (j as f64 + 0.5) * (r[3] - r[1]) / gh as f64];
+            if inside(ctr) {
+                continue;
+            }
             let a = i0 + j * row + i;
             m.idx.extend([a, a + row, a + 1, a + 1, a + row, a + row + 1]);
         }
     }
 
     for a in &c.areas {
+        let n = a.outer.len().max(1) as f64;
+        let ctr = [a.outer.iter().map(|p| p[0]).sum::<f64>() / n, a.outer.iter().map(|p| p[1]).sum::<f64>() / n];
+        if inside(ctr) {
+            continue;
+        }
         let (slot, col, lift) = match a.kind {
             AreaKind::Grass => (Slot::Grass, srgb(96, 132, 70), 0.04),
             AreaKind::Pitch => (Slot::Pitch, srgb(70, 128, 60), 0.05),
@@ -363,7 +392,18 @@ pub fn build_slots(c: &City) -> Vec<(Slot, Mesh)> {
             LineKind::Path => (Slot::Path, 0.06),
             LineKind::Rail => (Slot::Rail, 0.12),
         };
-        ribbon(ms.entry(slot).or_default(), &l.pts, l.width, lift, ter, white);
+        // split the line where it enters a hole
+        let mut run: Vec<[f64; 2]> = vec![];
+        for p in l.pts.iter().copied().chain(std::iter::once([f64::NAN, f64::NAN])) {
+            if p[0].is_nan() || inside(p) {
+                if run.len() >= 2 {
+                    ribbon(ms.entry(slot).or_default(), &run, l.width, lift, ter, white);
+                }
+                run.clear();
+            } else {
+                run.push(p);
+            }
+        }
     }
 
     for b in &c.buildings {

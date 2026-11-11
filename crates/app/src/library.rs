@@ -196,6 +196,12 @@ pub fn placement_matrix(a: &Asset, part: usize, p: &Placement) -> glam::Mat4 {
 }
 
 /// Groups placements into one instanced batch per asset part.
+/// Part index standing for a whole model merged into one mesh.
+const MERGED: usize = usize::MAX - 1;
+
+/// Models drawn with a plain white material, coloured entirely by each placement's tint.
+const PLAIN_PAINT: &[&str] = &["sf_6bbe4c85d2"];
+
 pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[Placement]) -> Vec<Batch> {
     let mut groups: HashMap<(String, usize), Vec<Instance>> = HashMap::new();
     let mut part_mat: HashMap<(String, usize), String> = HashMap::new();
@@ -213,6 +219,11 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
             continue;
         }
         let m = placement_matrix(&a, p.part, p);
+        if PLAIN_PAINT.iter().any(|q| p.asset.starts_with(q)) && p.part == ALL_PARTS {
+            // one material for the whole model: its parts merge into one mesh, one instance per placement
+            groups.entry((p.asset.clone(), MERGED)).or_default().push(Instance::new(m, p.tint, 1.0).with_params(indoor(p)));
+            continue;
+        }
         let parts: Vec<usize> = if p.part == ALL_PARTS { (0..a.parts.len()).collect() } else { vec![p.part.min(a.parts.len() - 1)] };
         for part in parts {
             // glass materials in models go to the transparent pass
@@ -244,7 +255,36 @@ pub fn prefab_batches(gpu: &Gpu, r: &Renderer, lib: &mut Library, placements: &[
     lib.preload(gpu, r, &ids);
     for ((id, part), inst) in groups {
         let Some(mesh) = lib.mesh(&id) else { continue };
-        let mat = lib.material(gpu, r, part_mat.get(&(id.clone(), part)).unwrap_or(&id));
+        if part == MERGED {
+            // concatenate every part, level by level (vertex offsets per part; the level error is the worst part's)
+            let mut verts: Vec<TexVertex> = vec![];
+            let mut lists: [Vec<u32>; 4] = Default::default();
+            let mut errs = [0.0f32; 4];
+            for (v, l, e) in mesh.iter() {
+                let base = verts.len() as u32;
+                verts.extend_from_slice(v);
+                for k in 0..4 {
+                    lists[k].extend(l[k].iter().map(|i| i + base));
+                    errs[k] = errs[k].max(e[k]);
+                }
+            }
+            // the far levels from the whole model at once (its small parts cannot shrink one by one)
+            let pos: Vec<[f32; 3]> = verts.iter().map(|v| v.pos).collect();
+            let (l2, e2) = assets::sloppy(&pos, &lists[0], 0.06, 0.04);
+            let (l3, e3) = assets::sloppy(&pos, &lists[0], 0.015, 0.1);
+            if l2.len() < lists[2].len() {
+                (lists[2], errs[2]) = (l2, e2.max(errs[1]));
+            }
+            if l3.len() < lists[3].len() {
+                (lists[3], errs[3]) = (l3, e3.max(errs[2]));
+            }
+            let title = lib.catalog.get(&id).map_or(id.clone(), |a| format!("{} [{id}, merged]", a.title));
+            let mat = lib.plain(gpu, r);
+            out.extend(Batch::with_lods(gpu, &verts, &[(&lists[0], 0.0), (&lists[1], errs[1]), (&lists[2], errs[2]), (&lists[3], errs[3])], &inst, mat).map(|b| b.labelled(&title)));
+            continue;
+        }
+        // models repainted by their placements' tint (e.g. stadium seats in the team colour) draw with a plain material
+        let mat = if PLAIN_PAINT.iter().any(|p| id.starts_with(p)) { lib.plain(gpu, r) } else { lib.material(gpu, r, part_mat.get(&(id.clone(), part)).unwrap_or(&id)) };
         if let Some((v, lists, errs)) = mesh.get(part) {
             let title = lib.catalog.get(&id).map_or(id.clone(), |a| format!("{} [{id}#{part}]", a.title));
             out.extend(Batch::with_lods(gpu, v, &[(&lists[0], 0.0), (&lists[1], errs[1]), (&lists[2], errs[2]), (&lists[3], errs[3])], &inst, mat).map(|b| b.labelled(&title)));

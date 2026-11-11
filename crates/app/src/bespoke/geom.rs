@@ -425,6 +425,18 @@ impl Geo {
         self.blocks.push(Block { ring: ring.to_vec(), y0: self.origin.y + y0, y1: self.origin.y + y1 });
     }
 
+    /// Collision prism over any local plan quad (or polygon) and a height span.
+    pub fn block_ring(&mut self, pts: &[Vec2], y0: f32, y1: f32) {
+        if y1 - y0 < 0.02 || pts.len() < 3 {
+            return;
+        }
+        let ring = pts.iter().map(|p| {
+            let w = self.world(Vec3::new(p.x, 0.0, p.y));
+            [w.x, w.z]
+        });
+        self.blocks.push(Block { ring: ring.collect(), y0: self.origin.y + y0, y1: self.origin.y + y1 });
+    }
+
     /// Collision for an axis-aligned local box.
     pub fn block_aabb(&mut self, a: Vec3, b: Vec3) {
         let (mn, mx) = (a.min(b), a.max(b));

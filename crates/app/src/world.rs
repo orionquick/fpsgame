@@ -13,7 +13,7 @@ impl Base {
     /// building volumes, so leave those out (the volumes stay as collision only).
     pub fn new(c: &City, prefabs: bool) -> Self {
         let (mut verts, mut idx, mut slots) = (vec![], vec![], vec![]);
-        for (slot, m) in city::mesh::build_slots(c) {
+        for (slot, m) in city::mesh::build_slots_ex(c, &crate::bespoke::ground_holes()) {
             if prefabs && matches!(slot, city::mesh::Slot::Tree | city::mesh::Slot::Wall(_) | city::mesh::Slot::Roof) {
                 continue;
             }
@@ -148,7 +148,7 @@ impl Collision {
             solids.push(Solid { ring, min, max, y0: g - 0.05, y1: g + o.size[1] as f32 });
         }
         for b in &c.buildings {
-            if crate::bespoke::OSM_IDS.contains(&b.osm.as_str()) {
+            if crate::bespoke::claimed(c, b) {
                 continue;
             }
             let (y0, y1) = city::mesh::building_span(b, &c.terrain);

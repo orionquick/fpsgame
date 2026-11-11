@@ -191,6 +191,22 @@ fn read_lod_cache(b: &[u8], parts: &[MeshPart]) -> Option<Vec<[(Vec<u32>, f32); 
     Some(out)
 }
 
+/// Sloppy (clustering) simplification of any indexed mesh given its positions: about `ratio` of the triangles and
+/// the error in model units (floored at `floor` of the mesh size). For merged multi-part models whose parts are
+/// too small to simplify one by one.
+pub fn sloppy(pos: &[[f32; 3]], idx: &[u32], ratio: f32, floor: f32) -> (Vec<u32>, f32) {
+    if idx.len() < 300 {
+        return (idx.to_vec(), 0.0);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(pos.as_ptr() as *const u8, std::mem::size_of_val(pos)) };
+    let Ok(adapter) = meshopt::VertexDataAdapter::new(bytes, 12, 0) else { return (idx.to_vec(), 0.0) };
+    let scale = meshopt::simplify_scale(&adapter);
+    let target = ((idx.len() as f32 * ratio) as usize / 3 * 3).max(3);
+    let mut e = 0.0f32;
+    let o = meshopt::simplify_sloppy(idx, &adapter, target, 1.0, Some(&mut e));
+    if o.len() < 3 { (idx.to_vec(), 0.0) } else { (o, e.max(floor) * scale) }
+}
+
 /// One coarser level at about `ratio` of the triangles, with its error in model units. Topology simplification
 /// keeps UV seams and thin walls; sloppy clustering (for meshes topology can't reduce, e.g. unwelded hard-edged
 /// modules) does not, and its position error says nothing about smeared textures on flat pieces, so its error is
@@ -471,6 +487,7 @@ const SCALE: &[(&str, f32)] = &[
     ("sf_94181c1253", 3.8),  // Turner Chair: ~0.83 m wide lounge chair
     ("sf_ce05a5d98b", 1.25), // Television (Wall-mounted): ~60 in. as in the bar
     ("sf_260ff7a37a", 0.22), // Office Props Pack (crazyshroomz): everything ~4.5x real size
+    ("sf_6bbe4c85d2", 0.0254), // Low poly stadium/arena seats (inches)
     ("sf_18abda12d3", 0.62), // Office Desk_7 industrial cubicle: 0.73 m desk, 1.64 m panels, 2.47 x 2.41 m
     ("sf_8caa3c4cec", 1.25), // Industrial wooden table: 2.25 x 1.12 m, 0.75 m high
     ("sf_aa7b0e0099", 0.5),  // 1920s gooseneck desk lamps: ~0.3-0.45 m
@@ -546,7 +563,7 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
     let tags: Vec<String> = meta["tags"].as_array().map_or(vec![], |a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect());
     if let Some(g) = names.iter().find(|n| n.ends_with(".gltf")).cloned() {
         let third_party = group == "polyhaven" || group == "sketchfab";
-        let pack = group == "sketchfab" && { let t = title.to_lowercase(); ["pack", "assets", "props", "collection", "kit", "lounge set", "sofa set", "lamps"].iter().any(|k| t.contains(k)) };
+        let pack = group == "sketchfab" && { let t = title.to_lowercase(); ["pack", "assets", "props", "collection", "kit", "lounge set", "sofa set", "lamps", "arena seats"].iter().any(|k| t.contains(k)) };
         let (mut parts, mut infos, gmats, part_obj, objs) = extract_model(&mut zip, &g, !third_party, pack)?;
         if let Some(&(_, k)) = SCALE.iter().find(|(p, _)| id.starts_with(p)) {
             rescale(&mut parts, &mut infos, k);
