@@ -514,7 +514,7 @@ pub fn bench(city: &City, editor_scene: Option<&editor::Scene>, views: &[(Vec3, 
                 println!("   {name}: {inst} instances, {:.2}M tris; heaviest {}", tris as f64 / 1e6, top.join(", "));
             }
         }
-        if let Ok(tag) = std::env::var("FPS_BENCH_PNG") {
+        let grab = || {
             let row = (w * 4).div_ceil(256) * 256;
             let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("png"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
             let mut enc = gpu.device.create_command_encoder(&Default::default());
@@ -531,7 +531,30 @@ pub fn bench(city: &City, editor_scene: Option<&editor::Scene>, views: &[(Vec3, 
             for y in 0..h {
                 img.as_mut()[(y * w * 4) as usize..((y + 1) * w * 4) as usize].copy_from_slice(&data[(y * row) as usize..(y * row + w * 4) as usize]);
             }
-            let _ = img.save(crate::root().join(format!("out/bench_{tag}_{vi}.png")));
+            img
+        };
+        if let Ok(tag) = std::env::var("FPS_BENCH_PNG") {
+            let _ = grab().save(crate::root().join(format!("out/bench_{tag}_{vi}.png")));
+        }
+        // still-camera flicker (Ruinbound's metric): per-pixel temporal sigma of luma over 32 frames, 8-bit levels
+        if std::env::var("FPS_BENCH_FLICKER").is_ok() {
+            let n = 32;
+            let (mut s1, mut s2) = (vec![0f32; (w * h) as usize], vec![0f32; (w * h) as usize]);
+            for _ in 0..n {
+                frame();
+                let img = grab();
+                for (k, p) in img.pixels().enumerate() {
+                    let l = 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
+                    s1[k] += l;
+                    s2[k] += l * l;
+                }
+            }
+            let sig: Vec<f32> = s1.iter().zip(&s2).map(|(a, b)| (b / n as f32 - (a / n as f32).powi(2)).max(0.0).sqrt()).collect();
+            let mean = sig.iter().sum::<f32>() / sig.len() as f32;
+            let over = sig.iter().filter(|&&x| x > 3.0).count() as f32 / sig.len() as f32 * 100.0;
+            println!("   flicker: mean sigma {mean:.2} levels, {over:.1}% of pixels over 3 levels");
+            let heat = image::GrayImage::from_fn(w, h, |x, y| image::Luma([(sig[(y * w + x) as usize] * 25.0).min(255.0) as u8]));
+            let _ = heat.save(crate::root().join(format!("out/flicker_{vi}.png")));
         }
         println!("view ({:.0},{:.1},{:.0}) yaw {:.0}{}: {:.2} ms/frame ({:.0} fps), worst {:.1} ms", eye.x, eye.y, eye.z, yaw, if inside.is_some() { " [indoor]" } else { "" }, ms, 1000.0 / ms, worst * 1000.0);
     }

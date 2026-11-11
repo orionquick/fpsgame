@@ -58,9 +58,9 @@ fn fs_ao(i: FsIn) -> @location(0) vec4f {
     let dist = length(to_eye);
     let radius = mix(0.55, 2.5, smoothstep(15.0, 120.0, dist));
     // tangent frame rotated per pixel
-    // with temporal accumulation (g.white.w > 0): fewer samples, rotated every frame (the history averages them)
+    // with temporal super resolution (g.white.w > 0): fewer samples (fixed per pixel)
     let taa = g.white.w > 0.0;
-    let a = ign(i.pos.xy + g.white.w * 5.588) * 6.2831853;
+    let a = ign(i.pos.xy) * 6.2831853;
     let up = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(n.y) > 0.9);
     let t0 = normalize(cross(up, n));
     let b0 = cross(n, t0);
@@ -76,7 +76,7 @@ fn fs_ao(i: FsIn) -> @location(0) vec4f {
         let h = (fk + 0.5) / f32(count);
         let r = sqrt(1.0 - h * h);
         let dir = t * (cos(ang) * r) + b * (sin(ang) * r) + n * h;
-        let scale = mix(0.15, 1.0, fract(fk * 0.618 + ign(i.pos.yx + g.white.w * 3.17)));
+        let scale = mix(0.15, 1.0, fract(fk * 0.618 + ign(i.pos.yx)));
         let sp = p + dir * radius * scale + n * 0.02;
         let clip = g.view_proj * vec4f(sp, 1.0);
         if (clip.w <= 0.0) {

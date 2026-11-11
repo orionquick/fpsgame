@@ -948,8 +948,10 @@ impl Renderer {
             },
             white: {
                 let w = self.white.get();
-                // w: temporal frame number + 1 (0 without TAA): AO and reflections then take fewer, rotating samples
-                [w[0], w[1], w[2], t.taa.as_ref().map_or(0.0, |a| (a.frame.get() % 64 + 1) as f32)]
+                // w: 1 with temporal super resolution (0 without): AO, GI, shadows and reflections take fewer samples on
+                // fixed patterns (patterns that change every frame read as flicker: TSR's clip box rejects the history
+                // over whole flat regions)
+                [w[0], w[1], w[2], t.taa.as_ref().map_or(0.0, |_| 1.0)]
             },
         };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&gl));
@@ -1157,8 +1159,9 @@ impl Renderer {
                 rsz: [t.w as f32, t.h as f32, 1.0 / t.w as f32, 1.0 / t.h as f32],
                 osz: [a.out_w as f32, a.out_h as f32, 1.0 / a.out_w as f32, 1.0 / a.out_h as f32],
                 jit: [jit_px[0], jit_px[1], a.prev.get().is_none() as u32 as f32, 0.0],
-                // Ruinbound's tuning: clip 1.5 sigma still / 0.75 moving (full at 2 render px/frame), history 12 still / 4 moving
-                k: [k("FPS_TSR_GAMMA", 1.5), k("FPS_TSR_GMOVE", 0.75), k("FPS_TSR_GSPEED", 2.0), k("FPS_TSR_ACC", 12.0)],
+                // Ruinbound's tuning (clip 1.5 sigma still / 0.75 moving at 2 render px/frame, history 4 moving), with a
+                // longer still history (24: a static world, no particles; measured half the still flicker of 12)
+                k: [k("FPS_TSR_GAMMA", 1.5), k("FPS_TSR_GMOVE", 0.75), k("FPS_TSR_GSPEED", 2.0), k("FPS_TSR_ACC", 24.0)],
                 k2: [k("FPS_TSR_ACCMOVE", 4.0), k("FPS_TSR_KN", 2.5), k("FPS_TSR_KW", 2.0), k("FPS_TSR_SHARP", 0.27 * 1.5)],
             };
             gpu.queue.write_buffer(&a.uniform, 0, bytemuck::bytes_of(&u));
