@@ -317,6 +317,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         }
         stair_core(&mut g, &m, c);
     }
+    home_plaza(&mut g, &mut f, &m, c, &st);
     outfield(&mut g, &mut f, &m);
     backstop_net(&mut g, &m, &st);
     for b in [95.0f32, 265.0] {
@@ -1537,8 +1538,7 @@ fn home_gate(b: f32) -> bool {
     (b - 180.0).abs() < 32.0
 }
 
-/// The home plate gate's street face: lettering on the white top band, and a tall picket fence across the plaza
-/// with three openings. `line` is the outer face of the top band (point, outward normal) station by station.
+/// The home plate gate's street face: lettering on the white top band. `line` is the outer face of the top band (point, outward normal) station by station.
 fn home_gate_front(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)]) {
     if line.len() < 2 {
         return;
@@ -1616,40 +1616,6 @@ fn home_gate_front(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)]) {
                 g.poly(m.letters, &[v(ra, yb), v(rb, yb), v(rb, yb + px), v(ra, yb + px)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             }
         }
-    }
-    // picket fence 9 m out from the facade: steel pickets every 0.16 m, rails, posts every 3 m, three openings
-    let (h, off) = (3.1, 9.0);
-    let open = |u: f32| {
-        let (p, n, _) = place(u);
-        let q = p + n * off;
-        let b = q.x.atan2(-q.y).to_degrees().rem_euclid(360.0);
-        [172.0f32, 157.0, 203.0].iter().any(|&c| (b - c).abs() < 2.4) || point_in(&grow(&link_ring(), 0.6), q)
-    };
-    let mut u = 0.3;
-    while u < total - 0.3 {
-        let (p, n, _) = place(u);
-        let q = p + n * off;
-        if !open(u) {
-            g.tube(m.rail, v(q, 0.0), v(q, h), 0.018, 4);
-        }
-        u += 0.16;
-    }
-    let steps = (total / 1.5).ceil() as i32;
-    for k in 0..steps {
-        let (ua, ub) = (k as f32 * total / steps as f32, (k + 1) as f32 * total / steps as f32);
-        if open((ua + ub) / 2.0) {
-            continue;
-        }
-        let (pa, na, _) = place(ua);
-        let (pb, nb, _) = place(ub);
-        let (qa, qb) = (pa + na * off, pb + nb * off);
-        for y in [0.15, h - 0.25, h - 0.05] {
-            g.tube(m.rail, v(qa, y), v(qb, y), 0.03, 4);
-        }
-        g.tube(m.rail, v(qa, 0.0), v(qa, h + 0.15), 0.06, 6);
-        let e = (qb - qa).normalize_or_zero();
-        let nn = Vec2::new(-e.y, e.x) * 0.08;
-        g.block_ring(&[qa - nn, qb - nn, qb + nn, qa + nn], 0.0, h);
     }
 }
 
@@ -1735,4 +1701,338 @@ fn home_towers(g: &mut Geo, m: &Mats) {
         }
     }
     poly_up(g, mesh, &tr.iter().map(|&p| v(p, y1)).collect::<Vec<_>>());
+}
+
+// ---------------------------------------------------------------- home plate plaza
+
+/// Palm planter rows across the home plate plaza, world (x, z) of their palms (the LiDAR trees the street dressing
+/// plants), west to east. Each row is a long raised bed; the gate fence steps from row to row.
+const PLAZA_ROWS: [&[(f32, f32)]; 6] = [
+    &[(11.1, 108.8), (11.6, 116.3), (10.6, 125.3), (11.6, 131.3)],
+    &[(17.1, 101.3), (18.6, 107.8), (21.6, 113.3), (22.6, 120.8)],
+    &[(25.6, 94.3), (27.1, 100.3), (28.1, 106.3), (31.6, 111.3)],
+    &[(31.6, 86.3), (33.6, 92.3), (38.1, 96.3), (38.6, 102.8)],
+    &[(38.6, 79.8), (42.6, 84.3), (43.1, 90.3), (45.6, 97.3)],
+    &[(45.6, 78.8), (50.6, 83.8), (51.6, 90.3)],
+];
+
+/// The fence's runs between rows (satellite): (row it leaves, z there, z where it reaches the next row) - it runs
+/// east across the plaza, then north along the next row's bed to the next run.
+const FENCE_RUNS: [(usize, f32, f32); 5] = [(0, 115.5, 113.5), (1, 109.0, 106.5), (2, 100.5, 98.0), (3, 91.5, 89.0), (4, 84.0, 82.5)];
+
+/// World plan of the home plate plaza where the hand-laid paving replaces the city's ground, paths and lawns: from
+/// under the bowl's back out to 10.5 m from the street's centreline, east of the tower's garden.
+pub fn plaza_ring() -> Vec<[f64; 2]> {
+    vec![[-1.0, 64.0], [60.0, 48.0], [95.0, 52.0], [93.7, 58.5], [29.7, 120.5], [12.0, 136.2], [2.0, 146.0], [-14.0, 137.0], [-20.0, 126.0], [-16.0, 118.0], [-3.0, 104.0]]
+}
+
+/// A planter row as a line x = a + b z (world), fitted through its palms, with its z extent.
+fn plaza_row(i: usize) -> (f32, f32, f32, f32) {
+    let r = PLAZA_ROWS[i];
+    let n = r.len() as f32;
+    let (mz, mx) = (r.iter().map(|p| p.1).sum::<f32>() / n, r.iter().map(|p| p.0).sum::<f32>() / n);
+    let (szz, szx) = r.iter().fold((0.0, 0.0), |(a, b), p| (a + (p.1 - mz) * (p.1 - mz), b + (p.1 - mz) * (p.0 - mx)));
+    let b = szx / szz.max(1e-3);
+    let z0 = r.iter().map(|p| p.1).fold(f32::MAX, f32::min);
+    let z1 = r.iter().map(|p| p.1).fold(f32::MIN, f32::max);
+    (mx - b * mz, b, z0 - 3.0, z1 + 3.0)
+}
+
+/// The home plate plaza in front of the gate: pale broom-finished concrete slabs from the bowl to the street, a
+/// grass strip at the curb, black bollards, the long raised palm beds, and the tall galvanised gate fence that
+/// steps across the plaza from bed to bed with rolling gates (open on game days).
+fn home_plaza(g: &mut Geo, f: &mut Furnisher, m: &Mats, city: &city::City, st: &[Station]) {
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let w = |x: f32, z: f32| Vec2::new(x, z) - HOME;
+    let terr = |p: Vec2| -> f32 {
+        let q = p + HOME;
+        city.terrain.at(q.x as f64, q.y as f64) as f32
+    };
+    // paving height: the terrain smoothed over ~8 m, never below the terrain itself
+    let ground = |p: Vec2| -> f32 {
+        let mut s = 0.0;
+        for i in -2..=2 {
+            for j in -2..=2 {
+                s += terr(p + Vec2::new(i as f32 * 2.0, j as f32 * 2.0));
+            }
+        }
+        // the terrain mesh is a 2 m grid with steps: clear its highest nearby point
+        let mut hi = f32::MIN;
+        for i in -1..=1 {
+            for j in -1..=1 {
+                hi = hi.max(terr(p + Vec2::new(i as f32 * 1.6, j as f32 * 1.6)));
+            }
+        }
+        (s / 25.0).max(hi) + 0.04
+    };
+    let paving = Key::new(Mat::Surface("vlzlajnfw"), [0.64, 0.62, 0.58]).tile(3.0).rough(0.8);
+    let joint = Key::new(Mat::Plain(200), [0.16, 0.155, 0.15]);
+    let curb = Key::new(Mat::Surface("sg0tbcya"), [0.88, 0.85, 0.8]).tile(2.0).wear(wear::STONE);
+    let grass = Key::new(Mat::Surface("sfklehwa"), [0.55, 0.78, 0.42]).tile(2.0).rough(0.85);
+    let gravel = Key::new(Mat::Surface("ugzmbcrn"), [0.62, 0.5, 0.4]).tile(2.0);
+    let galv = Key::new(Mat::Plain(150), [0.2, 0.21, 0.21]);
+    let black = Key::new(Mat::Plain(120), [0.03, 0.03, 0.03]).wear(wear::METAL);
+
+    // the street along the plaza's south-east side (centreline, 16 m wide)
+    let road: Vec<Vec2> = city.lines.iter().filter(|l| matches!(l.kind, city::model::LineKind::Road)).flat_map(|l| {
+        l.pts.windows(2).map(|s| (Vec2::new(s[0][0] as f32, s[0][1] as f32) - HOME, Vec2::new(s[1][0] as f32, s[1][1] as f32) - HOME, l.width as f32 * 0.5)).collect::<Vec<_>>()
+    }).filter(|(a, b, _)| (a + HOME).distance(Vec2::new(30.0, 110.0)) < 120.0 || (b + HOME).distance(Vec2::new(30.0, 110.0)) < 120.0).flat_map(|(a, b, h)| [a, b, Vec2::new(h, 0.0)]).collect();
+    let road_d = |p: Vec2| -> (f32, f32) {
+        // (distance from the nearest centreline, that road's half width)
+        let mut best = (f32::MAX, 8.0);
+        for c in road.chunks(3) {
+            let (a, b, h) = (c[0], c[1], c[2].x);
+            let e = b - a;
+            let t = ((p - a).dot(e) / e.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            let d = (p - (a + e * t)).length();
+            if d < best.0 {
+                best = (d, h);
+            }
+        }
+        best
+    };
+    let others: Vec<Vec<Vec2>> = city.buildings.iter().filter(|b| b.osm != OSM && !b.osm.starts_with(OSM)).map(|b| b.outer.iter().map(|p| Vec2::new(p[0] as f32, p[1] as f32) - HOME).collect()).collect();
+    let lawns: Vec<Vec<Vec2>> = city.areas.iter().filter(|a| matches!(a.kind, city::model::AreaKind::Grass)).map(|a| a.outer.iter().map(|p| Vec2::new(p[0] as f32, p[1] as f32) - HOME).collect()).collect();
+    // outside the bowl's street-level face: the arcade wall at the home gate, the concourse blocks elsewhere
+    let outside_bowl = |p: Vec2| -> bool {
+        let b = p.x.atan2(-p.y).to_degrees().rem_euclid(360.0);
+        let s = st.iter().min_by(|a, c| (a.bearing - b).abs().total_cmp(&(c.bearing - b).abs())).unwrap();
+        let up_back = s.upper + 0.3 + UP_ROWS * UP_PITCH;
+        let face = if home_gate(s.bearing) { up_back - 4.0 } else { up_back + 4.2 };
+        (p - s.p).dot(s.n) > face + 0.05
+    };
+    let link = link_ring();
+    let tower = tower_ring();
+    let beds: Vec<Vec<Vec2>> = (0..PLAZA_ROWS.len()).map(|i| {
+        let (a, b, z0, z1) = plaza_row(i);
+        let hw = if i == 5 { 1.8 } else { 0.9 };
+        vec![w(a + b * z0 - hw, z0), w(a + b * z0 + hw, z0), w(a + b * z1 + hw, z1), w(a + b * z1 - hw, z1)]
+    }).collect();
+
+    // --- paving: 3 m slabs square to the street, each showing a different part of the scan; grass at the curb
+    let ax = Vec2::new(0.714, -0.700).normalize();
+    let az = Vec2::new(-ax.y, ax.x);
+    let o = w(30.0, 110.0);
+    let (cell, slab) = (1.5f32, 2i32);
+    for i in -50i32..50 {
+        for j in -40i32..40 {
+            let at = |di: f32, dj: f32| o + ax * ((i as f32 + di) * cell) + az * ((j as f32 + dj) * cell);
+            let c = at(0.5, 0.5);
+            let cw = c + HOME;
+            if cw.x < -24.0 || cw.x > 78.0 || cw.y < 56.0 || cw.y > 152.0 {
+                continue;
+            }
+            let (rd, rh) = road_d(c);
+            if rd < rh + 0.35 || !outside_bowl(c) || point_in(&link, c) || point_in(&tower, c) || beds.iter().any(|r| point_in(r, c)) {
+                continue;
+            }
+            if others.iter().any(|r| point_in(r, c)) {
+                continue;
+            }
+            // lawns inside the plaza (the tower's garden) stay grass; the plaza's own strip beds are the palm beds
+            let lawn = lawns.iter().any(|r| point_in(r, c));
+            let pts = [at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)].map(|p| v(p, ground(p)));
+            let (si, sj) = (i.div_euclid(slab), j.div_euclid(slab));
+            let h = (si.wrapping_mul(73_856_093) ^ sj.wrapping_mul(19_349_663)) as u32;
+            let uv = [(h % 7) as f32 * 3.0 + 0.0, ((h >> 4) % 5) as f32 * 3.0];
+            let (k, uv) = if rd < rh + 2.3 || lawn { (grass, [0.0, 0.0]) } else { (paving, uv) };
+            // joints on the slab grid: the texture's joint lies on its tile edge, so slabs start on tile edges
+            g.poly_uv(k, &[pts[0], pts[3], pts[2], pts[1]], Vec3::new(ax.x, 0.0, ax.y), Vec3::new(-az.x, 0.0, -az.y), uv);
+            // saw-cut joints along the slab edges
+            if k == paving {
+                let jw = 0.018;
+                if i.rem_euclid(slab) == 0 {
+                    let (p0, p1) = (at(0.0, 0.0), at(0.0, 1.0));
+                    let (y0, y1) = (ground(p0) + 0.004, ground(p1) + 0.004);
+                    g.poly(joint, &[v(p0 - ax * jw, y0), v(p0 + ax * jw, y0), v(p1 + ax * jw, y1), v(p1 - ax * jw, y1)].iter().rev().copied().collect::<Vec<_>>(), Vec3::new(ax.x, 0.0, ax.y), Vec3::new(-az.x, 0.0, -az.y));
+                }
+                if j.rem_euclid(slab) == 0 {
+                    let (p0, p1) = (at(0.0, 0.0), at(1.0, 0.0));
+                    let (y0, y1) = (ground(p0) + 0.004, ground(p1) + 0.004);
+                    g.poly(joint, &[v(p0 - az * jw, y0), v(p1 - az * jw, y1), v(p1 + az * jw, y1), v(p0 + az * jw, y0)].iter().rev().copied().collect::<Vec<_>>(), Vec3::new(ax.x, 0.0, ax.y), Vec3::new(-az.x, 0.0, -az.y));
+                }
+            }
+        }
+    }
+
+    // --- bollards along the outer walk, 3.5 m in from the grass
+    let mut s = 0.0f32;
+    for c in road.chunks(3) {
+        let (a, b, h) = (c[0], c[1], c[2].x);
+        let e = (b - a).normalize_or_zero();
+        let mut nrm = Vec2::new(-e.y, e.x);
+        if nrm.dot(w(20.0, 100.0) - a) < 0.0 {
+            nrm = -nrm;
+        }
+        let len = (b - a).length();
+        while s < len {
+            let p = a + e * s + nrm * (h + 5.8);
+            let pw = p + HOME;
+            if pw.x > 2.0 && pw.x < 64.0 && pw.y > 70.0 && pw.y < 140.0 && outside_bowl(p) && road_d(p).0 > h + 5.0 {
+                let y = ground(p);
+                g.tube(black, v(p, y), v(p, y + 0.95), 0.1, 8);
+                g.tube(black, v(p, y + 0.95), v(p, y + 1.0), 0.07, 8);
+                g.block_box(Vec3::new(p.x - 0.1, 0.0, p.y - 0.1), Vec3::X * 0.2, Vec3::Z * 0.2, y, y + 1.0);
+            }
+            s += 2.4;
+        }
+        s -= len;
+    }
+
+    // --- palm beds: a raised concrete curb round decomposed granite, planted
+    let plants: [(&str, f32); 5] = [("sf_cab98668fa", 0.85), ("sf_10ec8061cc", 1.3), ("wfypfa3ha", 0.6), ("shqke", 1.1), ("sf_8dd8f987f9", 0.42)];
+    for (i, r) in beds.iter().enumerate() {
+        let (_, _, z0, z1) = plaza_row(i);
+        let y = r.iter().map(|&p| terr(p)).fold(f32::MIN, f32::max) + 0.03;
+        let top = y + 0.42;
+        for k in 0..4 {
+            let (a, b) = (r[k], r[(k + 1) % 4]);
+            let e = (b - a).normalize();
+            let out = Vec2::new(e.y, -e.x);
+            let out = if out.dot(a - (r[0] + r[2]) / 2.0) < 0.0 { -out } else { out };
+            g.poly(curb, &[v(a, y - 0.3), v(b, y - 0.3), v(b, top), v(a, top)], Vec3::new(e.x, 0.0, e.y) * if out.dot(Vec2::new(-e.y, e.x)) > 0.0 { -1.0 } else { 1.0 }, Vec3::Y);
+            poly_up(g, curb, &[v(a, top), v(b, top), v(b - out * 0.18, top), v(a - out * 0.18, top)]);
+        }
+        poly_up(g, gravel, &r.iter().map(|&p| v(p, top - 0.1)).collect::<Vec<_>>());
+        g.block_ring(r, y - 0.3, top);
+        // plants down the bed, clear of the palms; flowers at the outer (south) end
+        let (a, b, _, _) = plaza_row(i);
+        let len = z1 - z0;
+        let n = (len / 0.95) as i32;
+        for k in 0..n {
+            let z = z0 + 0.5 + k as f32 * len / n as f32;
+            if PLAZA_ROWS[i].iter().any(|p| (p.1 - z).abs() < 0.8) {
+                continue;
+            }
+            let side = if k % 2 == 0 { -0.35 } else { 0.35 };
+            let p = w(a + b * z + side, z);
+            let south = z > z1 - len * 0.3;
+            let pick = if south { 4 } else { (f.rand() * 4.0) as usize % 4 };
+            let (id, hgt) = plants[pick];
+            if let Some((mn, mx)) = f.bounds(id) {
+                let sc = hgt * (0.8 + 0.4 * f.rand()) / (mx[1] - mn[1]).max(1e-4);
+                let ang = f.rand() * std::f32::consts::TAU;
+                f.put_scaled(g, id, p, top - 0.1, Vec2::new(ang.cos(), ang.sin()), sc, false);
+            }
+        }
+    }
+
+    // --- the gate fence: west run along the tower's south side, then runs east and legs north up each bed
+    let row_at = |i: usize, z: f32| -> Vec2 {
+        let (a, b, _, _) = plaza_row(i);
+        w(a + b * z + 0.5, z)
+    };
+    let mut path: Vec<(Vec2, Vec2, Option<(f32, f32)>)> = vec![];
+    path.push((w(-11.0, 118.4), w(-11.0, 124.0), None));
+    path.push((w(-11.0, 124.0), row_at(0, 124.0), Some((0.45, 0.62))));
+    let mut prev = row_at(0, 124.0);
+    for (k, &(ri, za, zb)) in FENCE_RUNS.iter().enumerate() {
+        let (pa, pb) = (row_at(ri, za), row_at(ri + 1, zb));
+        path.push((prev, pa, None));
+        let open = if k == 4 { None } else { Some((0.35, 0.35 + 3.8 / (pb - pa).length())) };
+        path.push((pa, pb, open));
+        prev = pb;
+    }
+    path.push((prev, row_at(5, 77.5), None));
+    for (a, b, open) in path {
+        fence_run(g, galv, curb, a, b, open, &ground);
+    }
+}
+
+/// One straight run of the gate fence from `a` to `b`: 3 m flat-bar pickets at 115 mm, square posts, two rails, on
+/// a low concrete curb. `open` (fractions along the run) is a rolled-back gate: the gap, and its leaf parked
+/// behind the fence on the plaza side.
+fn fence_run(g: &mut Geo, galv: Key, curb: Key, a: Vec2, b: Vec2, open: Option<(f32, f32)>, ground: &dyn Fn(Vec2) -> f32) {
+    // the runs across the plaza are all rolling-gate leaves (kick plates); the legs along the beds are fixed fence
+    let leaves = open.is_some();
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let len = (b - a).length();
+    if len < 0.2 {
+        return;
+    }
+    let e = (b - a) / len;
+    let nrm = Vec2::new(-e.y, e.x);
+    let h = 3.0;
+    let pieces: Vec<(f32, f32, bool)> = match open {
+        Some((o0, o1)) => vec![(0.0, o0, false), (o0, o1.min(1.0), true), (o1.min(1.0), 1.0, false)],
+        None => vec![(0.0, 1.0, false)],
+    };
+    let panel = |g: &mut Geo, p: Vec2, q: Vec2, frame: bool| {
+        let l = (q - p).length();
+        if l < 0.05 {
+            return;
+        }
+        let e = (q - p) / l;
+        let n = Vec2::new(-e.y, e.x);
+        let y0 = ground(p).min(ground(q));
+        // curb
+        let c = 0.13;
+        g.poly(curb, &[v(p - n * c, y0 - 0.2), v(q - n * c, y0 - 0.2), v(q - n * c, y0 + 0.12), v(p - n * c, y0 + 0.12)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+        g.poly(curb, &[v(q + n * c, y0 - 0.2), v(p + n * c, y0 - 0.2), v(p + n * c, y0 + 0.12), v(q + n * c, y0 + 0.12)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+        poly_up(g, curb, &[v(p - n * c, y0 + 0.12), v(q - n * c, y0 + 0.12), v(q + n * c, y0 + 0.12), v(p + n * c, y0 + 0.12)]);
+        let base = y0 + 0.12;
+        // pickets: 50 x 12 mm flat bars
+        let count = (l / 0.115).floor() as i32;
+        let pad = (l - count as f32 * 0.115) / 2.0;
+        for k in 0..=count {
+            let s = pad + k as f32 * 0.115;
+            let pc = p + e * s;
+            let (hw, hd) = (0.025, 0.007);
+            let c4 = [pc - e * hw - n * hd, pc + e * hw - n * hd, pc + e * hw + n * hd, pc - e * hw + n * hd];
+            for i in 0..4 {
+                let (u, t) = (c4[i], c4[(i + 1) % 4]);
+                let d = (t - u).normalize();
+                g.poly(galv, &[v(u, base), v(t, base), v(t, base + h - 0.1), v(u, base + h - 0.1)], Vec3::new(d.x, 0.0, d.y), Vec3::Y);
+            }
+            poly_up(g, galv, &c4.map(|q| v(q, base + h - 0.1)));
+        }
+        // rails: rectangular tubes on the plaza side, low and high
+        for (y, t) in [(0.3, 0.06), (h - 0.55, 0.06)] {
+            let (r0, r1) = (n * 0.008, n * 0.06);
+            g.poly(galv, &[v(p + r1, base + y), v(q + r1, base + y), v(q + r1, base + y + t), v(p + r1, base + y + t)], Vec3::new(e.x, 0.0, e.y) * -1.0, Vec3::Y);
+            g.poly(galv, &[v(q - r1, base + y), v(p - r1, base + y), v(p - r1, base + y + t), v(q - r1, base + y + t)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            poly_up(g, galv, &[v(p - r1, base + y + t), v(q - r1, base + y + t), v(q + r1, base + y + t), v(p + r1, base + y + t)]);
+            let _ = r0;
+        }
+        if frame || leaves {
+            // a gate leaf: heavy tube frame and a solid kick plate
+            for (u, t) in [(p, q)] {
+                g.tube(galv, v(u, base + 0.05), v(t, base + 0.05), 0.05, 4);
+                g.tube(galv, v(u, base + h - 0.15), v(t, base + h - 0.15), 0.05, 4);
+            }
+            for u in [p, q] {
+                g.tube(galv, v(u, base), v(u, base + h - 0.1), 0.05, 4);
+            }
+            for side in [-1.0f32, 1.0] {
+                let o = n * 0.03 * side;
+                g.quad(galv, v(if side > 0.0 { q + o } else { p + o }, base + 0.08), Vec3::new(e.x, 0.0, e.y) * (if side > 0.0 { -l } else { l }), Vec3::Y * 0.32);
+            }
+        }
+        g.block_ring(&[p - n * 0.1, q - n * 0.1, q + n * 0.1, p + n * 0.1], y0 - 0.2, base + h);
+    };
+    for (f0, f1, gap) in pieces {
+        let (p, q) = (a + e * (len * f0), a + e * (len * f1));
+        if gap {
+            // the leaf rolled back behind the next fixed stretch, on the plaza side (north)
+            let back = if nrm.y < 0.0 { nrm } else { -nrm };
+            let l = (q - p).length();
+            let (lp, lq) = (q + e * 0.1 + back * 0.35, q + e * (l + 0.1) + back * 0.35);
+            if f1 < 0.999 {
+                panel(g, lp, lq, true);
+            }
+            // gate posts and the floor track across the opening
+            let y = ground(p).min(ground(q));
+            g.quad(galv, v(p - nrm * 0.04, y + 0.005), Vec3::new(e.x, 0.0, e.y) * l, Vec3::new(nrm.x, 0.0, nrm.y) * 0.08);
+            continue;
+        }
+        panel(g, p, q, false);
+        // square posts every 3 m and at the ends
+        let l = (q - p).length();
+        let np = (l / 3.0).ceil().max(1.0) as i32;
+        for k in 0..=np {
+            let pc = p + e * (l * k as f32 / np as f32);
+            let y = ground(pc);
+            g.cuboid(galv, Vec3::new(pc.x - 0.065, y, pc.y - 0.065), Vec3::new(pc.x + 0.065, y + 3.25, pc.y + 0.065));
+        }
+    }
 }

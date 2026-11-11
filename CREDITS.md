@@ -80,3 +80,6 @@ Third-party assets used by the game (not redistributed in this repository).
 - "1920s Gooseneck Desk Lamps Type A" by Mad_Lobster_Workshop, CC Attribution, https://sketchfab.com/3d-models/aa7b0e009926415e91b0323612298b30
 - "Low poly stadium/sports arena seats" by anDDDres, CC Attribution, https://sketchfab.com/3d-models/6bbe4c85d2a4489dbe5918831be5d886
 - "Sandstone Blocks 08" by Rob Tuytel, Poly Haven, CC0 (base of the ballpark ashlar cladding, retinted per panel), https://polyhaven.com/a/sandstone_blocks_08
+- "Geranium Game Asset" by wilsonghm99, CC Attribution, https://sketchfab.com/3d-models/8dd8f987f9d64dc3a6f17d9e880d0563
+- "Agave Sisalana Plant" by Md Mahmudur Rahman Bappy, CC Attribution, https://sketchfab.com/3d-models/cab98668fa5c42aa82b61c104c051b79
+- "NZ Flax" by toAflame, CC Attribution, https://sketchfab.com/3d-models/10ec8061ccc04a9a92760ed1fff3d7eb

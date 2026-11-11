@@ -159,6 +159,11 @@ impl Geo {
     /// Planar polygon (convex, 3-4 points, counter-clockwise seen from the front) with right/up axes for UVs.
     /// The normal is right x up; UVs are (p.right, -p.up) in metres.
     pub fn poly(&mut self, k: Key, pts: &[Vec3], right: Vec3, up: Vec3) {
+        self.poly_uv(k, pts, right, up, [0.0, 0.0]);
+    }
+
+    /// `poly` with its texture coordinates shifted by `uv` (metres), so neighbouring slabs show different parts.
+    pub fn poly_uv(&mut self, k: Key, pts: &[Vec3], right: Vec3, up: Vec3, uv: [f32; 2]) {
         let n = right.cross(up).normalize();
         let (wn, wt) = (self.wdir(n), self.wdir(right));
         // face-local coordinates for edge wear
@@ -171,7 +176,7 @@ impl Geo {
             .map(|&p| {
                 let w = self.world(p);
                 let edge = [p.dot(right) - u0, p.dot(up) - v0, u1 - u0, v1 - v0];
-                TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [p.dot(right), -p.dot(up)], tan: [wt.x, wt.y, wt.z, 1.0], edge }
+                TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [p.dot(right) + uv[0], -p.dot(up) + uv[1]], tan: [wt.x, wt.y, wt.z, 1.0], edge }
             })
             .collect();
         let g = self.groups.entry(k).or_default();

@@ -239,6 +239,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // the ballpark: an upper-deck seat behind home, and the batter's box
             views.push((eye(-24.0, 50.0, 30.5), 18.0, -15.0));
             views.push((eye(-2.1, 8.6, 1.7), 0.0, 2.0));
+            // the home plate plaza from the street: gate fence, palm beds, paving
+            views.push((eye(30.0, 128.0, 1.7), -40.0, 8.0));
             play::bench(&c, scene.as_ref(), &views, arg(&args, "--w", 1440), arg(&args, "--h", 900), arg(&args, "--frames", 40));
         }
         Some("ops") => {
