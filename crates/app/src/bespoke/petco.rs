@@ -336,6 +336,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         stair_core(&mut g, &m, c);
     }
     home_plaza(&mut g, &mut f, &m, c, &st);
+    east_building(&mut g, &m, &|p: Vec2| c.terrain.at((p.x + HOME.x) as f64, (p.y + HOME.y) as f64) as f32);
     outfield(&mut g, &mut f, &m);
     backstop_net(&mut g, &m, &st);
     for b in [95.0f32, 265.0] {
@@ -935,7 +936,6 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
     footbridge(g, m, &gz_line);
     home_towers(g, m);
     sw_offices(g, m);
-    east_building(g, m);
     // end walls closing the bowl at both foul poles
     for s in [st[0], st[st.len() - 1]] {
         let e = s.n.perp();
@@ -1861,16 +1861,17 @@ fn home_plaza(g: &mut Geo, f: &mut Furnisher, m: &Mats, city: &city::City, st: &
     }).collect();
 
     // --- paving: 3 m slabs square to the street, each showing a different part of the scan; grass at the curb
-    let ax = Vec2::new(0.714, -0.700).normalize();
+    // (square to the east building: a joint on its face line and on the ticket hall's right wall)
+    let ax = Vec2::new(1.0, -1.0).normalize();
     let az = Vec2::new(-ax.y, ax.x);
-    let o = w(30.0, 110.0);
+    let o = w(66.0, 74.0) + Vec2::new(-1.0, -1.0).normalize() * 0.5 + ax * 8.17;
     let (cell, slab) = (1.5f32, 2i32);
-    for i in -50i32..50 {
+    for i in -80i32..40 {
         for j in -40i32..40 {
             let at = |di: f32, dj: f32| o + ax * ((i as f32 + di) * cell) + az * ((j as f32 + dj) * cell);
             let c = at(0.5, 0.5);
             let cw = c + HOME;
-            if cw.x < -24.0 || cw.x > 78.0 || cw.y < 56.0 || cw.y > 152.0 {
+            if cw.x < -24.0 || cw.x > 96.0 || cw.y < 50.0 || cw.y > 152.0 {
                 continue;
             }
             let (rd, rh) = road_d(c);
@@ -1886,7 +1887,9 @@ fn home_plaza(g: &mut Geo, f: &mut Furnisher, m: &Mats, city: &city::City, st: &
             let (si, sj) = (i.div_euclid(slab), j.div_euclid(slab));
             let h = (si.wrapping_mul(73_856_093) ^ sj.wrapping_mul(19_349_663)) as u32;
             let uv = [(h % 7) as f32 * 3.0 + 0.0, ((h >> 4) % 5) as f32 * 3.0];
-            let (k, uv) = if rd < rh + 2.3 || lawn { (grass, [0.0, 0.0]) } else { (paving, uv) };
+            // (no grass strip in front of the east building: its forecourt is paved to the curb)
+            let east_front = (cw - Vec2::new(66.0, 74.0)).dot(ax) > -16.0;
+            let (k, uv) = if (rd < rh + 2.3 && !east_front) || lawn { (grass, [0.0, 0.0]) } else { (paving, uv) };
             // joints on the slab grid: the texture's joint lies on its tile edge, so slabs start on tile edges
             g.poly_uv(k, &[pts[0], pts[3], pts[2], pts[1]], Vec3::new(ax.x, 0.0, ax.y), Vec3::new(-az.x, 0.0, -az.y), uv);
             // saw-cut joints along the slab edges
@@ -3011,88 +3014,86 @@ fn bougainvillea(g: &mut Geo, left: Vec2, right: Vec2, out: Vec2, y: f32, drop: 
     }
 }
 
-/// A run of ticket windows as at the ballpark's box office (street photo): each booth a wide light with a round
-/// speaking grille and a pass-through tray, a narrow sidelight, a transom over both, in white aluminium framing over a
-/// counter shelf, numbered in gold above. `left` to `right` as seen from the front (`out`); `lanes` adds the queue
-/// rails in front.
-fn ticket_wall(g: &mut Geo, m: &Mats, left: Vec2, right: Vec2, out: Vec2, y0: f32, y1: f32, n: usize, first: usize, lanes: bool) {
+const SGN_N: [&str; 9] = ["sgn_n1", "sgn_n2", "sgn_n3", "sgn_n4", "sgn_n5", "sgn_n6", "sgn_n7", "sgn_n8", "sgn_n9"];
+
+/// Lettering from `fps proctex` (real typefaces, cutout): the text fills a box `w` x `h` whose bottom centre is `c`
+/// (plan) at height `y`, read along `right`.
+fn sign(g: &mut Geo, id: &'static str, tint: [f32; 3], c: Vec2, y: f32, right: Vec2, w: f32, h: f32) {
+    // the surface carries an 8 px margin round a 192 px high box
+    let (wp, hp) = (w + h / 12.0, h * 13.0 / 12.0);
+    let k = Key::new(Mat::Surface(id), tint).tile(1.0);
+    let o = c - right * (wp / 2.0);
+    g.decal(k, Vec3::new(o.x, y - h / 24.0, o.y), Vec3::new(right.x, 0.0, right.y) * wp, Vec3::Y * hp, 1.0);
+}
+
+/// A run of ticket windows as at the ballpark's box office, measured on rectified street photos: 1.40 m modules, each
+/// a 0.82 m light with a round speaking grille at its centre and a 0.58 m light to its right, under a transom 0.27
+/// of the band's height, in white aluminium framing over a counter ledge. `modules` share the run evenly.
+/// `numbers`: the module that is booth 1 (numerals in gold over the grille lights, up to 9). `lanes`: belt
+/// stanchions in front. `left` to `right` as seen from the front (`out`).
+fn ticket_wall(g: &mut Geo, m: &Mats, left: Vec2, right: Vec2, out: Vec2, y0: f32, y1: f32, modules: usize, numbers: Option<usize>, lanes: bool) {
     let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let len = (right - left).length();
     let r = (right - left) / len;
     let (r3, o3) = (Vec3::new(r.x, 0.0, r.y), Vec3::new(out.x, 0.0, out.y));
-    let glass = Key::new(Mat::Plain(200), [0.03, 0.036, 0.04]);
-    let inside = Key::new(Mat::Plain(220), [0.1, 0.105, 0.11]);
-    let steel = Key::new(Mat::Plain(70), [0.5, 0.5, 0.5]).wear(wear::METAL);
-    let gold = Key::new(Mat::Plain(140), [0.62, 0.36, 0.06]);
-    let rail = Key::new(Mat::Plain(150), [0.09, 0.03, 0.022]);
-    let w = len / n as f32;
-    let yt = y1 - 0.24 * (y1 - y0);
+    let glass = Key::new(Mat::Plain(120), [0.018, 0.022, 0.026]);
+    let inside = Key::new(Mat::Plain(220), [0.07, 0.075, 0.08]);
+    let steel = Key::new(Mat::Plain(90), [0.55, 0.55, 0.54]);
+    let gold = [0.4, 0.25, 0.085];
+    let w = len / modules as f32;
+    let wide = w * 0.586;
+    let yt = y1 - 0.268 * (y1 - y0);
+    let at = |x: f32| left + r * x;
     g.quad(glass, v3(left + out * 0.02, y0), r3 * len, Vec3::Y * (y1 - y0));
     for y in [y0, yt, y1] {
-        g.member(m.white, v3(left + out * 0.05, y), v3(right + out * 0.05, y), 0.06, 0.07, o3);
+        g.member(m.white, v3(left + out * 0.05, y), v3(right + out * 0.05, y), 0.05, 0.06, o3);
     }
-    g.member(steel, v3(left + out * 0.2, y0 - 0.05), v3(right + out * 0.2, y0 - 0.05), 0.4, 0.05, Vec3::Y);
-    for i in 0..n {
+    g.member(steel, v3(left + out * 0.17, y0 - 0.05), v3(right + out * 0.17, y0 - 0.05), 0.34, 0.05, Vec3::Y);
+    for i in 0..modules {
         let x0 = i as f32 * w;
-        let wide = w * 0.64;
-        let at = |x: f32| left + r * x;
         for x in [x0, x0 + wide] {
-            g.member(m.white, v3(at(x) + out * 0.05, y0), v3(at(x) + out * 0.05, y1), 0.06, 0.07, o3);
+            g.member(m.white, v3(at(x) + out * 0.05, y0), v3(at(x) + out * 0.05, y1), 0.05, 0.06, o3);
         }
-        // inside: a counter-height desk edge and a monitor's back, just behind the glass
-        g.quad(inside, v3(at(x0 + 0.1) + out * 0.03, y0 + 0.05), r3 * (wide * 0.38), Vec3::Y * 0.36);
-        // the speaking grille: a steel ring in the glass
-        let c = v3(at(x0 + wide / 2.0) + out * 0.035, y0 + (yt - y0) * 0.55);
-        // (after the booth model the user picked out: a broad ring, a dark perforated disc, a small hub)
-        for (rad, k, off) in [(0.12f32, steel, 0.0f32), (0.085, inside, 0.004), (0.022, steel, 0.008)] {
+        // what shows through the glass: a monitor's back and a desk edge
+        g.quad(inside, v3(at(x0 + 0.08) + out * 0.03, y0 + 0.04), r3 * (wide * 0.36), Vec3::Y * 0.34);
+        // the speaking grille: a pale disc with a dark centre, a third of the way up the light
+        let c = v3(at(x0 + wide / 2.0) + out * 0.035, y0 + (y1 - y0) * 0.345);
+        for (rad, k, off) in [(0.08f32, steel, 0.0f32), (0.03, inside, 0.004)] {
             for s in 0..12 {
                 let (a0, a1) = (s as f32 / 12.0 * std::f32::consts::TAU, (s + 1) as f32 / 12.0 * std::f32::consts::TAU);
                 let p = |a: f32| c + o3 * off + r3 * (a.cos() * rad) + Vec3::Y * (a.sin() * rad);
                 g.poly(k, &[c + o3 * off, p(a0), p(a1)], r3, Vec3::Y);
             }
         }
-        // the wide light's own heavier frame, so each booth reads as a window and not a pane in a grid
-        let (fa, fb2) = (at(x0 + 0.07) + out * 0.07, at(x0 + wide - 0.07) + out * 0.07);
-        for y in [y0 + 0.07, yt - 0.07] {
-            g.member(m.white, v3(fa, y), v3(fb2, y), 0.05, 0.05, o3);
-        }
-        for p in [fa, fb2] {
-            g.member(m.white, v3(p, y0 + 0.07), v3(p, yt - 0.07), 0.05, 0.05, o3);
-        }
-        // a panelled base under the counter: a framed panel per booth
-        let base = Key::new(Mat::Plain(200), [0.16, 0.1, 0.05]);
-        let trim = Key::new(Mat::Plain(150), [0.3, 0.2, 0.1]);
-        let (b0, b1) = (0.22f32, y0 - 0.16);
-        if b1 > b0 + 0.2 {
-            g.quad(base, v3(at(x0 + 0.1) + out * 0.025, b0), r3 * (w - 0.2), Vec3::Y * (b1 - b0));
-            for y in [b0, b1] {
-                g.member(trim, v3(at(x0 + 0.1) + out * 0.04, y), v3(at(x0 + w - 0.1) + out * 0.04, y), 0.04, 0.03, o3);
-            }
-            for x in [x0 + 0.1, x0 + w - 0.1] {
-                g.member(trim, v3(at(x) + out * 0.04, b0), v3(at(x) + out * 0.04, b1), 0.04, 0.03, o3);
+        if let Some(first) = numbers {
+            if i >= first && i - first < 9 {
+                sign(g, SGN_N[i - first], gold, at(x0 + wide / 2.0) + out * 0.03, y1 + 0.06, r, 0.24, 0.26);
             }
         }
-        // the tray
-        g.member(steel, v3(at(x0 + wide * 0.3) + out * 0.18, y0 + 0.02), v3(at(x0 + wide * 0.7) + out * 0.18, y0 + 0.02), 0.3, 0.03, Vec3::Y);
-        // its number
-        let label = format!("{}", first + i);
-        let px = 0.032;
-        let tw = (label.len() as f32 * 6.0 - 1.0) * px;
-        pixel_text(g, gold, &label, v3(at(x0 + wide / 2.0 - tw / 2.0) + out * 0.03, y1 + 0.1), r3, px);
     }
-    g.member(m.white, v3(right + out * 0.05, y0), v3(right + out * 0.05, y1), 0.06, 0.07, o3);
+    g.member(m.white, v3(right + out * 0.05, y0), v3(right + out * 0.05, y1), 0.05, 0.06, o3);
     if lanes {
-        // queue rails: a post at the counter and one 2.6 m out per booth line, two rails between
-        for i in 0..=n {
-            let p0 = left + r * (i as f32 * w) + out * 0.45;
-            let p1 = p0 + out * 2.2;
-            for p in [p0, p1] {
-                g.tube(rail, v3(p, 0.1), v3(p, 1.08), 0.035, 8);
+        // belt stanchions: black posts with red belts - a lane out from the counter every second booth, tied by a
+        // belt line 2.6 m out with a gap at every other span
+        let post = Key::new(Mat::Plain(110), [0.03, 0.03, 0.03]);
+        let belt = Key::new(Mat::Plain(190), [0.3, 0.03, 0.03]);
+        let mut put = |g: &mut Geo, p: Vec2| {
+            g.tube(post, v3(p, 0.1), v3(p, 1.02), 0.03, 8);
+            g.tube(post, v3(p, 0.1), v3(p, 0.13), 0.17, 12);
+        };
+        let lanes_n = modules / 2;
+        for i in 0..=lanes_n {
+            let p0 = at((i * 2) as f32 * w) + out * 0.7;
+            let p1 = p0 + out * 1.9;
+            put(g, p0);
+            put(g, p1);
+            g.member(belt, v3(p0, 0.95), v3(p1, 0.95), 0.012, 0.05, Vec3::new(r.x, 0.0, r.y));
+            g.block_ring(&[p0 - r * 0.03, p1 - r * 0.03, p1 + r * 0.03, p0 + r * 0.03], 0.1, 1.0);
+            if i < lanes_n && i % 2 == 0 {
+                let q1 = at(((i + 1) * 2) as f32 * w) + out * 2.6;
+                g.member(belt, v3(p1, 0.95), v3(q1, 0.95), 0.012, 0.05, o3);
+                g.block_ring(&[p1 - out * 0.03, q1 - out * 0.03, q1 + out * 0.03, p1 + out * 0.03], 0.1, 1.0);
             }
-            for y in [0.6f32, 1.05] {
-                g.tube(rail, v3(p0, y), v3(p1, y), 0.03, 6);
-            }
-            g.block_ring(&[p0 - r * 0.04, p1 - r * 0.04, p1 + r * 0.04, p0 + r * 0.04], 0.1, 1.08);
         }
     }
 }
@@ -3101,7 +3102,7 @@ fn ticket_wall(g: &mut Geo, m: &Mats, left: Vec2, right: Vec2, out: Vec2, y0: f3
 /// heights from the lidar; its street face and south-west end face from street photos rectified onto a metre grid
 /// (camera solved against the lidar corners; heights cross-checked between two photos to 0.5 m).
 /// Frame: a runs north-east along the street from (66, 74), b in toward the bowl; the street face is the plane b = 0.5.
-fn east_building(g: &mut Geo, m: &Mats) {
+fn east_building(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
     let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let (t, n) = (Vec2::new(1.0, -1.0).normalize(), Vec2::new(-1.0, -1.0).normalize());
     let uv = |a: f32, b: f32| Vec2::new(66.0, 74.0) + t * a + n * b - HOME;
@@ -3116,7 +3117,10 @@ fn east_building(g: &mut Geo, m: &Mats) {
     let (top, fb, back) = (24.1, 0.5, 20.0);
     let (a0, a1) = (-13.0, 25.7);
     // the hall: from a = -9 to the podium's side wall, 5.8 m high, right through to the back; the slot over it
-    let (h0, h1, hh, bb) = (-9.0f32, 8.17f32, 5.8f32, 19.5f32);
+    // (its depth, 21.85 m, from the far photo's side-wall intersection and from the booths' angular size in two
+    // photos; the ceiling sits 0.2 m above a 0.6 m stone lip at the mouth)
+    let (h0, h1, hh, bb) = (-9.0f32, 8.17f32, 5.8f32, 22.35f32);
+    let hc = 6.0f32;
     let (s0, sy0, sy1, sd) = (-3.7f32, 8.8f32, 10.55f32, 1.5f32);
 
     // --- the street face: two rows of three strip windows under sunshades, the hall's mouth, the loggia slot
@@ -3149,43 +3153,123 @@ fn east_building(g: &mut Geo, m: &Mats) {
         }
     }
 
-    // --- the ticket hall (measured on a zoomed street photo): stone side walls, the right one with three bays of
-    // ticket windows under dark openings; a brown back wall with a full-width band of ticket windows, a sign and
-    // two screens; a tan ceiling; a floor slab
-    let brown = Key::new(Mat::Plain(215), [0.1, 0.068, 0.035]);
-    let ceil = Key::new(Mat::Surface("tjeneevfw"), [0.4, 0.29, 0.17]).tile(2.0);
-    let paving = Key::new(Mat::Surface("vlzlajnfw"), [0.64, 0.62, 0.58]).tile(3.0).rough(0.8);
-    wall_holes(g, m.sandstone, uv(h0, fb), uv(h0, bb), 0.0, hh, &[]);
+    // --- the ticket hall (measured on street photos from 52 m and from 18 m): stone side walls, the right one with
+    // three bays of ticket windows under windows that reach the ceiling; a ribbed brown back wall with twelve
+    // window modules (three will-call, booths 1-9), lettering and screens; a stone lip, then a panelled ceiling;
+    // paving on the building's grid
+    // the floor meets the ground outside the mouth
+    let fy = [uv(h0, fb), uv(h1, fb), uv((h0 + h1) / 2.0, fb)].iter().map(|&p| terr(p)).fold(f32::MIN, f32::max) + 0.06;
+    let brown = Key::new(Mat::Plain(215), [0.05, 0.03, 0.014]);
+    let rib = Key::new(Mat::Plain(215), [0.028, 0.017, 0.008]);
+    let ceil = Key::new(Mat::Surface("tjeneevfw"), [0.24, 0.17, 0.1]).tile(2.0);
+    let cjoint = Key::new(Mat::Plain(220), [0.04, 0.028, 0.016]);
+    let gold = [0.4, 0.25, 0.085];
+    wall_holes(g, m.sandstone, uv(h0, fb), uv(h0, bb), 0.0, hc, &[]);
     let (rl, rr) = (uv(h1, bb), uv(h1, fb));
     let ru = |d: f32| (bb - fb) - d;
-    let side_bays = [(1.4f32, 6.5f32), (8.4, 12.4), (14.4, 18.6)];
+    let side_bays = [(1.3f32, 6.6f32), (7.9, 13.8), (15.0, 21.4)];
     let mut rholes: Vec<[f32; 4]> = vec![];
     for &(d0, d1) in &side_bays {
-        rholes.push([ru(d1), ru(d0), 4.1, 5.4]);
-        rholes.push([ru(d1), ru(d0), 1.0, 2.65]);
+        rholes.push([ru(d1), ru(d0), 4.1, hc]);
+        rholes.push([ru(d1), ru(d0), 1.04, 2.61]);
     }
-    wall_holes(g, m.sandstone, rl, rr, 0.0, hh, &rholes);
+    wall_holes(g, m.sandstone, rl, rr, 0.0, hc, &rholes);
     for &(d0, d1) in &side_bays {
-        reveal(g, m.sandstone, rl, rr, [ru(d1), ru(d0), 4.1, 5.4], 0.4);
-        reveal(g, m.sandstone, rl, rr, [ru(d1), ru(d0), 1.0, 2.65], 0.25);
+        reveal(g, m.sandstone, rl, rr, [ru(d1), ru(d0), 4.1, hc], 0.35);
+        reveal(g, m.sandstone, rl, rr, [ru(d1), ru(d0), 1.04, 2.61], 0.25);
         let o = uv(h1, fb + d1);
-        g.quad(dark, v3(o + t * 0.4, 4.1), -n3 * (d1 - d0), Vec3::Y * 1.3);
-        let booths = ((d1 - d0) / 1.7).round().max(1.0) as usize;
-        ticket_wall(g, m, o + t * 0.25, uv(h1, fb + d0) + t * 0.25, -t, 1.0, 2.65, booths, 10 + (ru(d1) / 1.7) as usize, false);
+        // the upper window: dark glass up to the ceiling, two mullions
+        g.quad(pane, v3(o + t * 0.35, 4.1), -n3 * (d1 - d0), Vec3::Y * (hc - 4.1));
+        for k in 1..3 {
+            let p = uv(h1, fb + d0 + (d1 - d0) * k as f32 / 3.0) + t * 0.32;
+            g.member(dark, v3(p, 4.1), v3(p, hc), 0.06, 0.06, t3);
+        }
+        let mods = ((d1 - d0) / 1.4).round().max(1.0) as usize;
+        ticket_wall(g, m, o + t * 0.25, uv(h1, fb + d0) + t * 0.25, -t, 1.04, 2.61, mods, None, false);
     }
-    g.quad(brown, v3(uv(h0, bb), 0.0), t3 * (h1 - h0), Vec3::Y * hh);
-    let (tw0, tw1) = (h0 + 0.6, h1 - 0.4);
-    ticket_wall(g, m, uv(tw0, bb), uv(tw1, bb), out, 1.04, 2.61, 9, 1, true);
-    pixel_text(g, Key::new(Mat::Plain(140), [0.62, 0.36, 0.06]), "TICKETS", v3(uv(-0.85, bb) + out * 0.04, 3.3), t3, 0.054);
-    for (x0, x1) in [(2.3f32, 3.6f32), (4.35, 5.7)] {
-        g.quad(Key::new(Mat::Plain(60), [0.02, 0.022, 0.026]), v3(uv(x0, bb) + out * 0.05, 3.28), t3 * (x1 - x0), Vec3::Y * 0.78);
+    // the back wall: brown, ribbed above the windows
+    g.quad(brown, v3(uv(h0, bb), 0.0), t3 * (h1 - h0), Vec3::Y * hc);
+    let mut y = 2.75f32;
+    while y < hc - 0.05 {
+        g.quad(rib, v3(uv(h0, bb) + out * 0.004, y), t3 * (h1 - h0), Vec3::Y * 0.035);
+        y += 0.12;
     }
-    poly_down(g, ceil, &[v3(uv(h0, fb), hh), v3(uv(h1, fb), hh), v3(uv(h1, bb), hh), v3(uv(h0, bb), hh)]);
-    let floor = [uv(h0, fb), uv(h1, fb), uv(h1, bb), uv(h0, bb)];
-    poly_up(g, paving, &floor.map(|p| v3(p, 0.1)));
-    g.block_ring(&floor, -0.6, 0.1);
-    for d in [8.0f32, 16.0] {
-        g.light(v3(uv(-0.4, fb + d), hh - 1.6), 4.0, [1.0, 0.92, 0.78]);
+    // twelve 1.40 m modules ending at the right wall; booth 4's grille on a = 0
+    let (tw1, nmod) = (h1 - 0.05, 12usize);
+    let tw0 = tw1 - nmod as f32 * 1.4;
+    ticket_wall(g, m, uv(tw0, bb), uv(tw1, bb), out, 1.04, 2.61, nmod, Some(3), true);
+    let grille = |k: f32| tw0 + (k + 2.0) * 1.4 + 0.41;
+    sign(g, "sgn_will_call", gold, uv(tw0 + 2.1, bb) + out * 0.03, 2.7, t, 1.5, 0.2);
+    sign(g, "sgn_tickets", gold, uv(grille(4.0), bb) + out * 0.03, 3.02, t, 1.73, 0.33);
+    sign(g, "sgn_ballpark", gold, uv(grille(4.0), bb) + out * 0.03, 3.42, t, 3.4, 0.72);
+    let scr = |g: &mut Geo, x0: f32, lit: bool| {
+        let q = uv(grille(4.0) + x0, bb) + out * 0.05;
+        g.quad(Key::new(Mat::Plain(160), [0.02, 0.02, 0.022]), v3(q - t * 0.04, 3.21), t3 * 1.43, Vec3::Y * 0.84);
+        if lit {
+            g.decal(Key::new(Mat::Screen("scr_ballgame"), [0.22, 0.22, 0.22]).tile(1.35), v3(q + out * 0.01, 3.25), t3 * 1.35, Vec3::Y * 0.76, 1.35);
+        } else {
+            g.quad(Key::new(Mat::Plain(50), [0.012, 0.014, 0.018]), v3(q + out * 0.01, 3.25), t3 * 1.35, Vec3::Y * 0.76);
+        }
+    };
+    scr(g, 2.27, true);
+    scr(g, 4.43, false);
+    scr(g, -3.58, false);
+    scr(g, -6.0, false);
+    // the stone lip at the mouth, then the ceiling: large panels with joints
+    let lip = 0.6f32;
+    poly_down(g, stone_flat(), &[v3(uv(h0, fb), hh), v3(uv(h1, fb), hh), v3(uv(h1, fb + lip), hh), v3(uv(h0, fb + lip), hh)]);
+    g.quad(stone_flat(), v3(uv(h1, fb + lip), hh), -t3 * (h1 - h0), Vec3::Y * (hc - hh));
+    poly_down(g, ceil, &[v3(uv(h0, fb + lip), hc), v3(uv(h1, fb + lip), hc), v3(uv(h1, bb), hc), v3(uv(h0, bb), hc)]);
+    let mut a = grille(4.0) + 1.55 - 2.44 * 4.0;
+    while a < h1 {
+        if a > h0 + 0.1 {
+            poly_down(g, cjoint, &[v3(uv(a - 0.012, fb + lip), hc - 0.004), v3(uv(a + 0.012, fb + lip), hc - 0.004), v3(uv(a + 0.012, bb), hc - 0.004), v3(uv(a - 0.012, bb), hc - 0.004)]);
+        }
+        a += 2.44;
+    }
+    let mut b = fb + lip + 1.22;
+    while b < bb - 0.1 {
+        poly_down(g, cjoint, &[v3(uv(h0, b - 0.012), hc - 0.004), v3(uv(h1, b - 0.012), hc - 0.004), v3(uv(h1, b + 0.012), hc - 0.004), v3(uv(h0, b + 0.012), hc - 0.004)]);
+        b += 1.22;
+    }
+    // the floor: 3 m slabs with scored 1.5 m cells on the building's grid (joints on the face line and on the
+    // right wall's line, carried on outside by the plaza)
+    {
+        let paving = Key::new(Mat::Surface("vlzlajnfw"), [0.64, 0.62, 0.58]).tile(3.0).rough(0.8);
+        let joint = Key::new(Mat::Plain(200), [0.16, 0.155, 0.15]);
+        let cell = 1.5f32;
+        let (na, nb) = (((h1 - h0) / cell).ceil() as i32, ((bb - fb) / cell).ceil() as i32);
+        for i in 0..na {
+            for j in 0..nb {
+                let (a1, a0) = (h1 - i as f32 * cell, (h1 - (i + 1) as f32 * cell).max(h0));
+                let (b0, b1) = (fb + j as f32 * cell, (fb + (j + 1) as f32 * cell).min(bb));
+                let hsh = ((i / 2).wrapping_mul(73_856_093) ^ (j / 2).wrapping_mul(19_349_663)) as u32;
+                let off = [(hsh % 7) as f32 * 3.0, ((hsh >> 4) % 5) as f32 * 3.0];
+                g.poly_uv(paving, &[v3(uv(a0, b0), fy), v3(uv(a0, b1), fy), v3(uv(a1, b1), fy), v3(uv(a1, b0), fy)], t3, -n3, off);
+                let jw = 0.018;
+                if i % 2 == 0 {
+                    poly_up(g, joint, &[v3(uv(a1 - jw, b0), fy + 0.004), v3(uv(a1 + jw, b0), fy + 0.004), v3(uv(a1 + jw, b1), fy + 0.004), v3(uv(a1 - jw, b1), fy + 0.004)]);
+                }
+                if j % 2 == 0 {
+                    poly_up(g, joint, &[v3(uv(a0, b0 - jw), fy + 0.004), v3(uv(a1, b0 - jw), fy + 0.004), v3(uv(a1, b0 + jw), fy + 0.004), v3(uv(a0, b0 + jw), fy + 0.004)]);
+                }
+            }
+        }
+        g.block_ring(&[uv(h0, fb), uv(h1, fb), uv(h1, bb), uv(h0, bb)], -0.6, fy);
+    }
+    g.light(v3(uv(-0.4, fb + 11.0), 3.2), 6.0, [0.5, 0.46, 0.4]);
+    // on the podium's side wall at the mouth: a cash machine (white header, blue body, dark screen), its sign, a camera
+    {
+        let q = uv(h1, fb - 0.05) - t * 0.03;
+        g.quad(Key::new(Mat::Plain(140), [0.75, 0.75, 0.74]), v3(q, 2.5), -n3 * 1.05, Vec3::Y * 0.35);
+        g.quad(Key::new(Mat::Plain(120), [0.03, 0.07, 0.32]), v3(q, 0.9), -n3 * 1.05, Vec3::Y * 1.6);
+        g.quad(Key::new(Mat::Plain(60), [0.015, 0.02, 0.03]), v3(q - t * 0.01 - n * 0.25, 1.3), -n3 * 0.55, Vec3::Y * 0.5);
+        g.quad(Key::new(Mat::Plain(140), [0.5, 0.05, 0.05]), v3(q - t * 0.01 - n * 0.15, 2.57), -n3 * 0.3, Vec3::Y * 0.2);
+        sign(g, "sgn_atm", gold, uv(h1, fb + 0.9) - t * 0.03, 3.45, -n, 0.62, 0.26);
+        let cam = Key::new(Mat::Plain(120), [0.8, 0.8, 0.79]);
+        let c = uv(h1, fb - 1.6) - t * 0.25;
+        g.member(cam, v3(uv(h1, fb - 1.6), 4.1), v3(c, 4.1), 0.05, 0.05, Vec3::Y);
+        g.member(cam, v3(c + n * 0.18, 3.98), v3(c - n * 0.18, 3.92), 0.13, 0.12, Vec3::Y);
     }
 
     // --- the loggia slot over the hall: a stone parapet (the face itself) with a rail, a shallow balcony behind,
@@ -3249,13 +3333,18 @@ fn east_building(g: &mut Geo, m: &Mats) {
     }
     // --- the other two faces, the roof, collision (the hall stays open to walk through to the ticket windows)
     wall_holes(g, m.sandstone, uv(a1, fb), uv(a1, back), 0.0, top, &[]);
-    wall_holes(g, m.sandstone, uv(a1, back), uv(a0, back), 0.0, top, &[]);
+    wall_holes(g, m.sandstone, uv(a1, back), uv(a0, back), 0.0, top, &[[a1 - h1, a1 - h0, 0.0, hc]]);
+    // the low block behind, which the hall runs into (lidar: 8-17 m back there)
+    let rear = bb + 0.9;
+    prism(g, m, &uv, pale, &[(h0 - 3.0, back), (h0 - 0.06, back), (h0 - 0.06, rear), (h0 - 3.0, rear)], 0.0, &flat(8.5), false);
+    prism(g, m, &uv, pale, &[(h1 + 0.06, back), (h1 + 3.0, back), (h1 + 3.0, rear), (h1 + 0.06, rear)], 0.0, &flat(8.5), false);
+    prism(g, m, &uv, pale, &[(h0, bb + 0.06), (h1, bb + 0.06), (h1, rear), (h0, rear)], 0.0, &flat(8.5), false);
+    prism(g, m, &uv, pale, &[(h0, back), (h1, back), (h1, bb), (h0, bb)], hc + 0.3, &flat(8.5), false);
     poly_up(g, m.concrete, &[v3(uv(a0, fb), top - 0.3), v3(uv(a1, fb), top - 0.3), v3(uv(a1, back), top - 0.3), v3(uv(a0, back), top - 0.3)]);
     for (r, y0, y1) in [
         ([(a0, fb), (h0, fb), (h0, back), (a0, back)], 0.0, top),
         ([(h1, fb), (a1, fb), (a1, back), (h1, back)], 0.0, top),
-        ([(h0, bb), (h1, bb), (h1, back), (h0, back)], 0.0, top),
-        ([(h0, fb), (h1, fb), (h1, bb), (h0, bb)], hh, top),
+        ([(h0, fb), (h1, fb), (h1, back), (h0, back)], hc, top),
     ] {
         g.block_ring(&r.map(|(a, b)| uv(a, b)), y0, y1);
     }
@@ -3274,7 +3363,6 @@ fn east_building(g: &mut Geo, m: &Mats) {
     // a sign and five poster panels on its front, red bougainvillea along its top, a terrace canopy, a hut, a screen
     let (pf, ptop) = (fb - 4.3, 8.76f32);
     prism(g, m, &uv, m.sandstone, &[(h1, pf), (56.0, pf), (56.0, fb), (h1, fb)], 0.0, &flat(ptop), false);
-    g.quad(Key::new(Mat::Plain(120), [0.03, 0.07, 0.3]), v3(uv(h1, fb + 0.15) - t * 0.03, 0.73), -n3 * 1.35, Vec3::Y * 1.75);
     g.quad(Key::new(Mat::Plain(150), [0.7, 0.7, 0.68]), v3(uv(8.47, pf) + out * 0.03, 1.19), t3 * 0.58, Vec3::Y * 0.75);
     for k in 0..5 {
         let a = 9.32 + k as f32 * 1.8;
@@ -3314,14 +3402,15 @@ fn east_building(g: &mut Geo, m: &Mats) {
     for k in 0..4 {
         g.quad(dark, v3(uv(16.55 + k as f32 * 1.07, pf + 0.15) + out * 0.02, ptop + 0.87), t3 * 0.82, Vec3::Y * 0.36);
     }
-    // cream concrete bollards along the sidewalk in front
-    let bollard = Key::new(Mat::Plain(175), [0.7, 0.66, 0.56]);
+    // cream concrete bollards 7 m out from the face, 1.8 m apart (close street photo)
+    let bollard = Key::new(Mat::Plain(175), [0.62, 0.57, 0.47]);
     let mut a = -10.0f32;
     while a <= 24.0 {
-        let p = uv(a, pf - 4.7);
-        g.tube(bollard, v3(p, -0.6), v3(p, 0.95), 0.16, 10);
-        g.tube(bollard, v3(p, 0.95), v3(p, 1.02), 0.11, 10);
-        g.block_box(Vec3::new(p.x - 0.16, 0.0, p.y - 0.16), Vec3::X * 0.32, Vec3::Z * 0.32, -0.6, 1.0);
-        a += 2.2;
+        let p = uv(a, fb - 7.0);
+        let y = terr(p);
+        g.tube(bollard, v3(p, y - 0.3), v3(p, y + 1.05), 0.14, 12);
+        g.tube(bollard, v3(p, y + 1.05), v3(p, y + 1.1), 0.1, 12);
+        g.block_box(Vec3::new(p.x - 0.14, 0.0, p.y - 0.14), Vec3::X * 0.28, Vec3::Z * 0.28, y - 0.3, y + 1.1);
+        a += 1.55;
     }
 }

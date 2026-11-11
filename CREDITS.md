@@ -84,3 +84,4 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Geranium Game Asset" by wilsonghm99, CC Attribution, https://sketchfab.com/3d-models/8dd8f987f9d64dc3a6f17d9e880d0563
 - "Agave Sisalana Plant" by Md Mahmudur Rahman Bappy, CC Attribution, https://sketchfab.com/3d-models/cab98668fa5c42aa82b61c104c051b79
 - "NZ Flax" by toAflame, CC Attribution, https://sketchfab.com/3d-models/10ec8061ccc04a9a92760ed1fff3d7eb
+- "Graduate" typeface by Eduardo Tunni and "Montserrat" by Julieta Ulanovsky et al., SIL Open Font License 1.1 (sign lettering rendered by fps proctex), https://fonts.google.com/specimen/Graduate, https://fonts.google.com/specimen/Montserrat

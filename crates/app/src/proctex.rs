@@ -425,9 +425,83 @@ fn cleft() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Lettering for signs, set in real typefaces: each sign is a cutout surface (white, tinted where it is used) whose
+/// text fills a box of the size measured on the building. Fonts (OFL, in data/megascans_inbox/fonts): Graduate for
+/// the athletic slab lettering and numerals, Montserrat SemiBold for the plain sans. `contain`: keep the glyphs'
+/// proportions and centre them in the box (single numerals) instead of filling it.
+fn signs() -> std::io::Result<()> {
+    use resvg::{tiny_skia, usvg};
+    let dir = crate::root().join("data/megascans_inbox/fonts");
+    let mut opt = usvg::Options::default();
+    for f in ["Graduate-Regular.ttf", "Montserrat-SemiBold.ttf"] {
+        opt.fontdb_mut().load_font_file(dir.join(f))?;
+    }
+    let err = |e: String| std::io::Error::other(e);
+    // (id, text, family, extra stroke as a fraction of the font size (bolder), box metres, contain)
+    let mut list: Vec<(String, String, &str, f32, (f32, f32), bool)> = vec![
+        ("sgn_tickets".into(), "TICKETS".into(), "Montserrat", 0.0, (1.73, 0.33), false),
+        ("sgn_ballpark".into(), "BALLPARK".into(), "Graduate", 0.05, (3.4, 0.72), false),
+        ("sgn_will_call".into(), "WILL CALL".into(), "Montserrat", 0.0, (1.5, 0.2), false),
+        ("sgn_atm".into(), "ATM".into(), "Montserrat", 0.02, (0.62, 0.26), false),
+    ];
+    for n in 1..=9 {
+        list.push((format!("sgn_n{n}"), n.to_string(), "Graduate", 0.04, (0.24, 0.26), true));
+    }
+    for (id, text, family, stroke, (wm, hm), contain) in list {
+        let fs = 200.0f32;
+        let (cw, ch) = ((text.len() as f32 * fs * 1.2 + 200.0) as u32, (fs * 2.0) as u32);
+        let svg = format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{cw}" height="{ch}"><text x="100" y="{y}" font-family="{family}" font-weight="{wt}" font-size="{fs}" fill="#fff" stroke="#fff" stroke-width="{sw}" stroke-linejoin="miter">{text}</text></svg>"##,
+            y = fs * 1.4,
+            wt = if family == "Montserrat" { 600 } else { 400 },
+            sw = fs * stroke
+        );
+        let tree = usvg::Tree::from_str(&svg, &opt).map_err(|e| err(e.to_string()))?;
+        let mut pix = tiny_skia::Pixmap::new(cw, ch).ok_or_else(|| err("bad size".into()))?;
+        resvg::render(&tree, tiny_skia::Transform::identity(), &mut pix.as_mut());
+        let a = image::GrayImage::from_fn(cw, ch, |x, y| image::Luma([pix.pixel(x, y).map_or(0, |p| p.alpha())]));
+        // the ink's bounding box
+        let (mut x0, mut y0, mut x1, mut y1) = (cw, ch, 0u32, 0u32);
+        for (x, y, p) in a.enumerate_pixels() {
+            if p[0] > 24 {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+            }
+        }
+        if x1 <= x0 || y1 <= y0 {
+            return Err(err(format!("sign {id}: no ink (font {family} missing?)")));
+        }
+        let ink = image::imageops::crop_imm(&a, x0, y0, x1 - x0, y1 - y0).to_image();
+        // into the box at 512 px per metre of height-normalised resolution
+        let ph = 192u32;
+        let pw = ((ph as f32) * wm / hm).round().max(8.0) as u32;
+        let alpha = if contain {
+            let k = (pw as f32 / ink.width() as f32).min(ph as f32 / ink.height() as f32);
+            let (iw, ih) = (((ink.width() as f32) * k) as u32, ((ink.height() as f32) * k) as u32);
+            let small = image::imageops::resize(&ink, iw.max(1), ih.max(1), image::imageops::FilterType::Lanczos3);
+            let mut canvas = image::GrayImage::new(pw, ph);
+            image::imageops::overlay(&mut canvas, &small, ((pw - iw.min(pw)) / 2) as i64, ((ph - ih.min(ph)) / 2) as i64);
+            canvas
+        } else {
+            image::imageops::resize(&ink, pw, ph, image::imageops::FilterType::Lanczos3)
+        };
+        // a clear margin so the repeat-wrapped texture never bleeds one edge into the other
+        let alpha = {
+            let mut c = image::GrayImage::new(pw + 16, ph + 16);
+            image::imageops::overlay(&mut c, &alpha, 8, 8);
+            c
+        };
+        let (pw, ph) = (pw + 16, ph + 16);
+        let base = image::RgbImage::from_pixel(pw, ph, image::Rgb([255, 255, 255]));
+        write_surface("signs", &id, &[("BaseColor", png_rgb(&base)), ("Opacity", png_gray(&alpha))], (wm, hm), &format!("\"{text}\" set in {family} (OFL) by fps proctex"))?;
+    }
+    println!("signs: lettering surfaces written");
+    Ok(())
+}
+
 pub fn all() -> std::io::Result<()> {
     ashlar()?;
     cleft()?;
+    signs()?;
     flex_duct()?;
     subway()?;
     cowhide()?;
