@@ -187,6 +187,31 @@ impl Geo {
         }
     }
 
+    /// Planar convex polygon with explicit texture coordinates (metres) per point, facing right x up. `turned`: the
+    /// texture is laid upside down (tangent reversed, so its normal map still lights correctly).
+    pub fn poly_mapped(&mut self, k: Key, pts: &[Vec3], uvs: &[[f32; 2]], right: Vec3, up: Vec3, turned: bool) {
+        if pts.len() < 3 {
+            return;
+        }
+        let n = right.cross(up).normalize();
+        let (wn, wt) = (self.wdir(n), self.wdir(if turned { -right } else { right }));
+        let (mut u0, mut v0, mut u1, mut v1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for p in pts {
+            (u0, v0, u1, v1) = (u0.min(p.dot(right)), v0.min(p.dot(up)), u1.max(p.dot(right)), v1.max(p.dot(up)));
+        }
+        let verts: Vec<TexVertex> = pts
+            .iter()
+            .zip(uvs)
+            .map(|(&p, &uv)| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv, tan: [wt.x, wt.y, wt.z, 1.0], edge: [p.dot(right) - u0, p.dot(up) - v0, u1 - u0, v1 - v0] })
+            .collect();
+        let g = self.groups.entry(k).or_default();
+        let base = g.0.len() as u32;
+        g.0.extend(verts);
+        for i in 1..pts.len() as u32 - 1 {
+            g.1.extend([base, base + i, base + i + 1]);
+        }
+    }
+
     /// A quad whose texture coordinates are shifted by `uv` (metres) and turned a quarter `turns` times, so
     /// neighbouring slabs of one material show different parts of the texture.
     pub fn quad_uv(&mut self, k: Key, o: Vec3, r: Vec3, u: Vec3, uv: [f32; 2], turns: u32) {
@@ -415,6 +440,31 @@ impl Geo {
         for i in 0..seg as u32 {
             let (p0, p1, q0, q1) = (base + 2 * i, base + 2 * i + 1, base + 2 * i + 2, base + 2 * i + 3);
             g.1.extend([p0, q0, p1, p1, q0, q1]);
+        }
+    }
+
+    /// A straight member of rectangular section from `a` to `b`: `w` wide across `face` (the plane it is seen in) and
+    /// `d` deep along `face`'s normal `depth`. Flat faces, both ends capped.
+    pub fn member(&mut self, k: Key, a: Vec3, b: Vec3, w: f32, d: f32, depth: Vec3) {
+        let l = (b - a).length();
+        if l < 1e-4 {
+            return;
+        }
+        let ax = (b - a) / l;
+        let mut u = depth - ax * depth.dot(ax);
+        if u.length_squared() < 1e-6 {
+            u = if ax.y.abs() < 0.9 { Vec3::Y.cross(ax) } else { Vec3::X };
+        }
+        let u = u.normalize();
+        let v = ax.cross(u).normalize();
+        for (fnrm, half, other) in [(u, d / 2.0, w / 2.0), (-u, d / 2.0, w / 2.0), (v, w / 2.0, d / 2.0), (-v, w / 2.0, d / 2.0)] {
+            let up = fnrm.cross(ax);
+            let c = fnrm * half;
+            self.poly(k, &[a + c - up * other, b + c - up * other, b + c + up * other, a + c + up * other], ax, up);
+        }
+        for (cn, p) in [(-ax, a), (ax, b)] {
+            let up = cn.cross(u);
+            self.poly(k, &[p - u * (d / 2.0) - up * (w / 2.0), p + u * (d / 2.0) - up * (w / 2.0), p + u * (d / 2.0) + up * (w / 2.0), p - u * (d / 2.0) + up * (w / 2.0)], u, up);
         }
     }
 

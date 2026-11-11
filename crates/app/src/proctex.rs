@@ -278,11 +278,13 @@ fn ashlar() -> std::io::Result<()> {
     let courses = bands(&row_frac, 0.45);
     let mut label = vec![u32::MAX; w * h];
     let mut sizes: Vec<usize> = vec![];
+    let mut rects: Vec<(usize, usize, usize, usize)> = vec![];
     for &(y0, y1) in &courses {
         let inner = (y0 + 4, y1.saturating_sub(4).max(y0 + 5));
         let col_frac: Vec<f32> = (0..w).map(|x| (inner.0..inner.1).filter(|&y| joint[(y % h) * w + x]).count() as f32 / (inner.1 - inner.0) as f32).collect();
         for (x0, x1) in bands(&col_frac, 0.55) {
             let id = sizes.len() as u32;
+            rects.push((x0, y0, x1, y1));
             let mut n = 0;
             for yy in y0..y1 {
                 for xx in x0..x1 {
@@ -344,7 +346,54 @@ fn ashlar() -> std::io::Result<()> {
     });
     let rough_g = image::GrayImage::from_fn(w as u32, h as u32, |x, y| image::Luma([rough.get_pixel(x, y)[0]]));
     println!("ashlar: {} panels from the scan", sizes.iter().filter(|&&n| n >= 3000).count());
-    write_surface("procedural", "pt_ashlar_sandstone", &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nor)), ("Roughness", png_gray(&rough_g))], (3.0, 3.0), "Poly Haven sandstone_blocks_08 (CC0), retinted by fps proctex")
+    write_surface("procedural", "pt_ashlar_sandstone", &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nor)), ("Roughness", png_gray(&rough_g))], (3.0, 3.0), "Poly Haven sandstone_blocks_08 (CC0), retinted by fps proctex")?;
+
+    // the colour-neutral version for panel-by-panel cladding: every panel brought to one sandstone mean (its own
+    // grain, veins and chips kept, its colour cast removed) so a per-panel tint sets its tone; joints a pale
+    // mortar. Plus the panels' windows (metres in the 3 m tile, with half a joint each side) for the cladder.
+    let target = [184.0f32, 148.0, 114.0].map(|c| (c / 255.0).powf(2.2));
+    let mortar = [178.0f32, 170.0, 156.0].map(|c| (c / 255.0).powf(2.2));
+    let n = sizes.len();
+    let mut pm = vec![[0f64; 3]; n];
+    let mut jm = [0f64; 3];
+    let mut jn = 0f64;
+    for (i, p) in diff.pixels().enumerate() {
+        let l = [lin(p[0]) as f64, lin(p[1]) as f64, lin(p[2]) as f64];
+        if label[i] == u32::MAX {
+            for c in 0..3 {
+                jm[c] += l[c];
+            }
+            jn += 1.0;
+        } else {
+            for c in 0..3 {
+                pm[label[i] as usize][c] += l[c];
+            }
+        }
+    }
+    let neutral = image::RgbImage::from_fn(w as u32, h as u32, |x, y| {
+        let i = y as usize * w + x as usize;
+        let p = diff.get_pixel(x, y);
+        let g: [f32; 3] = if label[i] == u32::MAX {
+            [0, 1, 2].map(|c| mortar[c] / (jm[c] / jn.max(1.0)) as f32)
+        } else {
+            let k = label[i] as usize;
+            [0, 1, 2].map(|c| target[c] / (pm[k][c] / sizes[k].max(1) as f64) as f32)
+        };
+        image::Rgb([to8(lin(p[0]) * g[0]), to8(lin(p[1]) * g[1]), to8(lin(p[2]) * g[2])])
+    });
+    write_surface("procedural", "pt_ashlar_neutral", &[("BaseColor", png_rgb(&neutral)), ("Normal", png_rgb(&nor)), ("Roughness", png_gray(&rough_g))], (3.0, 3.0), "Poly Haven sandstone_blocks_08 (CC0), panels neutralised by fps proctex")?;
+    let m_per_px = 3.0 / w as f32;
+    let pad = 5.0;
+    let windows: Vec<[f32; 4]> = rects
+        .iter()
+        .zip(&sizes)
+        .filter(|(_, n)| **n >= 3000)
+        .map(|(&(x0, y0, x1, y1), _)| [(x0 as f32 - pad) * m_per_px, (y0 as f32 - pad) * m_per_px, (x1 as f32 + pad) * m_per_px, (y1 as f32 + pad) * m_per_px])
+        .collect();
+    let path = crate::root().join("data/megascans_inbox/procedural/pt_ashlar_panels.json");
+    std::fs::write(&path, serde_json::to_string(&windows).unwrap())?;
+    println!("ashlar: {} panel windows -> {}", windows.len(), path.display());
+    Ok(())
 }
 
 pub fn all() -> std::io::Result<()> {

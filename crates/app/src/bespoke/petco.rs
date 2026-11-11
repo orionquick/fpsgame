@@ -277,6 +277,19 @@ const UP_Y: f32 = 21.8;
 const CANOPY_DEPTH: f32 = 12.0;
 /// Spacing of the white steel rakers round the back of the bowl.
 const BAY: f32 = 9.5;
+/// The home plate gate's exposed frame (from the photos, scaled by people on its decks and the canopy height): the
+/// frame's plane out from the upper deck's back, its bay, the upper concourse floor, the lettering's top, and the
+/// truss chords (letter truss, roof truss top under the canopy).
+const FRAME_OFF: f32 = 0.85;
+const GZ_BAY: f32 = 13.4;
+const GZ_UPPER_CONCOURSE: f32 = 22.5;
+const GZ_LETTER_TOP: f32 = 36.4;
+/// The underside of the top rows' box edge, over the posts above the letter truss.
+const GZ_BOX_BOTTOM: f32 = 35.0;
+/// How far the top rows overhang the frame on their angled struts, and the upper deck's rake length (front row to
+/// back) behind the home gate, for the raker trusses under it.
+const GZ_OVERHANG: f32 = 0.9;
+const GZ_RAKE: f32 = 21.9;
 const UP_ROWS: f32 = 27.0;
 
 /// The field's boundary (world plan), 2 m out under the stands' front and the wall: the city's ground stops here.
@@ -468,6 +481,16 @@ fn poly_up(g: &mut Geo, k: Key, pts: &[Vec3]) {
     g.poly(k, &v, Vec3::X, Vec3::NEG_Z);
 }
 
+/// Downward-facing flat polygon (any winding).
+fn poly_down(g: &mut Geo, k: Key, pts: &[Vec3]) {
+    let a = (pts[1] - pts[0]).cross(pts[2] - pts[0]);
+    let mut v = pts.to_vec();
+    if a.y > 0.0 {
+        v.reverse();
+    }
+    g.poly(k, &v, Vec3::X, Vec3::Z);
+}
+
 /// Flat fan from the first point (a star-shaped polygon).
 fn fan(g: &mut Geo, k: Key, pts: &[Vec2], y: f32) {
     let c = pts[0];
@@ -614,6 +637,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
     };
     let mut back_arc = 0.0f32;
     let mut gate_line: Vec<(Vec2, Vec2)> = vec![];
+    let mut gz_line: Vec<(Vec2, Vec2)> = vec![];
     let mut prev_col: Option<Vec2> = None;
     for i in 0..st.len() - 1 {
         let (a, b) = (st[i], st[i + 1]);
@@ -720,7 +744,22 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let up_back_b = b.upper + 0.3 + u_rows as f32 * UP_PITCH;
         let up_top = UP_Y + u_rows as f32 * UP_RISE;
         // soffit under the upper deck (from the facia's foot back and up, parallel to the rake)
-        g.poly(m.soffit, &[v(ua, UP_Y - 2.3), v(ub, UP_Y - 2.3), v(at(&b, up_back_b), up_top - 2.3), v(at(&a, up_back_a), up_top - 2.3)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, -0.6, a.n.y).normalize());
+        if home_gate(a.bearing) && home_gate(b.bearing) {
+            let under_rows = Key::new(Mat::Surface("sg0tbcya"), [0.78, 0.78, 0.77]).tile(2.0);
+            // behind the open frame the precast rows show from below as a staircase: each row's underside, and a
+            // step up at its outer edge to the next
+            for j in 0..u_rows {
+                let (n0a, n0b) = (a.upper + 0.3 + j as f32 * UP_PITCH, b.upper + 0.3 + j as f32 * UP_PITCH);
+                let (n1a, n1b) = (n0a + UP_PITCH, n0b + UP_PITCH);
+                let y = UP_Y + j as f32 * UP_RISE - 0.55;
+                poly_down(g, under_rows, &[v(at(&a, n0a), y), v(at(&b, n0b), y), v(at(&b, n1b), y), v(at(&a, n1a), y)]);
+                if j + 1 < u_rows {
+                    g.poly(under_rows, &[v(at(&a, n1a), y), v(at(&b, n1b), y), v(at(&b, n1b), y + UP_RISE), v(at(&a, n1a), y + UP_RISE)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                }
+            }
+        } else {
+            g.poly(m.soffit, &[v(ua, UP_Y - 2.3), v(ub, UP_Y - 2.3), v(at(&b, up_back_b), up_top - 2.3), v(at(&a, up_back_a), up_top - 2.3)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, -0.6, a.n.y).normalize());
+        }
         // back rail and the sandstone back wall down to the ground
         // the back: a stucco parapet band behind the top rows only; below it the white steel frame stands open
         // over sandstone concourse blocks at street level (as in the exterior photos); a doorway where a stair core
@@ -730,65 +769,66 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         // the home plate gate: the frame stands fully exposed, concourse decks stacked behind it
         let gz = home_gate(a.bearing) && home_gate(b.bearing);
         let band_mat = if gz { m.white } else { m.stucco };
+        if gz && std::env::var("FPS_GZ_DEBUG").is_ok() {
+            eprintln!("gz {:.1} t_tread {:.2} up_back {:.1} upper {:.1} t_back {:.1}", a.bearing, t_top - TERR_RISE, up_back_a, a.upper, t_back_a);
+        }
         if gz {
-            gate_line.push((wa + a.n * 0.42, a.n));
-            gate_line.push((wb + b.n * 0.42, b.n));
+            // the letters stand proud of the frame
+            gate_line.push((wa + a.n * (FRAME_OFF + GZ_OVERHANG), a.n));
+            gate_line.push((wb + b.n * (FRAME_OFF + GZ_OVERHANG), b.n));
+            gz_line.push((at(&a, up_back_a + FRAME_OFF), a.n));
+            gz_line.push((at(&b, up_back_b + FRAME_OFF), b.n));
             let t_tread = t_top - TERR_RISE;
-            let levels = [CONCOURSE_Y, 10.4, t_tread + 0.25];
             let edge = 0.35;
-            let (ea, eb2) = (at(&a, up_back_a + edge), at(&b, up_back_b + edge));
             let at_gate_stair = GATES.iter().any(|&gb| (a.bearing - gb).abs() < 2.2);
-            for (li, &y) in levels.iter().enumerate() {
-                // deck from the back of the stands out to the facade
-                let r_in = match li {
-                    0 => a.terrace + 9.0,
-                    _ => t_back_a + 0.3,
-                };
-                let r_in_b = match li {
-                    0 => b.terrace + 9.0,
-                    _ => t_back_b + 0.3,
-                };
-                if !(li == 0 && at_gate_stair) {
-                    let q = [at(&a, r_in), at(&b, r_in_b), eb2, ea];
-                    poly_up(g, m.concrete, &q.map(|p| v(p, y)));
-                    g.poly(m.soffit, &[v(ea, y - 0.35), v(eb2, y - 0.35), v(at(&b, r_in_b), y - 0.35), v(at(&a, r_in), y - 0.35)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, 0.0, a.n.y));
-                    g.block_ring(&q, y - 0.35, y);
-                }
-                // white fascia and the rail along the deck edge
-                g.poly(m.white, &[v(ea, y - 0.9), v(eb2, y - 0.9), v(eb2, y + 0.1), v(ea, y + 0.1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-                // (no rail where a stair core's bridge or landing meets the deck edge)
-                if !cores.iter().any(|c| c.covers((ea + eb2) / 2.0)) {
+            // the upper deck's soffit height at offset r (it rises with the rake from the front to the back)
+            let soffit = |s: &Station, ub: f32, r: f32| (UP_Y - 2.3) + (up_top - UP_Y) * ((r - s.upper) / (ub - s.upper)).clamp(0.0, 1.0);
+            // decks (height, inner offset at a and b, outer offset at a and b, fascia depth): a mezzanine over the
+            // street-level wall, set back; the terrace concourse level with the terrace's top row; the upper
+            // concourse, out from under the low end of the soffit; each out to the frame
+            let mut decks = vec![];
+            if !at_gate_stair {
+                decks.push((CONCOURSE_Y, a.terrace + 9.0, b.terrace + 9.0, up_back_a - 4.0, up_back_b - 4.0, 0.45));
+            }
+            decks.push((t_tread + 0.25, t_back_a + 0.3, t_back_b + 0.3, up_back_a + edge, up_back_b + edge, 1.35));
+            let (ri_a, ri_b) = (a.upper + 0.36 * (up_back_a - a.upper), b.upper + 0.36 * (up_back_b - b.upper));
+            decks.push((GZ_UPPER_CONCOURSE, ri_a, ri_b, up_back_a + edge, up_back_b + edge, 1.4));
+            for &(y, ra_in, rb_in, ra_out, rb_out, fascia) in &decks {
+                let (ia, ib, oa, ob) = (at(&a, ra_in), at(&b, rb_in), at(&a, ra_out), at(&b, rb_out));
+                let q = [ia, ib, ob, oa];
+                poly_up(g, m.concrete, &q.map(|p| v(p, y)));
+                g.poly(m.soffit, &[v(oa, y - 0.35), v(ob, y - 0.35), v(ib, y - 0.35), v(ia, y - 0.35)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, 0.0, a.n.y));
+                g.block_ring(&q, y - 0.35, y);
+                // white fascia, and the rail along the deck edge (none where a stair core's bridge meets it)
+                g.poly(m.white, &[v(oa, y - fascia), v(ob, y - fascia), v(ob, y + 0.1), v(oa, y + 0.1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                if !cores.iter().any(|c| c.covers((oa + ob) / 2.0)) && !point_in(&bridge_ring(), (oa + ob) / 2.0) {
                     for hh in [0.5, 1.05] {
-                        g.tube(m.rail, v(ea, y + hh), v(eb2, y + hh), 0.025, 5);
+                        g.tube(m.rail, v(oa, y + hh), v(ob, y + hh), 0.025, 5);
                     }
-                    g.block_ring(&[ea, eb2, eb2 + b.n * 0.1, ea + a.n * 0.1], y, y + 1.05);
+                    g.block_ring(&[oa, ob, ob + b.n * 0.1, oa + a.n * 0.1], y, y + 1.05);
                 }
-                // a shallow white truss under the deck edge: bottom chord and V diagonals every ~1.7 m
-                if li > 0 {
-                    let (c0, c1) = (y - 0.9, y - 2.4);
-                    g.tube(m.white, v(ea, c1), v(eb2, c1), 0.1, 5);
-                    let len = (eb2 - ea).length();
-                    let nd = (len / 1.7).round().max(1.0) as i32;
-                    for d in 0..nd {
-                        let (f0, fm, f1) = (d as f32 / nd as f32, (d as f32 + 0.5) / nd as f32, (d + 1) as f32 / nd as f32);
-                        g.tube(m.white, v(ea.lerp(eb2, f0), c0), v(ea.lerp(eb2, fm), c1), 0.07, 4);
-                        g.tube(m.white, v(ea.lerp(eb2, fm), c1), v(ea.lerp(eb2, f1), c0), 0.07, 4);
-                    }
-                }
-                // the concourse's back wall behind each deck (pale plaster, lit)
-                let top_y = if li + 1 < levels.len() { levels[li + 1] - 0.35 } else { t_top - 0.1 };
-                if top_y > y + 0.5 {
-                    let (pa, pb) = (at(&a, r_in), at(&b, r_in_b));
-                    g.poly(m.interior, &[v(pa, y), v(pb, y), v(pb, top_y), v(pa, top_y)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                // the concourse's back wall (pale plaster, lit) up to the soffit or the deck above
+                let above = decks.iter().map(|d| d.0).filter(|&d| d > y + 0.5).fold(f32::MAX, f32::min);
+                let top_y = (soffit(&a, up_back_a, ra_in) - 0.05).min(above - 0.35);
+                if top_y > y + 0.5 && top_y < 60.0 {
+                    g.poly(m.interior, &[v(ia, y), v(ib, y), v(ib, top_y), v(ia, top_y)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
                     if i % 4 == 0 {
-                        g.light(v(pa.lerp(ea, 0.5), top_y - 0.4), 7.0, [1.1, 1.0, 0.85]);
+                        g.light(v(ia.lerp(oa, 0.5), top_y - 0.4), 7.0, [1.1, 1.0, 0.85]);
                     }
                 }
             }
+            // the top row's walk out to the frame: a strip, the white fascia under it, and the rail behind the letters
+            let top_row = UP_Y + (UP_ROWS - 1.0) * UP_RISE;
+            let (ba, bb, oa, ob) = (at(&a, up_back_a), at(&b, up_back_b), at(&a, up_back_a + edge), at(&b, up_back_b + edge));
+            poly_up(g, m.concrete, &[v(ba, top_row), v(bb, top_row), v(ob, top_row), v(oa, top_row)]);
+            g.poly(m.white, &[v(oa, GZ_BOX_BOTTOM), v(ob, GZ_BOX_BOTTOM), v(ob, top_row + 0.1), v(oa, top_row + 0.1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
         }
         let (ra, rb) = (at(&a, up_back_a), at(&b, up_back_b));
         let (wa1, wb1) = (wa + a.n * 0.4, wb + b.n * 0.4);
         for (f0, f1, door) in runs(|f| cores.iter().any(|c| c.door(wa.lerp(wb, f), c.top_side))) {
+            if gz {
+                break;
+            }
             let (p0, p1) = (wa.lerp(wb, f0), wa.lerp(wb, f1));
             let (q0, q1) = (wa1.lerp(wb1, f0), wa1.lerp(wb1, f1));
             let h = if door { up_top - 0.5 } else { up_top + 1.4 };
@@ -815,43 +855,29 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                 prev_col = None;
                 continue;
             }
-            g.tube(m.steel, v(uc, UP_Y - 3.0), v(back_c, up_top - 3.0), 0.28, 6);
+            if !gz {
+                g.member(m.steel, v(uc, UP_Y - 3.0), v(back_c, up_top - 3.0), 0.5, 0.45, Vec3::new(eb.x, 0.0, eb.y));
+            }
             if gz {
-                // tree column: a white post up the facade, branching into a V at every deck, widest in the tall bay
-                // under the top girder
-                let wc = wc + nc * 0.3;
-                let t_tread = t_top - TERR_RISE;
-                let lv = [0.0, CONCOURSE_Y, 10.4, t_tread + 0.25, band];
-                for w in lv.windows(2) {
-                    let (y0, y1) = (w[0] - if w[0] > 0.0 { 0.9 } else { 0.0 }, w[1] - 0.9);
-                    let spread = if w[1] == band { 0.46 } else { 0.3 };
-                    let r = if w[1] == band { 0.36 } else { 0.28 };
-                    g.tube(m.white, v(wc, y0), v(wc, y1), r, 8);
-                    if w[0] > 0.0 {
-                        for sgn in [-1.0f32, 1.0] {
-                            g.tube(m.white, v(wc, y0 + 0.4), v(wc + eb * (sgn * spread * BAY), y1), r * 0.8, 6);
-                        }
-                    }
-                }
-                g.block_ring(&[wc - eb * 0.35 - nc * 0.35, wc + eb * 0.35 - nc * 0.35, wc + eb * 0.35 + nc * 0.35, wc - eb * 0.35 + nc * 0.35], 0.0, band);
                 prev_col = Some(wc);
                 continue;
             }
-            g.tube(m.steel, v(wc, 0.0), v(wc, band), 0.32, 8);
-            g.tube(m.steel, v(wc, band * 0.45), v(terr_c, t_top - 0.5), 0.18, 6);
+            let nv = Vec3::new(nc.x, 0.0, nc.y);
+            g.member(m.steel, v(wc, 0.0), v(wc, band), 0.6, 0.6, nv);
+            g.member(m.steel, v(wc, band * 0.45), v(terr_c, t_top - 0.5), 0.35, 0.35, Vec3::new(eb.x, 0.0, eb.y));
             g.block_ring(&[wc - eb * 0.35 - nc * 0.35, wc + eb * 0.35 - nc * 0.35, wc + eb * 0.35 + nc * 0.35, wc - eb * 0.35 + nc * 0.35], 0.0, band);
             if let Some(pc) = prev_col {
                 let mid = (pc + wc) / 2.0;
                 let lo = 14.0;
-                g.tube(m.steel, v(pc, lo), v(mid, band - 1.2), 0.11, 4);
-                g.tube(m.steel, v(wc, lo), v(mid, band - 1.2), 0.11, 4);
-                g.tube(m.steel, v(pc, (lo + band) / 2.0), v(wc, (lo + band) / 2.0), 0.13, 4);
+                g.member(m.steel, v(pc, lo), v(mid, band - 1.2), 0.24, 0.24, nv);
+                g.member(m.steel, v(wc, lo), v(mid, band - 1.2), 0.24, 0.24, nv);
+                g.member(m.steel, v(pc, (lo + band) / 2.0), v(wc, (lo + band) / 2.0), 0.28, 0.28, nv);
             }
             prev_col = Some(wc);
         }
         back_arc += seg;
         // a white horizontal girder along the back at the upper concourse level
-        g.poly(m.steel, &[v(wa, band - 1.2), v(wb, band - 1.2), v(wb, band), v(wa, band)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+        if !gz { g.poly(m.steel, &[v(wa, band - 1.2), v(wb, band - 1.2), v(wb, band), v(wa, band)], Vec3::new(e.x, 0.0, e.y), Vec3::Y); }
         // sandstone concourse blocks at street level, stepping in height along the bowl
         let blk = 9.0 + 5.0 * (((arc[i] / 23.0).floor() as i32).rem_euclid(3) as f32);
         let (ga, gb) = (at(&a, up_back_a - 6.0), at(&b, up_back_b - 6.0));
@@ -864,7 +890,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                     continue;
                 }
                 let (pa, pb, qa, qb) = (oa.lerp(ob, f0), oa.lerp(ob, f1), ga.lerp(gb, f0), ga.lerp(gb, f1));
-                g.poly(m.sandstone, &[v(pa, 0.0), v(pb, 0.0), v(pb, blk), v(pa, blk)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                wall_poly(g, m.sandstone, &[v(pa, 0.0), v(pb, 0.0), v(pb, blk), v(pa, blk)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
                 poly_up(g, m.concrete, &[v(qa, blk), v(qb, blk), v(pb, blk), v(pa, blk)]);
                 g.block_ring(&[qa, qb, pb, pa], 0.0, blk);
             }
@@ -874,10 +900,10 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         } else if gz {
             // under the decks at the home plate gate: an open arcade, a sandstone wall set well back
             let (pa, pb) = (at(&a, up_back_a - 4.0), at(&b, up_back_b - 4.0));
-            g.poly(m.sandstone, &[v(pa, 0.0), v(pb, 0.0), v(pb, CONCOURSE_Y - 0.35), v(pa, CONCOURSE_Y - 0.35)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            wall_poly(g, m.sandstone, &[v(pa, 0.0), v(pb, 0.0), v(pb, CONCOURSE_Y - 0.35), v(pa, CONCOURSE_Y - 0.35)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             g.block_ring(&[ga, gb, pb, pa], 0.0, CONCOURSE_Y - 0.35);
         } else {
-            g.poly(m.sandstone, &[v(oa, 0.0), v(ob, 0.0), v(ob, blk), v(oa, blk)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            wall_poly(g, m.sandstone, &[v(oa, 0.0), v(ob, 0.0), v(ob, blk), v(oa, blk)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             poly_up(g, m.concrete, &[v(ga, blk), v(gb, blk), v(ob, blk), v(oa, blk)]);
             g.block_ring(&[ga, gb, ob, oa], 0.0, blk);
         }
@@ -898,14 +924,16 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         }
     }
     home_gate_front(g, m, &gate_line);
+    gate_frame(g, m, &gz_line, cores);
+    footbridge(g, m, &gz_line);
     home_towers(g, m);
     // end walls closing the bowl at both foul poles
     for s in [st[0], st[st.len() - 1]] {
         let e = s.n.perp();
         let pts = [s.p + s.n * s.front, s.p + s.n * (s.upper + 0.3 + UP_ROWS * UP_PITCH + 0.6)];
         let top = UP_Y + UP_ROWS * UP_RISE + 1.4;
-        g.poly(m.sandstone, &[v(pts[0], 0.0), v(pts[1], 0.0), v(pts[1], top), v(pts[0], top * 0.25)], Vec3::new(s.n.x, 0.0, s.n.y), Vec3::Y);
-        g.poly(m.sandstone, &[v(pts[1], 0.0), v(pts[0], 0.0), v(pts[0], top * 0.25), v(pts[1], top)], Vec3::new(-s.n.x, 0.0, -s.n.y), Vec3::Y);
+        wall_poly(g, m.sandstone, &[v(pts[0], 0.0), v(pts[1], 0.0), v(pts[1], top), v(pts[0], top * 0.25)], Vec3::new(s.n.x, 0.0, s.n.y), Vec3::Y);
+        wall_poly(g, m.sandstone, &[v(pts[1], 0.0), v(pts[0], 0.0), v(pts[0], top * 0.25), v(pts[1], top)], Vec3::new(-s.n.x, 0.0, -s.n.y), Vec3::Y);
         let _ = e;
         let _ = front;
     }
@@ -1007,7 +1035,7 @@ fn tier(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], n0: f32, n1: f
         if facia_from > 1.0 {
             g.poly(m.stucco, &[v(fa, facia_from), v(fb, facia_from), v(bb, y1 - 1.5), v(ba, y1 - 1.5)], ev, Vec3::new(a.n.x, 0.0, a.n.y));
         }
-        g.poly(m.sandstone, &[v(ba, 0.0), v(bb, 0.0), v(bb, y1 + 1.4), v(ba, y1 + 1.4)], ev, Vec3::Y);
+        wall_poly(g, m.sandstone, &[v(ba, 0.0), v(bb, 0.0), v(bb, y1 + 1.4), v(ba, y1 + 1.4)], ev, Vec3::Y);
         g.poly(m.stucco, &[v(bb, 0.0), v(ba, 0.0), v(ba, y1 + 1.4), v(bb, y1 + 1.4)], -ev, Vec3::Y);
         g.block_ring(&[ba, bb, bb + b.n * 0.4, ba + a.n * 0.4], 0.0, y1 + 1.4);
     }
@@ -1037,7 +1065,7 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
         poly_up(g, m.grass, &[v(a.p + a.n * 0.45, 0.01), v(b.p + b.n * 0.45, 0.01), v(b.p + b.n * 18.0, 0.01), v(a.p + a.n * 18.0, 0.01)]);
         // retaining wall up to the terrace at the back
         let e = (b.p - a.p).normalize();
-        g.poly(m.sandstone, &[v(a.p + a.n * 18.0, 0.0), v(b.p + b.n * 18.0, 0.0), v(b.p + b.n * 18.0, 3.5), v(a.p + a.n * 18.0, 3.5)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+        wall_poly(g, m.sandstone, &[v(a.p + a.n * 18.0, 0.0), v(b.p + b.n * 18.0, 0.0), v(b.p + b.n * 18.0, 3.5), v(a.p + a.n * 18.0, 3.5)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
     }
     for (bb, k) in [(-13.0f32, 0), (-8.0, 1)] {
         let p = dir(bb) * (interp(&WALL, bb) + 9.0);
@@ -1052,7 +1080,7 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
         let n0 = if a.bearing < 6.0 { 6.0 } else { 13.0 };
         poly_up(g, m.grass_dark, &[v(a.p + a.n * n0, 3.5), v(b.p + b.n * n0, 3.5), v(b.p + b.n * 45.0, 3.5), v(a.p + a.n * 45.0, 3.5)]);
         let e = (b.p - a.p).normalize();
-        g.poly(m.sandstone, &[v(b.p + b.n * n0, 0.0), v(a.p + a.n * n0, 0.0), v(a.p + a.n * n0, 3.5), v(b.p + b.n * n0, 3.5)], -Vec3::new(e.x, 0.0, e.y) * -1.0, Vec3::Y);
+        wall_poly(g, m.sandstone, &[v(b.p + b.n * n0, 0.0), v(a.p + a.n * n0, 0.0), v(a.p + a.n * n0, 3.5), v(b.p + b.n * n0, 3.5)], -Vec3::new(e.x, 0.0, e.y) * -1.0, Vec3::Y);
         poly_up(g, m.grass_dark, &[v(a.p + a.n * 0.45, 0.01), v(b.p + b.n * 0.45, 0.01), v(b.p + b.n * n0, 0.01), v(a.p + a.n * n0, 0.01)]);
         g.block_ring(&[a.p + a.n * n0, b.p + b.n * n0, b.p + b.n * 45.0, a.p + a.n * 45.0], 0.0, 3.5);
     }
@@ -1509,8 +1537,8 @@ fn walled(g: &mut Geo, k: Key, a: Vec2, b: Vec2, y0: f32, y1: f32, doors: &[((f3
             if s1 - s0 < 0.05 {
                 continue;
             }
-            g.poly(k, &[v(p0, s0), v(p1, s0), v(p1, s1), v(p0, s1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-            g.poly(k, &[v(p1 + out * 0.3, s0), v(p0 + out * 0.3, s0), v(p0 + out * 0.3, s1), v(p1 + out * 0.3, s1)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            wall_poly(g, k, &[v(p0, s0), v(p1, s0), v(p1, s1), v(p0, s1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            wall_poly(g, k, &[v(p1 + out * 0.3, s0), v(p0 + out * 0.3, s0), v(p0 + out * 0.3, s1), v(p1 + out * 0.3, s1)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             g.block_ring(&[p0, p1, p1 + out * 0.3, p0 + out * 0.3], s0, s1);
         }
     }
@@ -1535,7 +1563,8 @@ fn runs(hole: impl Fn(f32) -> bool) -> Vec<(f32, f32, bool)> {
 
 /// The bearings (from home) where the frame stands exposed behind home plate.
 fn home_gate(b: f32) -> bool {
-    (b - 180.0).abs() < 32.0
+    // from the tower's side round to where the east building stands in front of the bowl (photos)
+    (134.0..212.0).contains(&b)
 }
 
 /// The home plate gate's street face: lettering on the white top band. `line` is the outer face of the top band (point, outward normal) station by station.
@@ -1566,8 +1595,7 @@ fn home_gate_front(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)]) {
         (p, n, e)
     };
     // the top band's y: the upper deck's back row height, the band spanning up_top-3 .. up_top+1.4
-    let up_top = UP_Y + UP_ROWS * UP_RISE;
-    let px = 0.5;
+    let px = 0.43;
     let text = "BALLPARK";
     let glyph = |c: char| -> [&'static str; 7] {
         match c {
@@ -1589,7 +1617,7 @@ fn home_gate_front(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)]) {
         (ba - 167.0).abs().total_cmp(&(bb - 167.0).abs())
     }).unwrap_or(total / 2.0);
     let u0 = centre - width / 2.0;
-    let top = up_top + 1.2;
+    let top = GZ_LETTER_TOP;
     for (ci, ch) in text.chars().enumerate() {
         for (r, row) in glyph(ch).iter().enumerate() {
             let b = row.as_bytes();
@@ -1609,23 +1637,30 @@ fn home_gate_front(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)]) {
                 let (pb, nb, _) = place(ub);
                 let yb = top - (r + 1) as f32 * px;
                 let e = (pb - pa).normalize();
-                // white outline behind, red face in front
-                let (wa, wb) = (pa - e * 0.09 + na * 0.12, pb + e * 0.09 + nb * 0.12);
-                g.poly(m.white, &[v(wa, yb - 0.09), v(wb, yb - 0.09), v(wb, yb + px + 0.09), v(wa, yb + px + 0.09)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                // red outline (the letters' returns) behind, white face in front, as on the building
+                let (wa, wb) = (pa - e * 0.1 + na * 0.12, pb + e * 0.1 + nb * 0.12);
+                g.poly(m.letters, &[v(wa, yb - 0.1), v(wb, yb - 0.1), v(wb, yb + px + 0.1), v(wa, yb + px + 0.1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
                 let (ra, rb) = (pa + na * 0.2, pb + nb * 0.2);
-                g.poly(m.letters, &[v(ra, yb), v(rb, yb), v(rb, yb + px), v(ra, yb + px)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                g.poly(m.white, &[v(ra, yb), v(rb, yb), v(rb, yb + px), v(ra, yb + px)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             }
         }
     }
 }
 
-/// The sandstone link building that stands against the frame behind home (west of the gate), world plan from the
-/// lidar: 8 m wide, from the bowl's back out to the tower.
-fn link_ring() -> Vec<Vec2> {
-    let (a, b) = (Vec2::new(-3.0, 74.0) - HOME, Vec2::new(-10.0, 105.0) - HOME);
-    let e = (b - a).normalize();
-    let n = Vec2::new(-e.y, e.x) * 4.0;
-    vec![a - n, b - n, b + n, a + n]
+/// The footbridge from the terrace concourse out to the tower (satellite): its tower end on the tower's north face,
+/// and a point toward the bowl along its axis (world); it starts where the axis crosses the frame.
+const BRIDGE_TOWER: (f32, f32) = (-11.5, 104.0);
+const BRIDGE_BOWL: (f32, f32) = (1.9, 73.4);
+const BRIDGE_W: f32 = 4.4;
+
+/// The bridge's plan (local), from well inside the frame out to the tower: what the frame, rails and paving keep
+/// clear of.
+fn bridge_ring() -> Vec<Vec2> {
+    let (t, b) = (Vec2::new(BRIDGE_TOWER.0, BRIDGE_TOWER.1) - HOME, Vec2::new(BRIDGE_BOWL.0, BRIDGE_BOWL.1) - HOME);
+    let e = (b - t).normalize();
+    let n = e.perp() * (BRIDGE_W / 2.0 + 0.3);
+    let a = b + e * 4.0;
+    vec![t - n, a - n, a + n, t + n]
 }
 
 /// The tall tower at the link's far end (42 m with its mesh lantern), world plan from the lidar.
@@ -1656,7 +1691,7 @@ fn home_towers(g: &mut Geo, m: &Mats) {
             if out.dot((a + b) / 2.0 - c) < 0.0 {
                 out = -out;
             }
-            g.poly(m.sandstone, &[v(a, 0.0), v(b, 0.0), v(b, h), v(a, h)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            wall_poly(g, m.sandstone, &[v(a, 0.0), v(b, 0.0), v(b, h), v(a, h)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             // parapet cap
             g.quad(m.concrete, v(a + out * 0.05, h), Vec3::new(b.x - a.x, 0.0, b.y - a.y), Vec3::new(-out.x, 0.0, -out.y) * 0.4);
             for &(side, at) in slots {
@@ -1680,7 +1715,6 @@ fn home_towers(g: &mut Geo, m: &Mats) {
         poly_up(g, m.concrete, &pts.iter().map(|&p| v(p, h - 0.4)).collect::<Vec<_>>());
         g.block_ring(&pts, 0.0, h);
     };
-    clad(g, &link_ring(), 24.0, &[(0, 0.3), (0, 0.72), (1, 0.5), (2, 0.3), (2, 0.72)]);
     let tr = tower_ring();
     clad(g, &tr, 35.0, &[(0, 0.5), (1, 0.5), (2, 0.5), (3, 0.5)]);
     // the lantern: a dark steel mesh cage on top of the tower
@@ -1801,7 +1835,6 @@ fn home_plaza(g: &mut Geo, f: &mut Furnisher, m: &Mats, city: &city::City, st: &
         let face = if home_gate(s.bearing) { up_back - 4.0 } else { up_back + 4.2 };
         (p - s.p).dot(s.n) > face + 0.05
     };
-    let link = link_ring();
     let tower = tower_ring();
     let beds: Vec<Vec<Vec2>> = (0..PLAZA_ROWS.len()).map(|i| {
         let (a, b, z0, z1) = plaza_row(i);
@@ -1823,7 +1856,7 @@ fn home_plaza(g: &mut Geo, f: &mut Furnisher, m: &Mats, city: &city::City, st: &
                 continue;
             }
             let (rd, rh) = road_d(c);
-            if rd < rh + 0.35 || !outside_bowl(c) || point_in(&link, c) || point_in(&tower, c) || beds.iter().any(|r| point_in(r, c)) {
+            if rd < rh + 0.35 || !outside_bowl(c) || point_in(&tower, c) || beds.iter().any(|r| point_in(r, c)) {
                 continue;
             }
             if others.iter().any(|r| point_in(r, c)) {
@@ -2035,4 +2068,448 @@ fn fence_run(g: &mut Geo, galv: Key, curb: Key, a: Vec2, b: Vec2, open: Option<(
             g.cuboid(galv, Vec3::new(pc.x - 0.065, y, pc.y - 0.065), Vec3::new(pc.x + 0.065, y + 3.25, pc.y + 0.065));
         }
     }
+}
+
+// ---------------------------------------------------------------- sandstone cladding
+
+/// Panel tones of the cladding, measured on the tower in the photos: k-means of panel colours relative to the wall's
+/// mean (linear), with how often each occurs. The photo is hazy, so `wall_poly` widens the hue spread a little.
+const ASHLAR_TONES: [([f32; 3], u32); 7] = [
+    ([0.935, 0.897, 0.867], 119),
+    ([1.054, 1.044, 0.984], 114),
+    ([1.145, 1.197, 1.130], 86),
+    ([1.041, 1.070, 1.150], 81),
+    ([0.825, 0.758, 0.741], 79),
+    ([0.925, 0.933, 1.052], 77),
+    ([1.187, 1.276, 1.323], 41),
+];
+/// Cladding courses, as on the building (and in the scan).
+const COURSE: f32 = 0.6;
+
+/// The scanned panels' windows in the colour-neutral sandstone (metres in its 3 m tile), written by `fps proctex`.
+/// Slivers the scan's joints split off are left out.
+fn ashlar_windows() -> &'static [[f32; 4]] {
+    static W: std::sync::OnceLock<Vec<[f32; 4]>> = std::sync::OnceLock::new();
+    W.get_or_init(|| {
+        std::fs::read_to_string(crate::root().join("data/megascans_inbox/procedural/pt_ashlar_panels.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<[f32; 4]>>(&s).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|w| w[2] - w[0] > 0.5)
+            .collect()
+    })
+}
+
+fn mix(a: u64, b: u64, c: u64) -> u64 {
+    let mut x = a.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ b.wrapping_mul(0xC2B2_AE3D_27D4_EB4F) ^ c.wrapping_mul(0x1656_67B1_9E37_79F9);
+    x ^= x >> 31;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^ (x >> 29)
+}
+
+/// A wall face. Sandstone is clad panel by panel instead of tiling one texture: 0.6 m courses on a grid shared by
+/// every wall, running-bond joints jittered course by course, each panel showing one whole scanned stone (its own
+/// grain, chips, normals and roughness; sometimes turned over) with its own tone and roughness. Anything else, or
+/// a face that is not upright, is a plain polygon.
+fn wall_poly(g: &mut Geo, k: Key, pts: &[Vec3], right: Vec3, up: Vec3) {
+    let win = ashlar_windows();
+    if k != mats().sandstone || win.is_empty() || up.y < 0.99 || right.y.abs() > 0.01 {
+        g.poly(k, pts, right, up);
+        return;
+    }
+    let right = Vec3::new(right.x, 0.0, right.z).normalize();
+    let n = right.cross(Vec3::Y);
+    let d = pts.iter().map(|p| p.dot(n)).sum::<f32>() / pts.len() as f32;
+    let q: Vec<Vec2> = pts.iter().map(|p| Vec2::new(p.dot(right), p.y)).collect();
+    let area: f32 = (0..q.len()).map(|i| q[i].perp_dot(q[(i + 1) % q.len()])).sum();
+    let ccw = area > 0.0;
+    let (umin, umax) = q.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)));
+    let (ymin, ymax) = q.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+    // one bond per wall plane
+    let seed = mix((right.x * 997.0).round() as i64 as u64, (right.z * 997.0).round() as i64 as u64, (d * 7.0).round() as i64 as u64);
+    let rnd = |a: i64, b: i64, c: u64| (mix(seed, a as u64, b as u64 ^ c) % 100_000) as f32 / 100_000.0;
+    let total: u32 = ASHLAR_TONES.iter().map(|t| t.1).sum();
+    let cell = 1.45;
+    for kc in (ymin / COURSE).floor() as i64..=(ymax / COURSE).floor() as i64 {
+        let (c0, c1) = (kc as f32 * COURSE, (kc + 1) as f32 * COURSE);
+        if c1 <= ymin + 1e-3 || c0 >= ymax - 1e-3 {
+            continue;
+        }
+        let off = rnd(kc, -1, 1) * cell;
+        let edge = |j: i64| off + j as f32 * cell + (rnd(kc, j, 2) - 0.5) * 0.6;
+        let (j0, j1) = (((umin - off) / cell).floor() as i64 - 1, ((umax - off) / cell).ceil() as i64 + 1);
+        for j in j0..j1 {
+            let (a, b) = (edge(j), edge(j + 1));
+            if b <= umin || a >= umax {
+                continue;
+            }
+            // the panel's rectangle clipped to the face
+            let mut poly = vec![Vec2::new(a, c0), Vec2::new(b, c0), Vec2::new(b, c1), Vec2::new(a, c1)];
+            for i in 0..q.len() {
+                let (e0, e1) = if ccw { (q[i], q[(i + 1) % q.len()]) } else { (q[(i + 1) % q.len()], q[i]) };
+                let inside = |p: Vec2| (e1 - e0).perp_dot(p - e0) >= -1e-5;
+                let mut out = vec![];
+                for m in 0..poly.len() {
+                    let (p0, p1) = (poly[m], poly[(m + 1) % poly.len()]);
+                    let (i0, i1) = (inside(p0), inside(p1));
+                    if i0 {
+                        out.push(p0);
+                    }
+                    if i0 != i1 {
+                        let (s0, s1) = ((e1 - e0).perp_dot(p0 - e0), (e1 - e0).perp_dot(p1 - e0));
+                        out.push(p0 + (p1 - p0) * (s0 / (s0 - s1)));
+                    }
+                }
+                poly = out;
+                if poly.len() < 3 {
+                    break;
+                }
+            }
+            if poly.len() < 3 {
+                continue;
+            }
+            // a scanned stone of about the panel's proportions, a tone, sometimes turned over
+            let h = mix(seed, kc as u64, j as u64);
+            let want = (b - a) / COURSE;
+            let w = (0..3u64)
+                .map(|t| win[(mix(h, t, 7) % win.len() as u64) as usize])
+                .min_by(|x, y| (((x[2] - x[0]) / (x[3] - x[1])) - want).abs().total_cmp(&(((y[2] - y[0]) / (y[3] - y[1])) - want).abs()))
+                .unwrap();
+            let turned = h & 1 == 1;
+            let mut pick = (mix(h, 11, 13) % total as u64) as u32;
+            let mut ti = 0;
+            for (i, t) in ASHLAR_TONES.iter().enumerate() {
+                if pick < t.1 {
+                    ti = i;
+                    break;
+                }
+                pick -= t.1;
+            }
+            let t = ASHLAR_TONES[ti].0;
+            let l = (t[0] + t[1] + t[2]) / 3.0;
+            // weathering: the bottom course a little darker
+            let dim = if kc == 0 { 0.88 } else { 1.0 };
+            // hue spread widened against the photo's haze, brightness spread kept and pushed a little further
+            let tint = t.map(|c| (l + (c - l) * 1.4) * (1.0 + (l - 1.0) * 0.4) * dim);
+            // sawn sandstone is matte: rougher than the scan's average, each tone a touch different
+            let key = Key::new(Mat::Surface("pt_ashlar_neutral"), tint).tile(3.0).rough(1.3 + 0.04 * ti as f32);
+            let uvs: Vec<[f32; 2]> = poly
+                .iter()
+                .map(|p| {
+                    let (mut s, mut tt) = ((p.x - a) / (b - a), (p.y - c0) / (c1 - c0));
+                    if turned {
+                        s = 1.0 - s;
+                        tt = 1.0 - tt;
+                    }
+                    [w[0] + s * (w[2] - w[0]), w[3] - tt * (w[3] - w[1])]
+                })
+                .collect();
+            let p3: Vec<Vec3> = poly.iter().map(|p| right * p.x + Vec3::Y * p.y + n * d).collect();
+            if ccw {
+                g.poly_mapped(key, &p3, &uvs, right, Vec3::Y, turned);
+            } else {
+                let (r3, ruv): (Vec<Vec3>, Vec<[f32; 2]>) = (p3.iter().rev().copied().collect(), uvs.iter().rev().copied().collect());
+                g.poly_mapped(key, &r3, &ruv, right, Vec3::Y, turned);
+            }
+        }
+    }
+}
+
+/// The home plate gate's exposed white steel frame, member for member as in the photos. Square columns a bay apart
+/// (one between the words of the lettering). At every level a V springs from each column's foot up to the truss
+/// under the deck above. Six-panel trusses run under each deck, behind the lettering and under the roof, their
+/// diagonals leaning in to the bay's middle (/ / / \ \ \), with verticals between; a shallow zig-zag runs under the
+/// letter truss. All members are rectangular sections. `line`: the frame's plane, (point, outward normal) by station.
+fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
+    let mut pts: Vec<(Vec2, Vec2)> = vec![];
+    for &q in line {
+        if pts.last().map_or(true, |l: &(Vec2, Vec2)| (q.0 - l.0).length() > 0.05) {
+            pts.push(q);
+        }
+    }
+    if pts.len() < 2 {
+        return;
+    }
+    let mut s = vec![0.0f32];
+    for w in pts.windows(2) {
+        s.push(s.last().unwrap() + (w[1].0 - w[0].0).length());
+    }
+    let total = *s.last().unwrap();
+    let place = |u: f32| -> (Vec2, Vec2) {
+        let i = s.partition_point(|&x| x < u).clamp(1, s.len() - 1);
+        let f = ((u - s[i - 1]) / (s[i] - s[i - 1]).max(1e-4)).clamp(0.0, 1.0);
+        (pts[i - 1].0.lerp(pts[i].0, f), pts[i - 1].1.lerp(pts[i].1, f).normalize())
+    };
+    let bearing = |p: Vec2| p.x.atan2(-p.y).to_degrees().rem_euclid(360.0);
+    // a column at the lettering's centre, then every bay either way
+    let centre = (0..=400).map(|k| total * k as f32 / 400.0).min_by(|&a, &b| (bearing(place(a).0) - 167.0).abs().total_cmp(&(bearing(place(b).0) - 167.0).abs())).unwrap();
+    let mut cols: Vec<f32> = vec![];
+    let mut u = centre - (centre / GZ_BAY).floor() * GZ_BAY;
+    while u <= total + 1e-3 {
+        cols.push(u);
+        u += GZ_BAY;
+    }
+    // the ends of the run take a column too, so the frame closes there
+    if cols.first().map_or(true, |&c| c > 2.0) {
+        cols.insert(0, 0.0);
+    }
+    if cols.last().map_or(true, |&c| c < total - 2.0) {
+        cols.push(total);
+    }
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let k = m.white;
+    let blocked = |p: Vec2| cores.iter().any(|c| c.covers(p));
+    let d1 = TERR_Y + 9.0 * TERR_RISE + 0.25;
+    let top_row = UP_Y + (UP_ROWS - 1.0) * UP_RISE;
+    let roof = 39.2;
+    // truss bands (bottom chord, top chord, diagonal pattern: true = six panels leaning in with verticals, false = a
+    // twelve-panel zig-zag) and V levels (foot, head, reach of each arm as a fraction of the bay)
+    let bands = [(13.0, d1 - 1.35, true), (18.9, GZ_UPPER_CONCOURSE - 1.4, true), (31.5, 33.4, true), (top_row + 1.15, roof, true)];
+    let vees = [(8.5, 13.0, 0.2, 0.42), (d1, 18.9, 0.18, 0.42), (GZ_UPPER_CONCOURSE, 31.5, 0.35, 0.55)];
+    for w in cols.windows(2) {
+        let ((pa, na), (pb, nb)) = (place(w[0]), place(w[1]));
+        if (pb - pa).length() < 1.0 {
+            continue;
+        }
+        let nrm = (na + nb).normalize();
+        let dn = Vec3::new(nrm.x, 0.0, nrm.y);
+        let at = |f: f32| pa.lerp(pb, f);
+        let br = bridge_ring();
+        let mut member = |g: &mut Geo, p: Vec2, yp: f32, q: Vec2, yq: f32, wdt: f32, dep: f32| {
+            if blocked(p) || blocked(q) || blocked((p + q) / 2.0) {
+                return;
+            }
+            // the bridge's passage through the frame (deck to its top beams) stays clear
+            if (0..=8).any(|k| {
+                let t = k as f32 / 8.0;
+                let y = yp + (yq - yp) * t;
+                point_in(&br, p.lerp(q, t)) && y > d1 - 0.4 && y < d1 + 3.9
+            }) {
+                return;
+            }
+            g.member(k, v(p, yp), v(q, yq), wdt, dep, dn);
+        };
+        for &(y0, y1, lean) in &bands {
+            // chords in front of the deck fascias
+            member(g, pa, y0, pb, y0, 0.45, 0.4);
+            member(g, pa, y1, pb, y1, 0.45, 0.4);
+            if lean {
+                for i in 0..6 {
+                    let (f0, f1) = (i as f32 / 6.0, (i + 1) as f32 / 6.0);
+                    if i > 0 {
+                        member(g, at(f0), y0, at(f0), y1, 0.26, 0.26);
+                    }
+                    if i < 3 {
+                        member(g, at(f0), y0, at(f1), y1, 0.26, 0.26);
+                    } else {
+                        member(g, at(f0), y1, at(f1), y0, 0.26, 0.26);
+                    }
+                }
+            } else {
+                for i in 0..12 {
+                    let (f0, f1) = (i as f32 / 12.0, (i + 1) as f32 / 12.0);
+                    let (ya, yb) = if i % 2 == 0 { (y0, y1) } else { (y1, y0) };
+                    member(g, at(f0), ya, at(f1), yb, 0.2, 0.2);
+                }
+            }
+        }
+        for &(foot, head, reach, size) in &vees {
+            member(g, pa, foot, at(reach), head, size, size * 0.9);
+            member(g, pb, foot, at(1.0 - reach), head, size, size * 0.9);
+        }
+        // the top rows overhang the frame: their walk out to a white box edge with the rail, carried on angled struts
+        // from the letter truss's foot at every panel point, with outriggers under the box
+        let (fa, fb) = (pa + na * GZ_OVERHANG, pb + nb * GZ_OVERHANG);
+        let (ia, ib) = (pa - na * 0.55, pb - nb * 0.55);
+        let under = GZ_BOX_BOTTOM;
+        // posts from the letter truss up to the box (none at the bay's middle, where the truss's diagonals meet),
+        // and the box's bottom chord
+        for f in [1.0 / 6.0, 2.0 / 6.0, 4.0 / 6.0, 5.0 / 6.0] {
+            member(g, at(f), 33.4, at(f), under, 0.3, 0.3);
+        }
+        member(g, pa, under, pb, under, 0.4, 0.4);
+
+        // (cut round a stair core standing in the frame: its landing takes over there)
+        for (f0, f1, hole) in runs(|f| blocked(pa.lerp(pb, f)) || blocked(fa.lerp(fb, f))) {
+            if hole {
+                continue;
+            }
+            let (ia, ib, fa, fb) = (ia.lerp(ib, f0), ia.lerp(ib, f1), fa.lerp(fb, f0), fa.lerp(fb, f1));
+            let ev = Vec3::new((pb - pa).normalize().x, 0.0, (pb - pa).normalize().y);
+            poly_up(g, m.concrete, &[v(ia, top_row), v(ib, top_row), v(fb, top_row), v(fa, top_row)]);
+            g.poly(k, &[v(fa, under), v(fb, under), v(fb, top_row + 0.15), v(fa, top_row + 0.15)], ev, Vec3::Y);
+            g.poly(m.soffit, &[v(fb, under), v(fa, under), v(ia, under), v(ib, under)], ev, Vec3::new(-nrm.x, 0.0, -nrm.y));
+            g.block_ring(&[ia, ib, fb, fa], under, top_row);
+            for hh in [0.5, 1.05] {
+                g.tube(m.rail, v(fa, top_row + hh), v(fb, top_row + hh), 0.025, 5);
+            }
+            g.block_ring(&[fa - nrm * 0.1, fb - nrm * 0.1, fb, fa], top_row, top_row + 1.05);
+        }
+        for i in 0..=6 {
+            let f = i as f32 / 6.0;
+            let p = at(f);
+            let side = Vec3::new((pb - pa).normalize().x, 0.0, (pb - pa).normalize().y);
+            if !blocked(p) {
+                g.member(k, v(p, 33.4), v(p + nrm * GZ_OVERHANG, under), 0.28, 0.26, side);
+                g.member(k, v(p - nrm * 0.4, under - 0.2), v(p + nrm * GZ_OVERHANG, under - 0.2), 0.3, 0.26, side);
+            }
+        }
+        // under the upper deck, against the rows' stepped underside: a raker truss at each tall column (chords down
+        // the rake from the top rows' back to the upper concourse, Warren webs between, a post at the back), and in
+        // each bay a horizontal across the underside with knee braces into the rakers at its ends and a V from the
+        // top rows down to its middle. r: metres in from the upper deck's back (the frame stands FRAME_OFF out).
+        let side = Vec3::new((pb - pa).normalize().x, 0.0, (pb - pa).normalize().y);
+        let under_rows = |r: f32| top_row + 0.01 - r * UP_RISE / UP_PITCH;
+        let pt = |f: f32, r: f32| at(f) - nrm * (FRAME_OFF + r);
+        let r_end = GZ_RAKE * 0.62;
+        let depth = 2.3;
+        for f in [0.0f32, 1.0] {
+            if blocked(at(f)) {
+                continue;
+            }
+            // each column's raker is drawn by the bay on its right, and the last column's by the last bay
+            if f == 1.0 && w[1] < *cols.last().unwrap() - 1e-3 {
+                continue;
+            }
+            let top = |r: f32| under_rows(r) - 0.22;
+            g.member(k, v(pt(f, 0.0), top(0.0)), v(pt(f, r_end), top(r_end)), 0.4, 0.4, side);
+            g.member(k, v(pt(f, 0.0), top(0.0) - depth), v(pt(f, r_end), top(r_end) - depth), 0.4, 0.4, side);
+            g.member(k, v(pt(f, 0.0), top(0.0) - depth), v(pt(f, 0.0), top(0.0)), 0.3, 0.3, side);
+            let n = 6;
+            for j in 0..n {
+                let (r0, r1) = (r_end * j as f32 / n as f32, r_end * (j + 1) as f32 / n as f32);
+                let (y0, y1) = if j % 2 == 0 { (top(r0), top(r1) - depth) } else { (top(r0) - depth, top(r1)) };
+                g.member(k, v(pt(f, r0), y0), v(pt(f, r1), y1), 0.26, 0.26, side);
+            }
+        }
+        {
+            let plane = |r: f32| under_rows(r) - 0.3;
+            let r_h = 13.0;
+            let dn3 = Vec3::new(0.0, 1.0, 0.0);
+            for (f0, r0, f1, r1) in [(0.0, r_h, 1.0, r_h), (0.2, 0.6, 0.5, r_h), (0.8, 0.6, 0.5, r_h), (0.12, r_h, 0.0, r_h - 3.5), (0.88, r_h, 1.0, r_h - 3.5)] {
+                let (p, q) = (pt(f0, r0), pt(f1, r1));
+                if blocked(p) || blocked(q) {
+                    continue;
+                }
+                g.member(k, v(p, plane(r0)), v(q, plane(r1)), 0.34, 0.3, dn3);
+            }
+        }
+        // the roof's white edge over the frame
+        let ov = GZ_OVERHANG + 0.7;
+        g.poly(k, &[v(pa + na * ov, roof), v(pb + nb * ov, roof), v(pb + nb * ov, roof + 1.3), v(pa + na * ov, roof + 1.3)], Vec3::new((pb - pa).normalize().x, 0.0, (pb - pa).normalize().y), Vec3::Y);
+        poly_up(g, m.roof, &[v(pa + na * ov, roof + 1.3), v(pb + nb * ov, roof + 1.3), v(pb - nb * 4.0, roof + 1.3), v(pa - na * 4.0, roof + 1.3)]);
+        let (r0, r1) = (pa + na * ov, pb + nb * ov);
+        let (i0, i1) = (pa - na * 4.0, pb - nb * 4.0);
+        g.poly(m.roof, &[v(i0, roof), v(i1, roof), v(r1, roof), v(r0, roof)], Vec3::new((pb - pa).normalize().x, 0.0, (pb - pa).normalize().y), Vec3::new(-nrm.x, 0.0, -nrm.y));
+    }
+    // the columns, full height from the street to the roof
+    for &c in &cols {
+        let (p, n) = place(c);
+        if blocked(p) {
+            continue;
+        }
+        let dn = Vec3::new(n.x, 0.0, n.y);
+        g.member(k, v(p, 0.0), v(p, roof + 1.3), 0.8, 1.3, dn);
+        let e = n.perp() * 0.4;
+        g.block_ring(&[p - e - n * 0.65, p + e - n * 0.65, p + e + n * 0.65, p - e + n * 0.65], 0.0, roof);
+    }
+}
+
+/// The footbridge from the terrace concourse to the tower, as in the photos: a concrete deck on white edge girders,
+/// dark steel posts every 1.8 m with white X-bracing between them, glass guards, a pergola of cross beams over the
+/// top, and planters along both top edges spilling red flowers. `frame`: the gate frame's line, where it starts.
+fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let t = Vec2::new(BRIDGE_TOWER.0, BRIDGE_TOWER.1) - HOME;
+    let b = Vec2::new(BRIDGE_BOWL.0, BRIDGE_BOWL.1) - HOME;
+    let e = (b - t).normalize();
+    // where the axis crosses the frame line; the deck starts just inside it, on the terrace concourse's edge
+    let mut start = b;
+    for w in frame.windows(2) {
+        let (p, q) = (w[0].0, w[1].0);
+        let d = q - p;
+        let den = e.perp_dot(d);
+        if den.abs() < 1e-5 {
+            continue;
+        }
+        let s = (p - t).perp_dot(d) / den;
+        let u = (p - t).perp_dot(e) / den;
+        if (0.0..=1.0).contains(&u) && s > 0.0 {
+            start = t + e * (s + FRAME_OFF);
+        }
+    }
+    let (a, z) = (start, t);
+    let len = (z - a).length();
+    if len < 2.0 {
+        return;
+    }
+    let dir = (z - a) / len;
+    let side = dir.perp();
+    let ev = Vec3::new(dir.x, 0.0, dir.y);
+    let sv = Vec3::new(side.x, 0.0, side.y);
+    let deck = TERR_Y + 9.0 * TERR_RISE + 0.25;
+    let h = 3.4;
+    let hw = BRIDGE_W / 2.0;
+    let dark = Key::new(Mat::Plain(140), [0.07, 0.075, 0.08]);
+    let glass = Key::new(Mat::Glass, [0.55, 0.62, 0.64]);
+    // deck slab, soffit and white edge girders
+    let q = [a - side * hw, z - side * hw, z + side * hw, a + side * hw];
+    poly_up(g, m.concrete, &q.map(|p| v(p, deck)));
+    g.poly(m.soffit, &[v(q[3], deck - 0.35), v(q[2], deck - 0.35), v(q[1], deck - 0.35), v(q[0], deck - 0.35)], ev, -sv);
+    g.block_ring(&q, deck - 0.35, deck);
+    for sg in [-1.0f32, 1.0] {
+        let o = side * (sg * (hw - 0.15));
+        g.member(m.white, v(a + o, deck - 0.8), v(z + o, deck - 0.8), 0.9, 0.35, sv);
+    }
+    // the side frames
+    let n = (len / 1.8).round().max(1.0) as i32;
+    for sg in [-1.0f32, 1.0] {
+        let o = side * (sg * hw);
+        let at = |i: i32| a.lerp(z, i as f32 / n as f32) + o;
+        for i in 0..=n {
+            g.member(dark, v(at(i), deck), v(at(i), deck + h), 0.18, 0.18, sv);
+        }
+        for i in 0..n {
+            g.member(m.white, v(at(i), deck + 0.15), v(at(i + 1), deck + h - 0.15), 0.12, 0.1, sv);
+            g.member(m.white, v(at(i + 1), deck + 0.15), v(at(i), deck + h - 0.15), 0.12, 0.1, sv);
+        }
+        for y in [deck + 0.05, deck + h] {
+            g.member(m.white, v(a + o, y), v(z + o, y), 0.28, 0.22, sv);
+        }
+        // glass guard inside the frame
+        let gi = side * (sg * (hw - 0.12));
+        let (g0, g1) = (a + gi, z + gi);
+        let face = if sg > 0.0 { -ev } else { ev };
+        let (p0, p1) = if sg > 0.0 { (g1, g0) } else { (g0, g1) };
+        g.poly(glass, &[v(p0, deck), v(p1, deck), v(p1, deck + 1.1), v(p0, deck + 1.1)], face, Vec3::Y);
+        g.member(m.rail, v(g0, deck + 1.1), v(g1, deck + 1.1), 0.06, 0.06, sv);
+        g.block_ring(&[g0 - side * 0.06, g1 - side * 0.06, g1 + side * 0.06, g0 + side * 0.06], deck, deck + 1.1);
+        // the planter along the top edge, overflowing with red flowers
+        let po = side * (sg * (hw + 0.2));
+        let (pa, pz) = (a + po, z + po);
+        g.member(dark, v(pa, deck + h + 0.2), v(pz, deck + h + 0.2), 0.45, 0.5, Vec3::Y);
+        let k = (len / 0.35) as i32;
+        for j in 0..k {
+            let f = (j as f32 + 0.5) / k as f32;
+            let hsh = mix(j as u64, sg.to_bits() as u64, 77);
+            let jitter = ((hsh % 1000) as f32 / 1000.0 - 0.5) * 0.3;
+            let drop = ((hsh >> 10) % 1000) as f32 / 1000.0;
+            let c = pa.lerp(pz, f) + side * (sg * (0.15 + jitter));
+            let col = [0.55 + 0.25 * drop, 0.02, 0.12 + 0.08 * drop];
+            let blob = Key::new(Mat::Plain(200), col);
+            let leaf = Key::new(Mat::Plain(220), [0.04, 0.12, 0.03]);
+            let y0 = deck + h + 0.3 - drop * 0.9;
+            let sz = 0.22 + 0.18 * drop;
+            g.cuboid(if j % 3 == 0 { leaf } else { blob }, Vec3::new(c.x - sz, y0, c.y - sz), Vec3::new(c.x + sz, y0 + sz * 1.4, c.y + sz));
+        }
+    }
+    // pergola cross beams over the walk
+    for i in 0..=n {
+        let p = a.lerp(z, i as f32 / n as f32);
+        g.member(m.white, v(p - side * (hw + 0.2), deck + h + 0.1), v(p + side * (hw + 0.2), deck + h + 0.1), 0.16, 0.3, ev);
+    }
+    // the tower's door at the far end
+    let d0 = z + dir * 0.02;
+    g.poly(glass, &[v(d0 + side * 1.2, deck), v(d0 - side * 1.2, deck), v(d0 - side * 1.2, deck + 2.6), v(d0 + side * 1.2, deck + 2.6)], -sv, Vec3::Y);
 }
