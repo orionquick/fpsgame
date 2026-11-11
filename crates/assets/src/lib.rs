@@ -739,6 +739,46 @@ pub fn load_material(inbox: &Path, a: &Asset, size: u32) -> Res<MaterialImages> 
     load_material_n(inbox, a, None, size)
 }
 
+/// Colour corrections for third-party foliage, by asset id and material (adaptations of CC BY models, credited in
+/// CREDITS.md). The jacaranda's leaf card is neon yellow-green with violet blossom: the street trees it stands in
+/// for are plain mid green (measured on street photos), so blossom texels take the leaves' colour and the whole card
+/// is brought to the measured hue.
+fn foliage_fix(id: &str, n: Option<usize>, base: &mut image::RgbaImage) {
+    if !(id.starts_with("sf_380a2c4bfa") && n == Some(0)) {
+        return;
+    }
+    let lin = |c: u8| (c as f32 / 255.0).powf(2.2);
+    let to8 = |v: f32| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+    let blossom = |p: &image::Rgba<u8>| p[2] as f32 > p[1] as f32 * 0.9 && p[2] > 50;
+    let (mut sum, mut cnt) = ([0f64; 3], 0f64);
+    for p in base.pixels().filter(|p| p[3] > 128 && !blossom(p)) {
+        for k in 0..3 {
+            sum[k] += lin(p[k]) as f64;
+        }
+        cnt += 1.0;
+    }
+    if cnt < 1.0 {
+        return;
+    }
+    let mean = sum.map(|v| (v / cnt) as f32);
+    let ml = mean[0] * 0.3 + mean[1] * 0.6 + mean[2] * 0.1;
+    // measured: the photo's foliage against this card's (linear) - redder, a little less green, far less saturated
+    let k = [0.63f32, 0.61, 0.47];
+    for p in base.pixels_mut() {
+        let mut c = [lin(p[0]), lin(p[1]), lin(p[2])];
+        if blossom(p) {
+            let l = (c[0] * 0.3 + c[1] * 0.6 + c[2] * 0.1) / ml.max(1e-4);
+            c = mean.map(|m| m * l.clamp(0.5, 1.3));
+        }
+        // lift the blue floor so the leaves are not a pure saturated green
+        let l = c[0] * 0.3 + c[1] * 0.6 + c[2] * 0.1;
+        c[2] = c[2].max(l * 0.2);
+        for i in 0..3 {
+            p[i] = to8(c[i] * k[i]);
+        }
+    }
+}
+
 /// Loads material `n` of a multi-material asset (None: the asset's own maps).
 pub fn load_material_n(inbox: &Path, a: &Asset, n: Option<usize>, size: u32) -> Res<MaterialImages> {
     let maps = n.and_then(|i| a.materials.get(i)).unwrap_or(&a.maps);
@@ -756,6 +796,8 @@ pub fn load_material_n(inbox: &Path, a: &Asset, n: Option<usize>, size: u32) -> 
             p[3] = (p[3] as f32 * bf[3]) as u8;
         });
     }
+    let mut base = base;
+    foliage_fix(&a.id, n, &mut base);
     let base = base;
     let mut normal = decode(&mut zip, &maps.normal, size).unwrap_or_else(|| image::RgbaImage::from_pixel(size, size, image::Rgba([128, 128, 255, 255])));
     if a.normal_dx {

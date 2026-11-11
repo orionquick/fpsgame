@@ -102,6 +102,8 @@ pub struct Geo {
     pub lights: Vec<render::PointLight>,
     /// Reflection probes: capture point, box min, box max (world).
     pub probes: Vec<[Vec3; 3]>,
+    /// While set, every face added is lit as an interior (dim sky light): covered outdoor rooms such as arcades.
+    pub shade: bool,
 }
 
 impl Geo {
@@ -131,7 +133,7 @@ impl Geo {
         let ex = Vec3::new(ex.x, 0.0, ex.z).normalize();
         // local +z is +x turned 90 degrees, matching world x-east/z-south handedness
         let ez = Vec3::new(-ex.z, 0.0, ex.x);
-        Self { origin, ex, ez, groups: HashMap::new(), blocks: vec![], lights: vec![], probes: vec![] }
+        Self { origin, ex, ez, groups: HashMap::new(), blocks: vec![], lights: vec![], probes: vec![], shade: false }
     }
 
     /// World (x, z) of a local plan point.
@@ -179,7 +181,7 @@ impl Geo {
                 TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [p.dot(right) + uv[0], -p.dot(up) + uv[1]], tan: [wt.x, wt.y, wt.z, 1.0], edge }
             })
             .collect();
-        let g = self.groups.entry(k).or_default();
+        let g = self.groups.entry(if self.shade { k.inside() } else { k }).or_default();
         let base = g.0.len() as u32;
         g.0.extend(verts);
         for i in 1..pts.len() as u32 - 1 {
@@ -204,7 +206,7 @@ impl Geo {
             .zip(uvs)
             .map(|(&p, &uv)| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv, tan: [wt.x, wt.y, wt.z, 1.0], edge: [p.dot(right) - u0, p.dot(up) - v0, u1 - u0, v1 - v0] })
             .collect();
-        let g = self.groups.entry(k).or_default();
+        let g = self.groups.entry(if self.shade { k.inside() } else { k }).or_default();
         let base = g.0.len() as u32;
         g.0.extend(verts);
         for i in 1..pts.len() as u32 - 1 {
@@ -229,7 +231,7 @@ impl Geo {
             .iter()
             .map(|&(p, eu, ev)| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv: [p.dot(tr) + uv[0], -p.dot(tu) + uv[1]], tan: [wt.x, wt.y, wt.z, 1.0], edge: [eu, ev, lr, lu] })
             .collect();
-        let g = self.groups.entry(k).or_default();
+        let g = self.groups.entry(if self.shade { k.inside() } else { k }).or_default();
         let base = g.0.len() as u32;
         g.0.extend(verts);
         g.1.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -244,7 +246,7 @@ impl Geo {
             .iter()
             .map(|&(p, s, t)| TexVertex { pos: self.world(p).to_array(), nrm: wn.to_array(), uv: [s * tile, -t * tile], tan: [wt.x, wt.y, wt.z, 1.0], edge: [0.0; 4] })
             .collect();
-        let g = self.groups.entry(k).or_default();
+        let g = self.groups.entry(if self.shade { k.inside() } else { k }).or_default();
         let base = g.0.len() as u32;
         g.0.extend(verts);
         g.1.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -434,7 +436,7 @@ impl Geo {
                 verts.push(TexVertex { pos: w.to_array(), nrm: wn.to_array(), uv: [along, -(i as f32 / seg as f32) * circ], tan: [wt.x, wt.y, wt.z, 1.0], edge: [0.0; 4] });
             }
         }
-        let g = self.groups.entry(k).or_default();
+        let g = self.groups.entry(if self.shade { k.inside() } else { k }).or_default();
         let base = g.0.len() as u32;
         g.0.extend(verts);
         for i in 0..seg as u32 {

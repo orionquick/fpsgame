@@ -1881,6 +1881,12 @@ fn home_plaza(g: &mut Geo, f: &mut Furnisher, m: &Mats, city: &city::City, st: &
             if others.iter().any(|r| point_in(r, c)) {
                 continue;
             }
+            // the east building's footprint (its ticket hall has its own floor)
+            let eb = cw - Vec2::new(66.0, 74.0);
+            let (ea, ebb) = (eb.dot(ax), eb.dot(Vec2::new(-1.0, -1.0).normalize()));
+            if ea > -13.0 && ea < 25.7 && ebb > 0.5 && ebb < 23.3 {
+                continue;
+            }
             // lawns inside the plaza (the tower's garden) stay grass; the plaza's own strip beds are the palm beds
             let lawn = lawns.iter().any(|r| point_in(r, c));
             let pts = [at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)].map(|p| v(p, ground(p)));
@@ -2205,7 +2211,10 @@ fn wall_poly(g: &mut Geo, k: Key, pts: &[Vec3], right: Vec3, up: Vec3) {
         let dim = if c0 < 0.5 { 0.9 } else { 1.0 };
         // stone-to-stone spread as measured on the sunlit face: about 6-10% in brightness, a little in hue
         let lv = 1.0 + (l - 1.0) * 0.6;
-        let tint = [0, 1, 2].map(|c| (lv + (t[c] - l) * 0.35) * dim * STONE_TONE[c]);
+        // under cover (arcades, the ticket hall) the photos show the stone a good deal darker and warmer than the sky
+        // light alone gives: the engine's ambient has no occlusion there
+        let cover = if g.shade { [0.42, 0.36, 0.28] } else { [1.0; 3] };
+        let tint = [0, 1, 2].map(|c| (lv + (t[c] - l) * 0.35) * dim * STONE_TONE[c] * cover[c]);
         let key = Key::new(Mat::Surface("pt_cleft_sandstone"), tint).tile(2.0).rough(1.15 + 0.04 * ti as f32).wear(wear::STONE);
         // a piece of the 2 m scan at true scale, anywhere in it
         let (ou, ov) = ((mix(h, 3, 5) % 2000) as f32 / 1000.0, (mix(h, 5, 7) % 2000) as f32 / 1000.0);
@@ -3175,11 +3184,13 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
     // paving on the building's grid
     // the floor meets the ground outside the mouth
     let fy = [uv(h0, fb), uv(h1, fb), uv((h0 + h1) / 2.0, fb)].iter().map(|&p| terr(p)).fold(f32::MIN, f32::max) + 0.06;
-    let brown = Key::new(Mat::Plain(215), [0.05, 0.03, 0.014]);
-    let rib = Key::new(Mat::Plain(215), [0.028, 0.017, 0.008]);
-    let ceil = Key::new(Mat::Surface("tjeneevfw"), [0.24, 0.17, 0.1]).tile(2.0);
-    let cjoint = Key::new(Mat::Plain(220), [0.04, 0.028, 0.016]);
+    let brown = Key::new(Mat::Plain(215), [0.08, 0.045, 0.02]);
+    let rib = Key::new(Mat::Plain(215), [0.045, 0.025, 0.011]);
+    let ceil = Key::new(Mat::Surface("tjeneevfw"), [0.62, 0.45, 0.27]).tile(2.0);
+    let cjoint = Key::new(Mat::Plain(220), [0.14, 0.1, 0.06]);
     let gold = [0.4, 0.25, 0.085];
+    // (under cover: lit by the sky only dimly, as measured in the photos - a fifth of the open shade)
+    g.shade = true;
     wall_holes(g, m.sandstone, uv(h0, fb), uv(h0, bb), 0.0, hc, &[]);
     let (rl, rr) = (uv(h1, bb), uv(h1, fb));
     let ru = |d: f32| (bb - fb) - d;
@@ -3251,8 +3262,9 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
     // the floor: 3 m slabs with scored 1.5 m cells on the building's grid (joints on the face line and on the
     // right wall's line, carried on outside by the plaza)
     {
-        let paving = Key::new(Mat::Surface("vlzlajnfw"), [0.64, 0.62, 0.58]).tile(3.0).rough(0.8);
-        let joint = Key::new(Mat::Plain(200), [0.16, 0.155, 0.15]);
+        // (the hall's slabs are darker and warmer than the sunlit forecourt's in the photos)
+        let paving = Key::new(Mat::Surface("vlzlajnfw"), [0.24, 0.17, 0.13]).tile(3.0).rough(0.8);
+        let joint = Key::new(Mat::Plain(200), [0.12, 0.1, 0.085]);
         let cell = 1.5f32;
         let (na, nb) = (((h1 - h0) / cell).ceil() as i32, ((bb - fb) / cell).ceil() as i32);
         for i in 0..na {
@@ -3273,7 +3285,10 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
         }
         g.block_ring(&[uv(h0, fb), uv(h1, fb), uv(h1, bb), uv(h0, bb)], -0.6, fy);
     }
-    g.light(v3(uv(-0.4, fb + 11.0), 3.2), 6.0, [0.5, 0.46, 0.4]);
+    // warm light bounced in off the sunlit forecourt
+    g.light(v3(uv(-0.4, fb + 5.0), 2.6), 9.0, [0.34, 0.235, 0.135]);
+    g.light(v3(uv(-0.4, fb + 14.0), 3.0), 8.0, [0.2, 0.14, 0.08]);
+    g.shade = false;
     // on the podium's side wall at the mouth: a cash machine (white header, blue body, dark screen), its sign, a camera
     {
         let q = uv(h1, fb - 0.05) - t * 0.03;
@@ -3294,6 +3309,7 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
         let pe = uv(s1, fb);
         let inw = -out * sd;
         let i3 = -o3;
+        g.shade = true;
         // right end jamb (beyond the terrace canopy), soffit, floor
         wall_poly(g, m.sandstone, &[v3(pe + inw, sy0), v3(pe, sy0), v3(pe, sy1), v3(pe + inw, sy1)], -i3, Vec3::Y);
         poly_down(g, ceil, &[v3(pl, sy1), v3(pe, sy1), v3(pe + inw, sy1), v3(pl + inw, sy1)]);
@@ -3321,6 +3337,7 @@ fn east_building(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -
         reveal(g, deep, bl, br, alcove, 0.9);
         // the door (model by tboiston, CC BY, modelled in centimetres): a grey steel leaf with a vision light
         place(g, f, "sf_4da6b53842", None, uv(6.85, fb) + inw - out * 0.82, 7.7, t, 0.01);
+        g.shade = false;
         g.member(frame, v3(pl - out * 0.2, sy0 + 0.08), v3(pr - out * 0.2, sy0 + 0.08), 0.05, 0.05, Vec3::Y);
     }
 

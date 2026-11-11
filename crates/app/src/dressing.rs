@@ -251,7 +251,7 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
             // the trunk's base is the model's origin
             let (ox, oz) = (-cx * sx, -cz * sz);
             let (x, z) = (a[0] - ox * ux - oz * zx, a[1] - ox * uz - oz * zz);
-            out.push(Placement { asset: m.id.clone(), part: crate::library::ALL_PARTS, x, z, y: c.terrain.at(a[0], a[1]) - 0.05, rot, scale: [sx as f32, sy as f32, sz as f32], tint: [0.3, 0.52, 0.2], lod: 0, indoor: false });
+            out.push(Placement { asset: m.id.clone(), part: crate::library::ALL_PARTS, x, z, y: c.terrain.at(a[0], a[1]) - 0.05, rot, scale: [sx as f32, sy as f32, sz as f32], tint: [0.72, 0.72, 0.72], lod: 0, indoor: false });
         }
     }
 
