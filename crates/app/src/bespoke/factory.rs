@@ -379,7 +379,54 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
             reserved.extend([ne, se, kitchen]);
             if k == 1 && !super::undecorated() {
                 let h = beerloft::stair_hole();
-                reserved.push(Rect::new(h.x0 - 0.8, h.z0 - 0.8, h.x1 + 0.8, h.z1 + 0.8));
+                // the well and the landing between it and the south wall
+                reserved.push(Rect::new(h.x0 - 0.8, h.z0 - 0.8, h.x1 + 0.8, d - T));
+            }
+        }
+        if k >= 1 {
+            // the office floors, after brick-and-timber loft offices: double rows of industrial cubicles (steel-framed
+            // corrugated panels, timber L-desks) down the middle of each column bay, in blocks of three a side with
+            // cross aisles; aisles along the column lines and the windows. One block by the windows is a lounge;
+            // a bay left free by the core gets team tables.
+            let mut xs = vec![T];
+            xs.extend(spec.cols.iter().copied());
+            xs.push(w - T);
+            let (cw, cd) = loft::CUBICLE;
+            // the core (stairs, lift, restrooms) and a walkway round it
+            reserved.push(Rect::new(core.r.x0 - 1.2, core.r.z0 - 1.2, core.r.x1, core.r.z1 + 1.2));
+            for i in 0..xs.len() - 1 {
+                let (xa, xb) = (xs[i], xs[i + 1]);
+                let xc = (xa + xb) / 2.0;
+                let mut zb = T + 1.5;
+                let mut b = 0;
+                while zb + 3.0 * cw <= d - T - 1.3 {
+                    let block = Rect::new(xc - cd - 0.1, zb, xc + cd + 0.1, zb + 3.0 * cw);
+                    let clear = |r: &Rect| !reserved.iter().any(|q| q.x0 < r.x1 && q.x1 > r.x0 && q.z0 < r.z1 && q.z1 > r.z0);
+                    let roomy = xb - xa >= 2.0 * cd + 2.4;
+                    if roomy && clear(&block) {
+                        if i == 0 && b == 1 {
+                            // the lounge by the windows
+                            let c = block.centre();
+                            fur.put(&mut g, "sf_959bc21f62", c - v(0.0, 1.4), y, v(0.0, 1.0), true);
+                            fur.put(&mut g, "sf_ddab2f2c25", c + v(1.3, 0.9), y, v(-0.7, -0.6), true);
+                            fur.put(&mut g, "ph_modern_arm_chair_01", c + v(-1.3, 0.9), y, v(0.7, -0.6), true);
+                            fur.put(&mut g, "ph_coffee_table_round_01", c, y, v(0.0, 1.0), true);
+                            fur.put(&mut g, "ph_potted_plant_01", c + v(-2.0, -2.6), y, v(1.0, 0.3), false);
+                        } else {
+                            loft::industrial_cubicles(&mut g, &mut fur, v(xc, zb), v(0.0, 1.0), 3, y);
+                        }
+                        reserved.push(block);
+                    } else {
+                        // a team table where the bay is too narrow or partly taken, if a 2 x 4.6 m table fits
+                        let t = Rect::new(xc - 1.6, zb + 0.6, xc + 1.6, zb + 3.0 * cw - 0.6);
+                        if xb - xa >= 4.4 && clear(&t) {
+                            loft::team_table(&mut g, &mut fur, t.centre(), v(0.0, 1.0), y);
+                            reserved.push(t);
+                        }
+                    }
+                    zb += 3.0 * cw + 1.6;
+                    b += 1;
+                }
             }
         }
         // desk benches in the bays between girders and column lines, clear of everything reserved
@@ -391,6 +438,9 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         xs.push(core.r.x0 - 2.6);
         for i in 0..xs.len() - 1 {
             for j in 0..zs.len() - 1 {
+                if k >= 1 {
+                    break;
+                }
                 let (xa, xb, za, zb) = (xs[i] + 0.5, xs[i + 1] - 0.5, zs[j], zs[j + 1]);
                 let pairs = ((xb - xa - 1.0) / 1.8).floor() as i32;
                 if pairs < 1 || zb - za < 4.2 {

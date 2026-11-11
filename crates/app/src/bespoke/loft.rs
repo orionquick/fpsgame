@@ -575,6 +575,75 @@ pub fn kit_cubicle(g: &mut Geo, f: &mut Furnisher, origin: Vec2, y: f32, z_dir: 
     }
 }
 
+/// The industrial cubicle (Office Desk_7): station pitch along a row and depth from the spine, metres.
+pub const CUBICLE: (f32, f32) = (2.41, 2.47);
+const CUBE: &str = "sf_18abda12d3";
+const GOOSENECKS: [&str; 7] = ["sf_aa7b0e0099_00", "sf_aa7b0e0099_01", "sf_aa7b0e0099_02", "sf_aa7b0e0099_03", "sf_aa7b0e0099_04", "sf_aa7b0e0099_05", "sf_aa7b0e0099_06"];
+
+/// A double row of `n` industrial cubicles a side, back to back along `axis` from `start` (the spine's first end).
+/// The model's full panels run along its -X (the spine) and +Z (the next station) sides, short returns on the other
+/// two, its L-desk (0.73 m) along the full panels: it opens toward its +X/-Z corner. Each station gets a desktop
+/// computer on the back desk, a 1920s gooseneck lamp, desk clutter and a task chair. Collision: panels and desks.
+pub fn industrial_cubicles(g: &mut Geo, f: &mut Furnisher, start: Vec2, axis: Vec2, n: i32, y: f32) {
+    let (cw, cd) = CUBICLE;
+    let across = Vec2::new(-axis.y, axis.x);
+    let v3 = |p: Vec2| Vec3::new(p.x, 0.0, p.y);
+    let top = y + 0.735;
+    // the spine: both rows' back panels
+    g.block_box(v3(start - across * 0.06), v3(axis) * (n as f32 * cw), v3(across) * 0.12, y, y + 1.64);
+    for side in [-1.0f32, 1.0] {
+        let o = across * side;
+        // model +Z: the heading whose model +X points outward (model X = (F.y, -F.x))
+        let face = Vec2::new(-o.y, o.x);
+        for i in 0..n {
+            let c = start + axis * ((i as f32 + 0.5) * cw) + o * (cd / 2.0 + 0.01);
+            f.put(g, CUBE, c, y, face, false);
+            // model axes in the world
+            let (mx, mz) = (o, face);
+            let at = |x: f32, z: f32| c + mx * x + mz * z;
+            // the full side panel (model +Z) and the two desk arms
+            g.block_box(v3(at(-cd / 2.0, cw / 2.0 - 0.06)), v3(mx) * cd, v3(mz) * 0.08, y, y + 1.64);
+            g.block_box(v3(at(-cd / 2.0, -cw / 2.0)), v3(mx) * 0.7, v3(mz) * cw, y, top);
+            g.block_box(v3(at(-cd / 2.0, cw / 2.0 - 0.7)), v3(mx) * (cd * 0.82), v3(mz) * 0.64, y, top);
+            // computer on the back desk facing the seat, gooseneck lamp in the corner, clutter
+            let turn = (f.rand() - 0.5) * 0.3;
+            let slide = (f.rand() - 0.5) * 0.4;
+            f.put(g, "sf_561abc2fc9", at(-0.92, slide), top, mx.rotate(Vec2::from_angle(turn)), false);
+            let lamp = GOOSENECKS[(f.rand() * 7.0) as usize % 7];
+            f.put(g, lamp, at(-0.95, cw / 2.0 - 0.3), top, (mx - mz).normalize(), false);
+            table_clutter(g, f, at(-0.2, cw / 2.0 - 0.45), top, 0.15);
+            // task chair, pulled out at its own angle
+            let chair = at(-0.25 + f.rand() * 0.35, -0.15 + (f.rand() - 0.5) * 0.4);
+            let face = (-mx).rotate(Vec2::from_angle((f.rand() - 0.5) * 1.2));
+            f.put(g, "sf_675f34f730", chair, y, face, false);
+        }
+    }
+}
+
+/// A team table: two oak-and-black-steel tables end to end along `axis`, chairs down both sides, gooseneck lamps.
+pub fn team_table(g: &mut Geo, f: &mut Furnisher, c: Vec2, axis: Vec2, y: f32) {
+    const TABLE: &str = "sf_8caa3c4cec";
+    const CHAIRS: [&str; 2] = ["sf_0720ffc9b2", "sf_3fdcc5bc70"];
+    let across = Vec2::new(-axis.y, axis.x);
+    for s in [-1.0f32, 1.0] {
+        // the table's long side runs along its model X: face it across the team
+        f.put(g, TABLE, c + axis * (1.13 * s), y, across, true);
+    }
+    for s in [-1.0f32, 1.0] {
+        for i in 0..4 {
+            let a = (i as f32 - 1.5) * 1.05 + (f.rand() - 0.5) * 0.15;
+            let face = (-across * s).rotate(Vec2::from_angle((f.rand() - 0.5) * 0.6));
+            let (id, pull) = (CHAIRS[(f.rand() * 2.0) as usize % 2], 0.75 + f.rand() * 0.2);
+            f.put(g, id, c + axis * a + across * s * pull, y, face, false);
+        }
+        let lamp = GOOSENECKS[(f.rand() * 7.0) as usize % 7];
+        f.put(g, lamp, c + axis * (1.6 * s) + across * 0.25 * s, y + 0.75, -across * s, false);
+    }
+    for k in 0..5 {
+        table_clutter(g, f, c + axis * ((k as f32 - 2.0) * 0.8) + across * (if k % 2 == 0 { 0.2 } else { -0.2 }), y + 0.75, 0.12);
+    }
+}
+
 /// Four kit cubicles in a pinwheel around `c` with their partitions back to back; a water cooler at one corner.
 pub fn kit_cluster(g: &mut Geo, f: &mut Furnisher, c: Vec2, y: f32) -> Rect {
     // the kit's walls face -X and +Z: for each quadrant pick the heading that turns both walls toward the centre

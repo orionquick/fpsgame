@@ -835,13 +835,14 @@ fn track_lights(g: &mut Geo, s: &Site) {
 /// The stair starts by the bar's end and rises south along the mural wall to the first floor, where you step
 /// off to the west (it passes under the girder with headroom; the opening is clear of girders).
 const STAIR_X: (f32, f32) = (20.9, 22.55);
-const STAIR_Z: (f32, f32) = (20.6, 29.0); // (bottom, top)
+const STAIR_Z: (f32, f32) = (20.6, 27.8); // (bottom, top)
 /// The black mural wall, against the west faces of the column line behind the stair.
 const MURAL_X: f32 = 22.6;
 
-/// The opening in the first floor over the stair's upper end (headroom over the treads).
+/// The opening in the first floor over the stair's upper end: from where a climber's head would meet the slab to the
+/// last nosing, where the flight arrives on the landing along the south wall.
 pub fn stair_hole() -> Rect {
-    Rect::new(STAIR_X.0 - 0.1, 25.6, MURAL_X, 29.6)
+    Rect::new(STAIR_X.0 - 0.1, 25.0, MURAL_X, STAIR_Z.1)
 }
 
 fn glass_rail(g: &mut Geo, a: Vec3, b: Vec3, h: f32) {
@@ -903,14 +904,14 @@ fn feature_stair(g: &mut Geo, s: &Site) {
     g.block_aabb(Vec3::new(x0 - 0.09, y, bot_z + 1.2), Vec3::new(x0 - 0.03, y + rise_total + 1.1, top_z));
 }
 
-/// Glass guard round the stair opening on the first floor (west, south and east sides).
+/// Glass guard round the stair opening on the first floor: north, east and west; the flight arrives through the
+/// open south side onto the landing.
 pub fn stair_guard(g: &mut Geo, y: f32) {
     let h = stair_hole();
-    // north and east sides closed; the west side leaves the stair's top open to step off
     let runs = [
         (Vec3::new(h.x0, y, h.z0), Vec3::new(h.x1, y, h.z0)),
         (Vec3::new(h.x1, y, h.z0), Vec3::new(h.x1, y, h.z1)),
-        (Vec3::new(h.x0, y, h.z0), Vec3::new(h.x0, y, STAIR_Z.1 - 1.2)),
+        (Vec3::new(h.x0, y, h.z0), Vec3::new(h.x0, y, h.z1)),
     ];
     for (p, q) in runs {
         glass_rail(g, p, q, 1.0);

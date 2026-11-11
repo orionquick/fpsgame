@@ -471,6 +471,9 @@ const SCALE: &[(&str, f32)] = &[
     ("sf_94181c1253", 3.8),  // Turner Chair: ~0.83 m wide lounge chair
     ("sf_ce05a5d98b", 1.25), // Television (Wall-mounted): ~60 in. as in the bar
     ("sf_260ff7a37a", 0.22), // Office Props Pack (crazyshroomz): everything ~4.5x real size
+    ("sf_18abda12d3", 0.62), // Office Desk_7 industrial cubicle: 0.73 m desk, 1.64 m panels, 2.47 x 2.41 m
+    ("sf_8caa3c4cec", 1.25), // Industrial wooden table: 2.25 x 1.12 m, 0.75 m high
+    ("sf_aa7b0e0099", 0.5),  // 1920s gooseneck desk lamps: ~0.3-0.45 m
     ("sf_7377ec591d", 0.2),  // Desk lamp
     ("sf_4517652104", 0.02), // Bar Table (centimetres)
     ("sf_aaf556f40f", 1.75), // Bar Stool (Saandy)
@@ -543,7 +546,7 @@ fn compile_one(inbox: &Path, out: &Path, rel: &str, title: Option<&str>, group: 
     let tags: Vec<String> = meta["tags"].as_array().map_or(vec![], |a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect());
     if let Some(g) = names.iter().find(|n| n.ends_with(".gltf")).cloned() {
         let third_party = group == "polyhaven" || group == "sketchfab";
-        let pack = group == "sketchfab" && { let t = title.to_lowercase(); ["pack", "assets", "props", "collection", "kit", "lounge set", "sofa set"].iter().any(|k| t.contains(k)) };
+        let pack = group == "sketchfab" && { let t = title.to_lowercase(); ["pack", "assets", "props", "collection", "kit", "lounge set", "sofa set", "lamps"].iter().any(|k| t.contains(k)) };
         let (mut parts, mut infos, gmats, part_obj, objs) = extract_model(&mut zip, &g, !third_party, pack)?;
         if let Some(&(_, k)) = SCALE.iter().find(|(p, _)| id.starts_with(p)) {
             rescale(&mut parts, &mut infos, k);

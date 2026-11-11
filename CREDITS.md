@@ -75,3 +75,6 @@ Third-party assets used by the game (not redistributed in this repository).
 - "Black-leather-sofa" by journeyk, CC Attribution, https://sketchfab.com/3d-models/4b25966ff2ce4123bc222fc88315b705
 - "Armchair" by assetfactory, Free Standard, https://sketchfab.com/3d-models/7fbd1546db4b4cd3ba410d2cf571180b
 - "Modern Leather coffee stool  Furniture 3D Model" by Line Zero Studio, CC Attribution, https://sketchfab.com/3d-models/8cff98e6d16b41d5a6700b4ea3887790
+- "Office Desk_7_MB" by Mehdi Shahsavan, CC Attribution, https://sketchfab.com/3d-models/18abda12d33b4231aa13f92a291c717e
+- "Industiral Wooden Table with Metal Legs" by uniboxtrade, CC Attribution, https://sketchfab.com/3d-models/8caa3c4cecd24c0a80f467110d7e0dcb
+- "1920s Gooseneck Desk Lamps Type A" by Mad_Lobster_Workshop, CC Attribution, https://sketchfab.com/3d-models/aa7b0e009926415e91b0323612298b30
