@@ -14,6 +14,8 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 const EYE: f32 = 1.7;
+/// GI steps run after a new field lands (a few per frame); the light has settled by then.
+const GI_SETTLE: u32 = 400;
 const HEIGHT: f32 = 1.8;
 const RADIUS: f32 = 0.35;
 const WALK: f32 = 4.5;
@@ -55,6 +57,8 @@ struct Gfx {
     gi_at: Option<Vec3>,
     /// A GI re-voxelization running on a worker thread (the frame keeps the old field until it lands).
     gi_job: Option<(std::sync::mpsc::Receiver<crate::gi::Field>, Vec3)>,
+    /// Propagation steps still to run after the last upload (the static field then stops changing).
+    gi_left: u32,
     terrain: Arc<city::model::Terrain>,
 }
 
@@ -132,11 +136,16 @@ pub fn load(gpu: &Gpu, renderer: &Renderer, city: &City, editor_scene: Option<&e
     Content { scene, batches, lights, probes, gi_tris, gi_city }
 }
 
-/// Internal resolution for a window: FPS_RENDER_SCALE times the physical size, by default the logical (point)
-/// size, so a Retina window renders a quarter of its pixels and is upscaled.
-fn internal_size(window: &Window, w: u32, h: u32) -> (u32, u32) {
-    let s = std::env::var("FPS_RENDER_SCALE").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0 / window.scale_factor()).clamp(0.25, 1.0);
+/// Output resolution for a window: its logical (point) size, so a Retina window is drawn at a quarter of its
+/// pixels and bilinearly scaled up to the screen.
+fn output_size(window: &Window, w: u32, h: u32) -> (u32, u32) {
+    let s = 1.0 / window.scale_factor().max(1.0);
     (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1))
+}
+
+/// Internal render scale of the output (FPS_RENDER_SCALE, default 0.5 per axis): temporal upscaling fills it in.
+pub fn render_scale() -> f32 {
+    std::env::var("FPS_RENDER_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.5).clamp(0.25, 1.0)
 }
 
 fn frame_view(gpu: &Gpu, format: wgpu::TextureFormat, w: u32, h: u32) -> wgpu::TextureView {
@@ -240,16 +249,18 @@ impl ApplicationHandler for App {
         let mut config = surface.get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1)).expect("surface unsupported");
         let caps = surface.get_capabilities(&gpu.adapter);
         config.format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
-        config.present_mode = wgpu::PresentMode::AutoVsync;
+        // FPS_NO_VSYNC: present as fast as frames are ready (the title then shows the real frame rate)
+        config.present_mode = if std::env::var("FPS_NO_VSYNC").is_ok() { wgpu::PresentMode::AutoNoVsync } else { wgpu::PresentMode::AutoVsync };
         surface.configure(&gpu.device, &config);
-        let renderer = Renderer::new(&gpu, config.format);
+        // one sample per pixel: temporal anti-aliasing and upscaling instead of MSAA
+        let renderer = Renderer::with_samples(&gpu, config.format, 1);
         let c = load(&gpu, &renderer, &self.city, self.editor_scene.as_ref());
-        let (iw, ih) = internal_size(&window, config.width, config.height);
-        let targets = Targets::new(&gpu, &renderer, iw, ih);
-        let frame = frame_view(&gpu, config.format, iw, ih);
+        let (ow, oh) = output_size(&window, config.width, config.height);
+        let targets = Targets::with_upscale(&gpu, &renderer, ow, oh, render_scale());
+        let frame = frame_view(&gpu, config.format, ow, oh);
         let Content { scene, batches, lights, probes, gi_tris, gi_city } = c;
         let world = render::CullWorld::new(&gpu, &renderer, &batches.iter().collect::<Vec<_>>());
-        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, frame, batches, world, lights, probes, baked: None, gi_tris: Arc::new(gi_tris), gi_city: Arc::new(gi_city), gi_at: None, gi_job: None, terrain: Arc::new(self.city.terrain.clone()) });
+        self.gfx = Some(Gfx { window, surface, config, gpu, renderer, scene, targets, frame, batches, world, lights, probes, baked: None, gi_tris: Arc::new(gi_tris), gi_city: Arc::new(gi_city), gi_at: None, gi_job: None, gi_left: 0, terrain: Arc::new(self.city.terrain.clone()) });
         self.last = Instant::now();
     }
 
@@ -261,9 +272,9 @@ impl ApplicationHandler for App {
                     g.config.width = s.width.max(1);
                     g.config.height = s.height.max(1);
                     g.surface.configure(&g.gpu.device, &g.config);
-                    let (iw, ih) = internal_size(&g.window, g.config.width, g.config.height);
-                    g.targets = Targets::new(&g.gpu, &g.renderer, iw, ih);
-                    g.frame = frame_view(&g.gpu, g.config.format, iw, ih);
+                    let (ow, oh) = output_size(&g.window, g.config.width, g.config.height);
+                    g.targets = Targets::with_upscale(&g.gpu, &g.renderer, ow, oh, render_scale());
+                    g.frame = frame_view(&g.gpu, g.config.format, ow, oh);
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => self.grab(true),
@@ -327,6 +338,7 @@ impl ApplicationHandler for App {
                         if let Ok(f) = rx.try_recv() {
                             g.renderer.gi.upload(&g.gpu, f.origin, crate::gi::CELL, &f.vox, &f.emit, false);
                             g.renderer.gi_iterate(&g.gpu, 48);
+                            g.gi_left = GI_SETTLE;
                             g.gi_at = Some(*eye);
                             g.gi_job = None;
                             // reflections re-bake with the new light
@@ -355,8 +367,9 @@ impl ApplicationHandler for App {
                 }
                 g.renderer.set_lights(&g.gpu, &g.lights, cam.eye);
                 let mut enc = g.gpu.device.create_command_encoder(&Default::default());
-                if g.renderer.gi.enabled() {
-                    g.renderer.gi.iterate(&mut enc, 4);
+                if g.renderer.gi.enabled() && g.gi_left > 0 {
+                    g.renderer.gi_steps(&mut enc, 4);
+                    g.gi_left = g.gi_left.saturating_sub(4);
                 }
                 let refs: Vec<&render::Batch> = g.batches.iter().collect();
                 if std::env::var("FPS_NO_CULL").is_ok() {
@@ -400,13 +413,15 @@ impl ApplicationHandler for App {
 pub fn bench(city: &City, editor_scene: Option<&editor::Scene>, views: &[(Vec3, f32, f32)], w: u32, h: u32, frames: u32) {
     let gpu = Gpu::headless();
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-    let renderer = Renderer::new(&gpu, format);
+    // like the game: one sample + temporal upscaling (FPS_BENCH_MSAA: the old 4x MSAA at full resolution)
+    let msaa = std::env::var("FPS_BENCH_MSAA").is_ok();
+    let renderer = if msaa { Renderer::new(&gpu, format) } else { Renderer::with_samples(&gpu, format, 1) };
     let t0 = Instant::now();
     let c = load(&gpu, &renderer, city, editor_scene);
     let tris: u64 = c.batches.iter().map(|b| b.tris()).sum();
     let inst: u64 = c.batches.iter().map(|b| b.instances() as u64).sum();
     println!("loaded in {:.1}s: {} batches, {} instances, {:.2}M textured tris per pass, {} lights", t0.elapsed().as_secs_f32(), c.batches.len(), inst, tris as f64 / 1e6, c.lights.len());
-    let targets = Targets::new(&gpu, &renderer, w, h);
+    let targets = if msaa { Targets::new(&gpu, &renderer, w, h) } else { Targets::with_upscale(&gpu, &renderer, w, h, render_scale()) };
     let out = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("bench out"),
         size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -451,15 +466,22 @@ pub fn bench(city: &City, editor_scene: Option<&editor::Scene>, views: &[(Vec3, 
             renderer.clear_probe();
         }
         let frame = || {
-            renderer.set_lights(&gpu, &c.lights, cam.eye);
+            if let Some(p) = &renderer.prof {
+                p.reset();
+            }
+            renderer.set_lights(&gpu, if std::env::var("FPS_BENCH_NO_LIGHTS").is_ok() { &[] } else { &c.lights }, cam.eye);
             let mut enc = gpu.device.create_command_encoder(&Default::default());
-            if renderer.gi.enabled() && std::env::var("FPS_BENCH_NO_GIITER").is_err() {
-                renderer.gi.iterate(&mut enc, 4);
+            // steady state: the field has settled and stops iterating (FPS_BENCH_GIITER times the settling frames)
+            if renderer.gi.enabled() && std::env::var("FPS_BENCH_GIITER").is_ok() {
+                renderer.gi_steps(&mut enc, 4);
             }
             if culled {
                 renderer.render_culled(&gpu, &mut enc, &c.scene, &world, &refs, &cam, &targets, &view);
             } else {
                 renderer.render(&gpu, &mut enc, &c.scene, &refs, &cam, &targets, &view);
+            }
+            if let Some(p) = &renderer.prof {
+                p.resolve(&mut enc);
             }
             gpu.queue.submit([enc.finish()]);
         };
@@ -479,6 +501,12 @@ pub fn bench(city: &City, editor_scene: Option<&editor::Scene>, views: &[(Vec3, 
             worst = worst.max(f0.elapsed().as_secs_f32());
         }
         println!("   cpu (encode + submit) {:.2} ms/frame", cpu * 1000.0 / frames as f32);
+        if let Some(p) = &renderer.prof {
+            frame();
+            let t = p.read(&gpu);
+            let total: f32 = t.iter().map(|x| x.1).sum();
+            println!("   gpu {total:.2} ms: {}", t.iter().map(|(l, ms)| format!("{l} {ms:.2}")).collect::<Vec<_>>().join(", "));
+        }
         let ms = t.elapsed().as_secs_f32() * 1000.0 / frames as f32;
         if culled && std::env::var("FPS_BENCH_REPORT").is_ok() {
             for (name, (inst, tris, top)) in ["main", "near", "far"].iter().zip(world.stats(&gpu)) {

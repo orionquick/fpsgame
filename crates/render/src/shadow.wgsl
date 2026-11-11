@@ -25,6 +25,7 @@ struct TIn {
 struct TOut {
     @builtin(position) clip: vec4f,
     @location(0) uv: vec2f,
+    @location(1) @interpolate(flat) mat: u32,
 };
 
 @vertex
@@ -37,6 +38,7 @@ fn vs_tex(v: TIn) -> TOut {
 
 struct Inst { model: mat4x4f, tint: vec4f, params: vec4f };
 @group(2) @binding(0) var<storage, read> insts: array<Inst>;
+@group(2) @binding(1) var<storage, read> inst_mat: array<u32>;
 
 @vertex
 fn vs_tex_ids(@location(0) pos: vec3f, @location(2) uv: vec2f, @location(4) iid: u32) -> TOut {
@@ -44,6 +46,7 @@ fn vs_tex_ids(@location(0) pos: vec3f, @location(2) uv: vec2f, @location(4) iid:
     var o: TOut;
     o.clip = su.light_vp * (I.model * vec4f(pos, 1.0));
     o.uv = uv * I.tint.a;
+    o.mat = inst_mat[iid];
     return o;
 }
 

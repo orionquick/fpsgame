@@ -46,6 +46,8 @@ pub(crate) fn layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {
 
 pub struct Material {
     pub(crate) bind: wgpu::BindGroup,
+    /// base, orm, normal (for the bindless arrays)
+    pub(crate) views: [wgpu::TextureView; 3],
 }
 
 /// Uploads one texture with a full CPU-generated mip chain.
@@ -217,7 +219,7 @@ impl Material {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&r.mat_sampler) },
             ],
         });
-        Self { bind }
+        Self { bind, views }
     }
 
     /// `base` is sRGB colour; `orm` is occlusion/roughness/metal; `normal` is tangent-space, OpenGL convention.
@@ -233,7 +235,7 @@ impl Material {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&r.mat_sampler) },
             ],
         });
-        Self { bind }
+        Self { bind, views }
     }
     /// A plain material that shows the vertex/instance tint (for untextured surfaces).
     pub fn plain(gpu: &Gpu, r: &crate::Renderer, roughness: u8) -> Self {
@@ -255,6 +257,7 @@ pub struct Batch {
     pub(crate) inst: wgpu::Buffer,
     pub(crate) n_inst: u32,
     pub(crate) material: std::sync::Arc<Material>,
+    pub(crate) n_verts: u32,
     /// Mesh bounds in model space, and all instances' bounds in world space.
     pub(crate) local: [glam::Vec3; 2],
     pub(crate) world: [glam::Vec3; 2],
@@ -333,8 +336,9 @@ impl Batch {
         }
         let mk = |c: &[u8], usage| gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("batch"), contents: c, usage });
         Some(Self {
-            vb: mk(bytemuck::cast_slice(verts), wgpu::BufferUsages::VERTEX),
-            ib: mk(bytemuck::cast_slice(&all), wgpu::BufferUsages::INDEX),
+            vb: mk(bytemuck::cast_slice(verts), wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC),
+            ib: mk(bytemuck::cast_slice(&all), wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC),
+            n_verts: verts.len() as u32,
             n_idx: finest.len() as u32,
             lods: ranges,
             lod_err: errs,

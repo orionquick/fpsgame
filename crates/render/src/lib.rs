@@ -7,11 +7,16 @@ pub use wgpu as wgpu_reexport;
 
 pub mod cull;
 pub mod gi;
+pub mod prof;
 pub mod textured;
 pub use cull::CullWorld;
 pub use textured::{compress_material, read_compressed, write_compressed, Batch, CompressedTex, CompressedTex3, Instance, Material, TexVertex};
 
 pub const MSAA: u32 = 4;
+/// Material slots in the bindless arrays.
+pub const MAX_MATERIALS: u32 = 2048;
+/// Temporal history format (output resolution).
+const TAA_HIST: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 const SHADOW_FAR_RES: u32 = 4096;
@@ -28,6 +33,8 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     /// BC block compression available (textures upload compressed).
     pub bc: bool,
+    /// Texture binding arrays, non-uniform indexing and indirect first-instance: the bindless culled path.
+    pub bindless: bool,
 }
 
 /// Instance options: wgpu's per-draw indirect validation off (it adds GPU work for every indirect draw; the culled
@@ -48,14 +55,18 @@ impl Gpu {
         }))
         .expect("no GPU adapter");
         let bc = adapter.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let ts = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+        let bl = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::PARTIALLY_BOUND_BINDING_ARRAY | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+        let bindless = adapter.features().contains(bl) && std::env::var("FPS_NO_BINDLESS").is_err();
+        let bl = if bindless { bl } else { wgpu::Features::empty() };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("device"),
             required_limits: adapter.limits(),
-            required_features: if bc { wgpu::Features::TEXTURE_COMPRESSION_BC } else { wgpu::Features::empty() },
+            required_features: ts | bl | if bc { wgpu::Features::TEXTURE_COMPRESSION_BC } else { wgpu::Features::empty() },
             ..Default::default()
         }))
         .expect("no GPU device");
-        Self { instance, adapter, device, queue, bc }
+        Self { instance, adapter, device, queue, bc, bindless }
     }
     pub fn headless() -> Self {
         Self::new(wgpu::Instance::new(instance_descriptor()), None)
@@ -186,7 +197,11 @@ pub struct PointLight {
     pub _pad: f32,
 }
 
-pub const MAX_LIGHTS: usize = 128;
+/// Lamp capacity, light-grid table size (a power of two) and grid list capacity.
+pub const MAX_LIGHTS: usize = 8192;
+const LIGHT_TABLE: usize = 1 << 16;
+const LIGHT_IDX: usize = 1 << 20;
+const LIGHT_CELL: f32 = 2.0;
 /// Afternoon sunlight (linear, intensity folded in): warm, as in the reference photos.
 pub const SUN_COL: [f32; 3] = [3.5, 3.0, 2.4];
 /// Screen-space reflection history: display colour + linear eye distance.
@@ -214,7 +229,11 @@ pub struct Renderer {
     pub(crate) post_bgl: wgpu::BindGroupLayout,
     globals: wgpu::Buffer,
     lights: wgpu::Buffer,
+    light_grid: wgpu::Buffer,
+    light_idx: wgpu::Buffer,
     n_lights: std::cell::Cell<u32>,
+    /// Identity of the uploaded light set (count and a hash of positions).
+    lights_key: std::cell::Cell<u64>,
     probe_tex: wgpu::Texture,
     probe_down: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
@@ -238,6 +257,9 @@ pub struct Renderer {
     hist_bgl: wgpu::BindGroupLayout,
     // culled path (see cull.rs)
     pub(crate) inst_bgl: wgpu::BindGroupLayout,
+    pub(crate) mat_arr_bgl: wgpu::BindGroupLayout,
+    /// The culled path draws from one vertex/index buffer with all materials bound at once.
+    pub(crate) bindless: bool,
     pub(crate) cull_bgl: wgpu::BindGroupLayout,
     pub(crate) cull_pipeline: wgpu::ComputePipeline,
     pub(crate) hiz_init_bgl: wgpu::BindGroupLayout,
@@ -256,6 +278,16 @@ pub struct Renderer {
     tex_shadow_ids_pipeline: wgpu::RenderPipeline,
     /// The world and sun the far shadow map was last drawn for by the culled path (it is static).
     far_key: std::cell::Cell<(u64, [f32; 3])>,
+    /// GPU pass timing (FPS_GPU_TIMING).
+    pub prof: Option<prof::Profiler>,
+    /// MSAA samples of the main pass (1: the game, with temporal anti-aliasing).
+    pub samples: u32,
+    tsr_pre_bgl: wgpu::BindGroupLayout,
+    tsr_res_bgl: wgpu::BindGroupLayout,
+    tsr_present_bgl: wgpu::BindGroupLayout,
+    tsr_pre_pipeline: wgpu::RenderPipeline,
+    tsr_res_pipeline: wgpu::RenderPipeline,
+    tsr_present_pipeline: wgpu::RenderPipeline,
 }
 
 const ID_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![4 => Uint32];
@@ -270,13 +302,21 @@ fn depth_state(write: bool, compare: wgpu::CompareFunction, bias: wgpu::DepthBia
 }
 
 impl Renderer {
+    /// With 4x MSAA (review shots and photo comparisons).
     pub fn new(gpu: &Gpu, color_format: wgpu::TextureFormat) -> Self {
+        Self::with_samples(gpu, color_format, MSAA)
+    }
+
+    /// `samples` 1 for the game (temporal anti-aliasing instead of MSAA), 4 otherwise.
+    pub fn with_samples(gpu: &Gpu, color_format: wgpu::TextureFormat, samples: u32) -> Self {
+        // shaders that read the main depth see a multisampled or a plain depth texture
+        let depth_ty = if samples > 1 { "texture_depth_multisampled_2d" } else { "texture_depth_2d" };
         let d = &gpu.device;
         let common = include_str!("common.wgsl");
         let module = |label, src: &str| d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(format!("{common}\n{src}").into()) });
         let flat_mod = module("flat", include_str!("shader.wgsl"));
         let tex_mod = module("tex", include_str!("tex.wgsl"));
-        let post_mod = module("post", include_str!("post.wgsl"));
+        let post_mod = module("post", &include_str!("post.wgsl").replace("texture_depth_multisampled_2d", depth_ty));
         let shadow_mod = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("shadow"), source: wgpu::ShaderSource::Wgsl(include_str!("shadow.wgsl").into()) });
 
         let depth_tex = |binding| wgpu::BindGroupLayoutEntry {
@@ -293,7 +333,9 @@ impl Renderer {
                 depth_tex(1),
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None },
                 depth_tex(3),
-                uniform(4, wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 9, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 10, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::Cube, multisampled: false }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
                 wgpu::BindGroupLayoutEntry {
@@ -325,7 +367,7 @@ impl Renderer {
         let post_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post"),
             entries: &[
-                post_tex(0, wgpu::TextureSampleType::Depth, true),
+                post_tex(0, wgpu::TextureSampleType::Depth, samples > 1),
                 post_tex(1, wgpu::TextureSampleType::Float { filterable: false }, false),
                 post_tex(2, wgpu::TextureSampleType::Float { filterable: false }, false),
             ],
@@ -361,7 +403,10 @@ impl Renderer {
         let far = cascade(SHADOW_FAR_RES, "shadow far");
         let near = cascade(SHADOW_NEAR_RES, "shadow near");
         let globals = d.create_buffer(&wgpu::BufferDescriptor { label: Some("globals"), size: std::mem::size_of::<Globals>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let lights = d.create_buffer(&wgpu::BufferDescriptor { label: Some("lights"), size: (MAX_LIGHTS * std::mem::size_of::<PointLight>()) as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let sbuf = |label, size: usize| d.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: size as u64, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let lights = sbuf("lights", MAX_LIGHTS * std::mem::size_of::<PointLight>());
+        let light_grid = sbuf("light grid", LIGHT_TABLE * 8);
+        let light_idx = sbuf("light idx", LIGHT_IDX * 4);
         let probe_tex = d.create_texture(&wgpu::TextureDescriptor {
             label: Some("probe"),
             size: wgpu::Extent3d { width: PROBE_RES, height: PROBE_RES, depth_or_array_layers: 6 },
@@ -389,6 +434,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&probe_samp) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&gi.view) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&gi.sky_view) },
+                wgpu::BindGroupEntry { binding: 9, resource: light_grid.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: light_idx.as_entire_binding() },
             ],
         });
 
@@ -408,7 +455,7 @@ impl Renderer {
         let tex_shadow_layout = layout("tex shadow", &[Some(&sbgl), Some(&mat_bgl)]);
         let prim = wgpu::PrimitiveState { cull_mode: None, ..Default::default() };
         let color = [Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })];
-        let ms = wgpu::MultisampleState { count: MSAA, ..Default::default() };
+        let ms = wgpu::MultisampleState { count: samples, ..Default::default() };
         let shadow_bias = wgpu::DepthBiasState { constant: 3, slope_scale: 2.5, clamp: 0.0 };
         let pipe = |label, layout: &wgpu::PipelineLayout, vs: wgpu::VertexState, fs: Option<wgpu::FragmentState>, depth, ms: wgpu::MultisampleState| {
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: Some(label), layout: Some(layout), vertex: vs, primitive: prim, depth_stencil: depth, multisample: ms, fragment: fs, multiview_mask: None, cache: None })
@@ -465,15 +512,44 @@ impl Renderer {
         );
         // ---- culled path ----
         let storage = |binding, vis, read_only| wgpu::BindGroupLayoutEntry { binding, visibility: vis, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only }, has_dynamic_offset: false, min_binding_size: None }, count: None };
-        let inst_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("instances"), entries: &[storage(0, wgpu::ShaderStages::VERTEX, true)] });
+        let inst_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("instances"), entries: &[storage(0, wgpu::ShaderStages::VERTEX, true), storage(1, wgpu::ShaderStages::VERTEX, true)] });
+        // bindless: every material's three maps in binding arrays, indexed per instance
+        let bindless = gpu.bindless;
+        let arr = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+            count: std::num::NonZeroU32::new(MAX_MATERIALS),
+        };
+        let mat_arr_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("materials"),
+            entries: &[arr(0), arr(1), arr(2), wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }],
+        });
+        let ids_mat_bgl = if bindless { &mat_arr_bgl } else { &mat_bgl };
+        let bindless_src = |src: &str| {
+            let mut s = src.to_string();
+            for (k, n) in ["t_base", "t_orm", "t_nrm"].iter().enumerate() {
+                s = s.replace(&format!("@group(1) @binding({k}) var {n}: texture_2d<f32>;"), &format!("@group(1) @binding({k}) var {n}: binding_array<texture_2d<f32>>;"));
+                s = s.replace(&format!("({n}, "), &format!("({n}[i.mat], "));
+            }
+            s
+        };
+        // the enable directive leads the module (before common.wgsl)
+        let tex_ids_mod = if bindless {
+            d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("tex bindless"), source: wgpu::ShaderSource::Wgsl(format!("enable wgpu_binding_array;\n{common}\n{}", bindless_src(include_str!("tex.wgsl"))).into()) })
+        } else {
+            module("tex ids", include_str!("tex.wgsl"))
+        };
+        let shadow_ids_src = if bindless { format!("enable wgpu_binding_array;\n{}", bindless_src(include_str!("shadow.wgsl"))) } else { include_str!("shadow.wgsl").to_string() };
+        let shadow_ids_mod = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("shadow ids"), source: wgpu::ShaderSource::Wgsl(shadow_ids_src.into()) });
         let ids_layout = [Some(textured::layouts()[0].clone()), Some(wgpu::VertexBufferLayout { array_stride: 4, step_mode: wgpu::VertexStepMode::Instance, attributes: &ID_ATTRS })];
-        let tex_ids_layout = layout("tex ids", &[Some(&bgl), Some(&mat_bgl), Some(&hist_bgl), Some(&inst_bgl)]);
-        let tex_shadow_ids_layout = layout("tex shadow ids", &[Some(&sbgl), Some(&mat_bgl), Some(&inst_bgl)]);
+        let tex_ids_layout = layout("tex ids", &[Some(&bgl), Some(ids_mat_bgl), Some(&hist_bgl), Some(&inst_bgl)]);
+        let tex_shadow_ids_layout = layout("tex shadow ids", &[Some(&sbgl), Some(ids_mat_bgl), Some(&inst_bgl)]);
         let tex_ids_pipeline = pipe(
             "tex ids",
             &tex_ids_layout,
-            wgpu::VertexState { module: &tex_mod, entry_point: Some("vs_ids"), compilation_options: Default::default(), buffers: &ids_layout },
-            Some(wgpu::FragmentState { module: &tex_mod, entry_point: Some("fs"), compilation_options: Default::default(), targets: &color }),
+            wgpu::VertexState { module: &tex_ids_mod, entry_point: Some("vs_ids"), compilation_options: Default::default(), buffers: &ids_layout },
+            Some(wgpu::FragmentState { module: &tex_ids_mod, entry_point: Some("fs"), compilation_options: Default::default(), targets: &color }),
             depth_state(false, wgpu::CompareFunction::LessEqual, Default::default()),
             ms,
         );
@@ -481,8 +557,8 @@ impl Renderer {
         let tex_ids_pre_pipeline = pipe(
             "tex ids prepass",
             &tex_ids_layout,
-            wgpu::VertexState { module: &tex_mod, entry_point: Some("vs_ids"), compilation_options: Default::default(), buffers: &ids_layout },
-            Some(wgpu::FragmentState { module: &tex_mod, entry_point: Some("fs_pre"), compilation_options: Default::default(), targets: &no_color }),
+            wgpu::VertexState { module: &tex_ids_mod, entry_point: Some("vs_ids_pre"), compilation_options: Default::default(), buffers: &ids_layout },
+            Some(wgpu::FragmentState { module: &tex_ids_mod, entry_point: Some("fs_pre"), compilation_options: Default::default(), targets: &no_color }),
             depth_state(true, wgpu::CompareFunction::Less, Default::default()),
             ms,
         );
@@ -514,20 +590,21 @@ impl Renderer {
         let glass_ids_pipeline = pipe(
             "glass ids",
             &tex_ids_layout,
-            wgpu::VertexState { module: &tex_mod, entry_point: Some("vs_ids"), compilation_options: Default::default(), buffers: &ids_layout },
-            Some(wgpu::FragmentState { module: &tex_mod, entry_point: Some("fs_glass"), compilation_options: Default::default(), targets: &glass_color }),
+            wgpu::VertexState { module: &tex_ids_mod, entry_point: Some("vs_ids"), compilation_options: Default::default(), buffers: &ids_layout },
+            Some(wgpu::FragmentState { module: &tex_ids_mod, entry_point: Some("fs_glass"), compilation_options: Default::default(), targets: &glass_color }),
             depth_state(false, wgpu::CompareFunction::Less, Default::default()),
             ms,
         );
         let tex_shadow_ids_pipeline = pipe(
             "tex shadow ids",
             &tex_shadow_ids_layout,
-            wgpu::VertexState { module: &shadow_mod, entry_point: Some("vs_tex_ids"), compilation_options: Default::default(), buffers: &ids_layout },
-            Some(wgpu::FragmentState { module: &shadow_mod, entry_point: Some("fs_tex"), compilation_options: Default::default(), targets: &[] }),
+            wgpu::VertexState { module: &shadow_ids_mod, entry_point: Some("vs_tex_ids"), compilation_options: Default::default(), buffers: &ids_layout },
+            Some(wgpu::FragmentState { module: &shadow_ids_mod, entry_point: Some("fs_tex"), compilation_options: Default::default(), targets: &[] }),
             depth_state(true, wgpu::CompareFunction::Less, shadow_bias),
             Default::default(),
         );
-        let cull_mod = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("cull"), source: wgpu::ShaderSource::Wgsl(include_str!("cull.wgsl").into()) });
+        let cull_src = format!("const NSAMP: i32 = {samples};\n{}", include_str!("cull.wgsl").replace("texture_depth_multisampled_2d", depth_ty));
+        let cull_mod = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("cull"), source: wgpu::ShaderSource::Wgsl(cull_src.into()) });
         let cs = wgpu::ShaderStages::COMPUTE;
         let unfilt = |binding| wgpu::BindGroupLayoutEntry { binding, visibility: cs, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
         let r32_store = |binding| wgpu::BindGroupLayoutEntry { binding, visibility: cs, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::R32Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None };
@@ -537,8 +614,35 @@ impl Renderer {
         });
         let hiz_init_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("hiz init"),
-            entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: cs, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: true }, count: None }, r32_store(1)],
+            entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: cs, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: samples > 1 }, count: None }, r32_store(1)],
         });
+        // temporal super resolution (tsr.wgsl, after Ruinbound's)
+        let ftex = |binding| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
+        let fu = uniform(0, wgpu::ShaderStages::FRAGMENT);
+        let tsr_pre_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tsr pre"),
+            entries: &[fu, ftex(1), wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None }],
+        });
+        let tsr_res_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tsr resolve"),
+            entries: &[fu, ftex(1), ftex(3), ftex(4), ftex(5), wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }],
+        });
+        let tsr_present_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("tsr present"), entries: &[fu, ftex(7)] });
+        let tsr_mod = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("tsr"), source: wgpu::ShaderSource::Wgsl(include_str!("tsr.wgsl").into()) });
+        let tsr_pipe = |label, bgl: &wgpu::BindGroupLayout, entry, targets: &[Option<wgpu::ColorTargetState>]| {
+            pipe(
+                label,
+                &layout(label, &[Some(bgl)]),
+                wgpu::VertexState { module: &tsr_mod, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+                Some(wgpu::FragmentState { module: &tsr_mod, entry_point: Some(entry), compilation_options: Default::default(), targets }),
+                None,
+                Default::default(),
+            )
+        };
+        let hist_t = Some(wgpu::ColorTargetState { format: TAA_HIST, blend: None, write_mask: wgpu::ColorWrites::ALL });
+        let tsr_pre_pipeline = tsr_pipe("tsr pre", &tsr_pre_bgl, "fs_pre", &[hist_t.clone(), hist_t.clone()]);
+        let tsr_res_pipeline = tsr_pipe("tsr resolve", &tsr_res_bgl, "fs_resolve", &[hist_t.clone()]);
+        let tsr_present_pipeline = tsr_pipe("tsr present", &tsr_present_bgl, "fs_present", &[Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })]);
         let hiz_down_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("hiz down"), entries: &[unfilt(2), r32_store(3)] });
         let compute = |label, bgl: &wgpu::BindGroupLayout, entry| {
             d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: Some(label), layout: Some(&layout(label, &[Some(bgl)])), module: &cull_mod, entry_point: Some(entry), compilation_options: Default::default(), cache: None })
@@ -595,7 +699,7 @@ impl Renderer {
             None,
             Default::default(),
         );
-        Self { inst_bgl, cull_bgl, cull_pipeline, hiz_init_bgl, hiz_init_pipeline, hiz_down_bgl, hiz_down_pipeline, tex_ids_pipeline, glass_ids_pipeline, flat_pre_pipeline, tex_ids_pre_pipeline, flat_shade_pipeline, sky_late_pipeline, near_key: std::cell::Cell::new((0, [0.0; 3], [0; 3])), tex_shadow_ids_pipeline, far_key: std::cell::Cell::new((0, [0.0; 3])), hist_bgl, gi, probe_tex, probe_down, blit_pipeline, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), white: std::cell::Cell::new([1.0; 3]), lights, n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
+        Self { mat_arr_bgl, bindless, samples, tsr_pre_bgl, tsr_res_bgl, tsr_present_bgl, tsr_pre_pipeline, tsr_res_pipeline, tsr_present_pipeline, inst_bgl, cull_bgl, cull_pipeline, hiz_init_bgl, hiz_init_pipeline, hiz_down_bgl, hiz_down_pipeline, tex_ids_pipeline, glass_ids_pipeline, flat_pre_pipeline, tex_ids_pre_pipeline, flat_shade_pipeline, sky_late_pipeline, near_key: std::cell::Cell::new((0, [0.0; 3], [0; 3])), tex_shadow_ids_pipeline, far_key: std::cell::Cell::new((0, [0.0; 3])), prof: prof::Profiler::new(gpu), hist_bgl, gi, probe_tex, probe_down, blit_pipeline, probe_down_bgl, probe_down_samp, probe: std::cell::Cell::new([[0.0; 4]; 3]), encode: std::cell::Cell::new(0.0), exposure: std::cell::Cell::new(1.0), white: std::cell::Cell::new([1.0; 3]), lights, light_grid, light_idx, lights_key: std::cell::Cell::new(u64::MAX), n_lights: std::cell::Cell::new(0), ao_pipeline, composite_pipeline, post_bgl, pipeline, sky_pipeline, tex_pipeline, glass_pipeline, shadow_pipeline, tex_shadow_pipeline, globals, bind, far, near, mat_bgl, mat_sampler, sun_dir: default_sun(), color_format }
     }
 
     /// Renders a reflection probe at `pos` for the box `min`..`max` (world): six 90-degree faces, then a blurred mip
@@ -624,7 +728,7 @@ impl Renderer {
             label: Some("blit"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: dst, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: self.prof.as_ref().and_then(|p| p.render("blit")),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -679,7 +783,7 @@ impl Renderer {
                     label: Some("probe down"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &dst, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes: self.prof.as_ref().and_then(|p| p.render("probe down")),
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
@@ -694,6 +798,11 @@ impl Renderer {
     }
 
     /// Runs `n` GI propagation steps now (shots: thousands at once; play: a few per frame).
+    /// `n` GI propagation steps recorded into a frame's encoder (timed as "gi").
+    pub fn gi_steps(&self, enc: &mut wgpu::CommandEncoder, n: u32) {
+        self.gi.iterate_ts(enc, n, self.prof.as_ref().and_then(|p| p.compute("gi")));
+    }
+
     pub fn gi_iterate(&self, gpu: &Gpu, n: u32) {
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         self.gi.iterate(&mut enc, n);
@@ -715,14 +824,57 @@ impl Renderer {
         self.probe.set([[0.0; 4]; 3]);
     }
 
-    /// Sets the local lights for the next renders; keeps the `MAX_LIGHTS` nearest to `eye`.
-    pub fn set_lights(&self, gpu: &Gpu, lights: &[PointLight], eye: Vec3) {
-        let mut v: Vec<PointLight> = lights.to_vec();
-        v.sort_by(|a, b| Vec3::from(a.pos).distance_squared(eye).total_cmp(&Vec3::from(b.pos).distance_squared(eye)));
-        v.truncate(MAX_LIGHTS);
-        self.n_lights.set(v.len() as u32);
-        v.resize(MAX_LIGHTS, PointLight::default());
-        gpu.queue.write_buffer(&self.lights, 0, bytemuck::cast_slice(&v));
+    /// Sets the local lights. They are static: all of them go up once with a hashed world grid of the lamps
+    /// reaching each 2 m cell (each pixel then only visits its cell's lamps); later calls with the same set are free.
+    pub fn set_lights(&self, gpu: &Gpu, lights: &[PointLight], _eye: Vec3) {
+        let mut key = lights.len() as u64 ^ 0x9e37_79b9_7f4a_7c15;
+        for l in lights {
+            for v in [l.pos[0], l.pos[1], l.pos[2], l.radius] {
+                key = (key ^ v.to_bits() as u64).wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        if key == self.lights_key.get() {
+            return;
+        }
+        self.lights_key.set(key);
+        let lights = &lights[..lights.len().min(MAX_LIGHTS)];
+        let hash = |c: [i32; 3]| ((c[0] as u32).wrapping_mul(73856093) ^ (c[1] as u32).wrapping_mul(19349663) ^ (c[2] as u32).wrapping_mul(83492791)) as usize & (LIGHT_TABLE - 1);
+        let mut lists: Vec<Vec<u32>> = vec![vec![]; LIGHT_TABLE];
+        for (i, l) in lights.iter().enumerate() {
+            let p = Vec3::from(l.pos);
+            let lo = ((p - l.radius) / LIGHT_CELL).floor().as_ivec3();
+            let hi = ((p + l.radius) / LIGHT_CELL).floor().as_ivec3();
+            for x in lo.x..=hi.x {
+                for y in lo.y..=hi.y {
+                    for z in lo.z..=hi.z {
+                        // cells the sphere reaches (nearest point of the cell within the radius)
+                        let cmin = Vec3::new(x as f32, y as f32, z as f32) * LIGHT_CELL;
+                        if p.clamp(cmin, cmin + LIGHT_CELL).distance_squared(p) <= l.radius * l.radius {
+                            let h = hash([x, y, z]);
+                            if lists[h].last() != Some(&(i as u32)) {
+                                lists[h].push(i as u32);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut grid = vec![[0u32; 2]; LIGHT_TABLE];
+        let mut idx: Vec<u32> = vec![];
+        for (h, l) in lists.iter().enumerate() {
+            let n = l.len().min(LIGHT_IDX.saturating_sub(idx.len()));
+            grid[h] = [idx.len() as u32, n as u32];
+            idx.extend_from_slice(&l[..n]);
+        }
+        if idx.is_empty() {
+            idx.push(0);
+        }
+        self.n_lights.set(lights.len() as u32);
+        if !lights.is_empty() {
+            gpu.queue.write_buffer(&self.lights, 0, bytemuck::cast_slice(lights));
+        }
+        gpu.queue.write_buffer(&self.light_grid, 0, bytemuck::cast_slice(&grid));
+        gpu.queue.write_buffer(&self.light_idx, 0, bytemuck::cast_slice(&idx));
     }
 
     fn light_far(&self, scene: &Scene) -> Mat4 {
@@ -748,7 +900,7 @@ impl Renderer {
             label: Some("shadow"),
             color_attachments: &[],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &cascade.view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
-            timestamp_writes: None,
+            timestamp_writes: self.prof.as_ref().and_then(|p| p.render("shadow")),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -796,7 +948,8 @@ impl Renderer {
             },
             white: {
                 let w = self.white.get();
-                [w[0], w[1], w[2], 0.0]
+                // w: temporal frame number + 1 (0 without TAA): AO and reflections then take fewer, rotating samples
+                [w[0], w[1], w[2], t.taa.as_ref().map_or(0.0, |a| (a.frame.get() % 64 + 1) as f32)]
             },
         };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&gl));
@@ -815,7 +968,7 @@ impl Renderer {
                 label: Some("post"),
                 color_attachments: if composite { &atts[..] } else { &atts[..1] },
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: self.prof.as_ref().and_then(|p| p.render("post")),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -831,7 +984,7 @@ impl Renderer {
 
     /// Records the shadow + main passes. `msaa` is the multisampled colour target, `resolve` the final one.
     pub fn render(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, scene: &Scene, batches: &[&Batch], cam: &Camera, t: &Targets, out: &wgpu::TextureView) {
-        let (msaa, resolve, depth) = (&t.msaa, &t.scene, &t.depth);
+        let depth = &t.depth;
         self.write_globals(gpu, scene, cam, t, cam.focus);
         self.near_key.set((0, [0.0; 3], [0; 3]));
         if std::env::var("FPS_BENCH_NO_SHADOW").is_err() {
@@ -840,14 +993,9 @@ impl Renderer {
         }
         let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: msaa,
-                depth_slice: None,
-                resolve_target: Some(resolve),
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Discard },
-            })],
+            color_attachments: &[Some(t.main_color())],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
-            timestamp_writes: None,
+            timestamp_writes: self.prof.as_ref().and_then(|p| p.render("main")),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -880,6 +1028,21 @@ impl Renderer {
     /// `batches` must be the ones `world` was built from.
     pub fn render_culled(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, scene: &Scene, world: &CullWorld, batches: &[&Batch], cam: &Camera, t: &Targets, out: &wgpu::TextureView) {
         assert_eq!(world.n_batches, batches.len(), "render_culled: batches differ from the CullWorld's");
+        // temporal super resolution: a Halton(2,3) sub-pixel jitter, 8 x the upscale area ratio phases (FSR2's rule)
+        let unjit = cam.view_proj;
+        let jit_cam;
+        let (cam, jit_px) = match &t.taa {
+            Some(a) => {
+                let phases = ((8.0 * (a.out_w * a.out_h) as f32 / (t.w * t.h) as f32).ceil() as u32).clamp(8, 128);
+                let i = a.frame.get() % phases + 1;
+                // texel i samples the unjittered point i + 0.5 - jit (pixels, y down)
+                let jp = [halton(i, 2) - 0.5, halton(i, 3) - 0.5];
+                let (jx, jy) = (jp[0] * 2.0 / t.w as f32, -jp[1] * 2.0 / t.h as f32);
+                jit_cam = Camera { view_proj: Mat4::from_translation(Vec3::new(jx, jy, 0.0)) * cam.view_proj, eye: cam.eye, focus: cam.focus, fog: cam.fog, proj_y: cam.proj_y };
+                (&jit_cam, jp)
+            }
+            None => (cam, [0.0; 2]),
+        };
         // the near cascade is centred on the eye snapped to an 8 m grid and kept until the eye leaves the cell
         // (the world is static), so it is only redrawn about once a second at a walk
         let cell = (cam.eye / NEAR_CELL).round();
@@ -926,7 +1089,7 @@ impl Renderer {
                 label: Some("shadow culled"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &cascade.view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
-                timestamp_writes: None,
+                timestamp_writes: self.prof.as_ref().and_then(|p| p.render("shadow culled")),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -947,14 +1110,9 @@ impl Renderer {
         }
         let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main culled"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &t.msaa,
-                depth_slice: None,
-                resolve_target: Some(&t.scene),
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Discard },
-            })],
+            color_attachments: &[Some(t.main_color())],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &t.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
-            timestamp_writes: None,
+            timestamp_writes: self.prof.as_ref().and_then(|p| p.render("main culled")),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -975,7 +1133,7 @@ impl Renderer {
         p.set_vertex_buffer(0, scene.vbuf.slice(..));
         p.set_index_buffer(scene.ibuf.slice(..), wgpu::IndexFormat::Uint32);
         p.draw_indexed(0..scene.n_idx, 0, 0..1);
-        p.set_pipeline(&self.tex_ids_pipeline);
+        p.set_pipeline(if skip("shadefs") { &self.tex_ids_pre_pipeline } else { &self.tex_ids_pipeline });
         if !skip("shade") {
             world.draw(&mut p, batches, cull::MAIN, &main_planes, false);
         }
@@ -987,7 +1145,37 @@ impl Renderer {
         world.draw(&mut p, batches, cull::MAIN, &main_planes, true);
         drop(p);
         if !skip("post") {
-            self.post(enc, cam, t, out);
+            self.post(enc, cam, t, t.taa.as_ref().map_or(out, |a| &a.color));
+        }
+        if let Some(a) = &t.taa {
+            let f = a.frame.get();
+            let k = |name: &str, d: f32| std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+            let u = TsrU {
+                inv_vp: cam.view_proj.inverse().to_cols_array_2d(),
+                cur_vp: unjit.to_cols_array_2d(),
+                prev_vp: a.prev.get().unwrap_or(unjit).to_cols_array_2d(),
+                rsz: [t.w as f32, t.h as f32, 1.0 / t.w as f32, 1.0 / t.h as f32],
+                osz: [a.out_w as f32, a.out_h as f32, 1.0 / a.out_w as f32, 1.0 / a.out_h as f32],
+                jit: [jit_px[0], jit_px[1], a.prev.get().is_none() as u32 as f32, 0.0],
+                // Ruinbound's tuning: clip 1.5 sigma still / 0.75 moving (full at 2 render px/frame), history 12 still / 4 moving
+                k: [k("FPS_TSR_GAMMA", 1.5), k("FPS_TSR_GMOVE", 0.75), k("FPS_TSR_GSPEED", 2.0), k("FPS_TSR_ACC", 12.0)],
+                k2: [k("FPS_TSR_ACCMOVE", 4.0), k("FPS_TSR_KN", 2.5), k("FPS_TSR_KW", 2.0), k("FPS_TSR_SHARP", 0.27 * 1.5)],
+            };
+            gpu.queue.write_buffer(&a.uniform, 0, bytemuck::bytes_of(&u));
+            let cur = (f % 2) as usize;
+            let att = |view| Some(wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } });
+            for (label, pipe, bind, targets) in [
+                ("tsr pre", &self.tsr_pre_pipeline, &a.pre_bind, vec![att(&a.s0), att(&a.s1)]),
+                ("tsr resolve", &self.tsr_res_pipeline, &a.res_binds[cur], vec![att(&a.hist[1 - cur])]),
+                ("tsr present", &self.tsr_present_pipeline, &a.present_binds[cur], vec![att(out)]),
+            ] {
+                let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some(label), color_attachments: &targets, depth_stencil_attachment: None, timestamp_writes: self.prof.as_ref().and_then(|p| p.render(label)), occlusion_query_set: None, multiview_mask: None });
+                p.set_pipeline(pipe);
+                p.set_bind_group(0, bind, &[]);
+                p.draw(0..3, 0..1);
+            }
+            a.prev.set(Some(unjit));
+            a.frame.set(f + 1);
         }
         // the depth pyramid for next frame's occlusion test
         if !skip("hiz") {
@@ -1000,6 +1188,48 @@ impl Renderer {
 /// Level-of-detail quality (FPS_LOD, default 0.5: a level may be off by up to 2 px; 1 = 1 px, higher = finer).
 fn lod_quality() -> f32 {
     std::env::var("FPS_LOD").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5)
+}
+
+/// Temporal super resolution state: the render-resolution composite and clip-box stats, ping-pong output-resolution
+/// histories (rgb + confidence), and the resolved frame for the present pass.
+struct Taa {
+    color: wgpu::TextureView,
+    /// stats, history[i]: bind groups per history parity (resolve reads hist[i], writes hist[1 - i]; present reads hist[1 - i])
+    pre_bind: wgpu::BindGroup,
+    res_binds: [wgpu::BindGroup; 2],
+    present_binds: [wgpu::BindGroup; 2],
+    s0: wgpu::TextureView,
+    s1: wgpu::TextureView,
+    hist: [wgpu::TextureView; 2],
+    uniform: wgpu::Buffer,
+    frame: std::cell::Cell<u32>,
+    /// Previous frame's unjittered view-projection.
+    prev: std::cell::Cell<Option<Mat4>>,
+    out_w: u32,
+    out_h: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TsrU {
+    inv_vp: [[f32; 4]; 4],
+    cur_vp: [[f32; 4]; 4],
+    prev_vp: [[f32; 4]; 4],
+    rsz: [f32; 4],
+    osz: [f32; 4],
+    jit: [f32; 4],
+    k: [f32; 4],
+    k2: [f32; 4],
+}
+
+fn halton(mut i: u32, b: u32) -> f32 {
+    let (mut f, mut r) = (1.0f32, 0.0f32);
+    while i > 0 {
+        f /= b as f32;
+        r += f * (i % b) as f32;
+        i /= b;
+    }
+    r
 }
 
 /// MSAA colour + depth targets for a given size.
@@ -1022,12 +1252,29 @@ pub struct Targets {
     /// Depth pyramid of the last culled frame, and that frame's view-projection.
     hiz: cull::Hiz,
     prev_cull: std::cell::Cell<Option<Mat4>>,
+    /// Multisampled main pass (else it renders straight into `scene`).
+    ms: bool,
+    /// Temporal upscaling state (`with_upscale`).
+    taa: Option<Taa>,
     pub w: u32,
     pub h: u32,
 }
 
 impl Targets {
+    /// The main pass colour attachment: multisampled and resolved into `scene`, or `scene` itself.
+    fn main_color(&self) -> wgpu::RenderPassColorAttachment<'_> {
+        let (view, resolve_target, store) = if self.ms { (&self.msaa, Some(&self.scene), wgpu::StoreOp::Discard) } else { (&self.scene, None, wgpu::StoreOp::Store) };
+        wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store } }
+    }
+}
+
+impl Targets {
     pub fn new(gpu: &Gpu, r: &Renderer, w: u32, h: u32) -> Self {
+        Self::new_ao(gpu, r, w, h, 1)
+    }
+
+    /// `ao_div`: ambient occlusion at 1/ao_div of the resolution (2 with temporal accumulation).
+    fn new_ao(gpu: &Gpu, r: &Renderer, w: u32, h: u32, ao_div: u32) -> Self {
         let mk = |format, label, samples, usage| {
             gpu.device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -1044,10 +1291,22 @@ impl Targets {
         };
         let rt = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let rtt = rt | wgpu::TextureUsages::TEXTURE_BINDING;
-        let msaa = mk(r.color_format, "msaa", MSAA, rt);
-        let depth = mk(DEPTH, "depth", MSAA, rtt);
+        let msaa = mk(r.color_format, "msaa", r.samples, rt);
+        let depth = mk(DEPTH, "depth", r.samples, rtt);
         let scene = mk(r.color_format, "scene", 1, rtt);
-        let ao = mk(AO_FORMAT, "ao", 1, rtt);
+        let ao = gpu
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("ao"),
+                size: wgpu::Extent3d { width: w.div_ceil(ao_div), height: h.div_ceil(ao_div), depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: AO_FORMAT,
+                usage: rtt,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
         let bind = |ao: &wgpu::TextureView| {
             gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("post"),
@@ -1095,7 +1354,34 @@ impl Targets {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&hist_tex.create_view(&Default::default())) }],
         });
         let hiz = cull::Hiz::new(gpu, r, &depth, w, h);
-        Self { msaa, depth, scene, ao, post, post_ao, hist_tex, hist_out_tex, hist_out, hist_bind, prev: std::cell::Cell::new((Mat4::IDENTITY, Vec3::ZERO, false)), hiz, prev_cull: std::cell::Cell::new(None), w, h }
+        Self { msaa, ms: r.samples > 1, depth, scene, ao, post, post_ao, hist_tex, hist_out_tex, hist_out, hist_bind, prev: std::cell::Cell::new((Mat4::IDENTITY, Vec3::ZERO, false)), hiz, prev_cull: std::cell::Cell::new(None), taa: None, w, h }
+    }
+
+    /// Targets rendering at `scale` of an output size, temporally upscaled to it (needs a 1-sample renderer).
+    pub fn with_upscale(gpu: &Gpu, r: &Renderer, out_w: u32, out_h: u32, scale: f32) -> Self {
+        assert_eq!(r.samples, 1, "temporal upscaling replaces MSAA");
+        let (w, h) = (((out_w as f32 * scale).round() as u32).max(1), ((out_h as f32 * scale).round() as u32).max(1));
+        let mut t = Self::new_ao(gpu, r, w, h, 2);
+        let tex = |label, w, h, format, usage| {
+            gpu.device.create_texture(&wgpu::TextureDescriptor { label: Some(label), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] }).create_view(&Default::default())
+        };
+        let use_rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let color = tex("tsr colour", w, h, r.color_format, use_rt);
+        let s0 = tex("tsr stats 0", w, h, TAA_HIST, use_rt);
+        let s1 = tex("tsr stats 1", w, h, TAA_HIST, use_rt);
+        let hist = [tex("tsr history a", out_w, out_h, TAA_HIST, use_rt), tex("tsr history b", out_w, out_h, TAA_HIST, use_rt)];
+        let uniform = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("tsr"), size: std::mem::size_of::<TsrU>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        fn tv(b: u32, v: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
+            wgpu::BindGroupEntry { binding: b, resource: wgpu::BindingResource::TextureView(v) }
+        }
+        let ub = wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() };
+        let bg = |label, layout, entries: &[wgpu::BindGroupEntry]| gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some(label), layout, entries });
+        let pre_bind = bg("tsr pre", &r.tsr_pre_bgl, &[ub.clone(), tv(1, &color), tv(2, &t.depth)]);
+        let res = |i: usize| bg("tsr resolve", &r.tsr_res_bgl, &[ub.clone(), tv(1, &color), tv(3, &s0), tv(4, &s1), tv(5, &hist[i]), wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&r.probe_down_samp) }]);
+        let present = |i: usize| bg("tsr present", &r.tsr_present_bgl, &[ub.clone(), tv(7, &hist[1 - i])]);
+        let (res_binds, present_binds) = ([res(0), res(1)], [present(0), present(1)]);
+        t.taa = Some(Taa { color, pre_bind, res_binds, present_binds, s0, s1, hist, uniform, frame: std::cell::Cell::new(0), prev: std::cell::Cell::new(None), out_w, out_h });
+        t
     }
 }
 

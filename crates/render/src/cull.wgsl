@@ -122,7 +122,7 @@ fn hiz_init(@builtin(global_invocation_id) gid: vec3u) {
         return;
     }
     var d = 0.0;
-    for (var s = 0; s < i32(textureNumSamples(src_ms)); s++) {
+    for (var s = 0; s < NSAMP; s++) {
         d = max(d, textureLoad(src_ms, vec2i(gid.xy), s));
     }
     textureStore(dst0, vec2i(gid.xy), vec4f(d, 0.0, 0.0, 0.0));

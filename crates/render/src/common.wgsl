@@ -32,7 +32,15 @@ struct PointLight {
     color: vec3f,
     pad: f32,
 };
-@group(0) @binding(4) var<uniform> lights: array<PointLight, 128>;
+// every lamp, and a static hashed world grid (LIGHT_CELL m cells) listing the lamps that reach each cell
+@group(0) @binding(4) var<storage, read> lights: array<PointLight>;
+@group(0) @binding(9) var<storage, read> light_grid: array<vec2u>;
+@group(0) @binding(10) var<storage, read> light_idx: array<u32>;
+const LIGHT_CELL: f32 = 2.0;
+
+fn light_hash(c: vec3i) -> u32 {
+    return (u32(c.x) * 73856093u ^ u32(c.y) * 19349663u ^ u32(c.z) * 83492791u) & (arrayLength(&light_grid) - 1u);
+}
 @group(0) @binding(5) var probe_tex: texture_cube<f32>;
 @group(0) @binding(6) var probe_samp: sampler;
 @group(0) @binding(7) var gi_tex: texture_3d<f32>;
@@ -66,12 +74,18 @@ fn gi_sample(world: vec3f, n: vec3f) -> vec4f {
     let t2 = cross(n, t1);
     let taps = array<vec3f, 4>(t1 + t2, t1 - t2, -t1 + t2, -t1 - t2);
     var e = vec3f(0.0);
+    // with temporal accumulation (white.w > 0) one tap per frame, rotating through the four
+    let tsr = g.white.w > 0.0;
+    let k0 = select(0, i32(g.white.w) % 4, tsr);
+    let kn = select(4, 1, tsr);
+    let kw = select(0.25, 1.0, tsr);
     for (var d = 0; d < 6; d++) {
         if (wts[d] > 0.0) {
-            for (var k = 0; k < 4; k++) {
+            for (var kk = 0; kk < kn; kk++) {
+                let k = (k0 + kk) % 4;
                 let q = p + taps[k] * 0.6;
                 let uvw = vec3f(q.x / g.gi_dim.x, q.y / g.gi_dim.y, (clamp(q.z, 0.5, nz - 0.5) + f32(d) * nz) / (6.0 * nz));
-                e += (textureSampleLevel(gi_tex, probe_samp, uvw, 0.0).rgb + textureSampleLevel(gi_sky, probe_samp, uvw, 0.0).rgb) * wts[d] * 0.25;
+                e += (textureSampleLevel(gi_tex, probe_samp, uvw, 0.0).rgb + textureSampleLevel(gi_sky, probe_samp, uvw, 0.0).rgb) * wts[d] * kw;
             }
         }
     }
@@ -113,9 +127,12 @@ fn env_brdf(f0: vec3f, rough: f32, ndv: f32) -> vec3f {
 // Diffuse + a little specular from the local lights (no shadows; ranges are kept short).
 fn local_lights(world: vec3f, n: vec3f, v: vec3f, base: vec3f, rough: f32) -> vec3f {
     var c = vec3f(0.0);
-    let count = u32(g.misc.y);
-    for (var i = 0u; i < count; i++) {
-        let lt = lights[i];
+    if (g.misc.y < 0.5) {
+        return c;
+    }
+    let cell = light_grid[light_hash(vec3i(floor(world / LIGHT_CELL)))];
+    for (var k = cell.x; k < cell.x + cell.y; k++) {
+        let lt = lights[light_idx[k]];
         let d = lt.pos - world;
         let dist = length(d);
         if (dist > lt.radius) {
@@ -154,6 +171,17 @@ fn sky_dir(d: vec3f, disc: bool) -> vec3f {
 
 fn pcf(map: texture_depth_2d, uv: vec2f, z: f32, bias: f32) -> f32 {
     let texel = 1.0 / vec2f(textureDimensions(map));
+    if (g.white.w > 0.0) {
+        // temporal accumulation: four bilinear-compare taps on a 2x2 pattern rotated each frame
+        let a = f32(i32(g.white.w) % 8) * 0.785;
+        let r = mat2x2f(cos(a), sin(a), -sin(a), cos(a));
+        var s4 = 0.0;
+        for (var k = 0; k < 4; k++) {
+            let o = r * (vec2f(f32(k & 1), f32(k >> 1u)) - 0.5) * 2.0;
+            s4 += textureSampleCompareLevel(map, shadow_samp, uv + o * texel * 1.5, z - bias);
+        }
+        return s4 * 0.25;
+    }
     var s = 0.0;
     for (var y = -1; y <= 1; y++) {
         for (var x = -1; x <= 1; x++) {

@@ -35,11 +35,14 @@ struct VOut {
     @location(5) uvm: vec2f,
     @location(6) params: vec4f,
     @location(7) edge: vec4f,
+    // material slot (bindless path)
+    @location(8) @interpolate(flat) mat: u32,
 };
 
 // the culled path: instances fetched by id from the registry (see cull.rs)
 struct Inst { model: mat4x4f, tint: vec4f, params: vec4f };
 @group(3) @binding(0) var<storage, read> insts: array<Inst>;
+@group(3) @binding(1) var<storage, read> inst_mat: array<u32>;
 
 struct VIdIn {
     @location(0) pos: vec3f,
@@ -65,7 +68,9 @@ fn vs_ids(v: VIdIn) -> VOut {
     w.m3 = I.model[3];
     w.tint = I.tint;
     w.params = I.params;
-    return vs_body(w);
+    var o = vs_body(w);
+    o.mat = inst_mat[v.iid];
+    return o;
 }
 
 @vertex
@@ -176,10 +181,14 @@ fn ssr(world: vec3f, r: vec3f, rough: f32) -> vec4f {
         return vec4f(0.0);
     }
     let dimv = vec2f(textureDimensions(t_hist));
-    var step = 0.05;
+    // with temporal accumulation: half the steps, growing faster (similar reach), one tap at the hit
+    let taa = g.white.w > 0.0;
+    let steps = select(40, 14, taa);
+    let grow = select(1.13, 1.4, taa);
+    var step = select(0.05, 0.06, taa);
     var t = 0.08;
     var lo = 0.0;
-    for (var i = 0; i < 40; i++) {
+    for (var i = 0; i < steps; i++) {
         let h = hist_at(world + r * t);
         if (h.w < 0.5) {
             break;
@@ -202,7 +211,8 @@ fn ssr(world: vec3f, r: vec3f, rough: f32) -> vec4f {
             // rougher surfaces: average a few texels around the hit (a blurrier reflection)
             let rad = clamp(rough * 120.0 * b / max(hb.z, 1.0), 1.0, 20.0);
             var col = vec3f(0.0);
-            for (var k = 0; k < 9; k++) {
+            let taps = select(9, 1, taa);
+            for (var k = 0; k < taps; k++) {
                 // centre + two rings
                 let ring = select(1.0, 0.5, k < 5);
                 let o = select(vec2f(0.0), vec2f(cos(f32(k) * 1.5708 + ring), sin(f32(k) * 1.5708 + ring)) * rad * ring, k > 0);
@@ -211,19 +221,38 @@ fn ssr(world: vec3f, r: vec3f, rough: f32) -> vec4f {
             let uv = hb.xy;
             let edge = smoothstep(0.0, 0.07, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
             let far = 1.0 - smoothstep(20.0, 40.0, b);
-            return vec4f(untonemap(col / 9.0), edge * far);
+            return vec4f(untonemap(col / f32(taps)), edge * far);
         }
         lo = t;
-        step *= 1.13;
+        step *= grow;
         t += step;
     }
     return vec4f(0.0);
 }
 
-// depth prepass: the same cut-outs as `fs`, no shading (each pixel is then shaded once)
+// depth prepass: position, uv and mode only (the tiler stores far less per vertex than the shading pass's
+// outputs), the same cut-outs as `fs`, no shading (each pixel is then shaded once)
+struct PreOut {
+    @builtin(position) @invariant clip: vec4f,
+    @location(0) uv: vec2f,
+    @location(1) mode: f32,
+    @location(2) @interpolate(flat) mat: u32,
+};
+
+@vertex
+fn vs_ids_pre(@location(0) pos: vec3f, @location(2) uv: vec2f, @location(4) iid: u32) -> PreOut {
+    let I = insts[iid];
+    var o: PreOut;
+    o.clip = g.view_proj * (I.model * vec4f(pos, 1.0));
+    o.uv = uv * I.tint.a;
+    o.mode = I.params.x;
+    o.mat = inst_mat[iid];
+    return o;
+}
+
 @fragment
-fn fs_pre(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
-    if (textureSample(t_base, samp, i.uv).a < 0.5 || (i.params.x > 2.5 && !front)) {
+fn fs_pre(i: PreOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
+    if (textureSample(t_base, samp, i.uv).a < 0.5 || (i.mode > 2.5 && !front)) {
         discard;
     }
     return vec4f(0.0);
@@ -342,7 +371,11 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
         spec_env = spec * env_brdf(f0, rough, ndv) * ao * pw;
     }
     // flood-fill GI: indirect diffuse from the voxel light field replaces the flat indoor ambient
-    let gi = gi_sample(i.world, nv);
+    // only interiors use the GI field (outdoor pixels skip its fetches)
+    var gi = vec4f(0.0);
+    if (indoor || g.gi_dim.w > 1.5) {
+        gi = gi_sample(i.world, nv);
+    }
     let giw = select(0.0, gi.a, indoor);
     if (giw > 0.0) {
         amb = mix(amb, kd * base * gi.rgb * ao, giw);

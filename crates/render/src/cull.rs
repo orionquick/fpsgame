@@ -53,6 +53,11 @@ pub struct CullWorld {
     /// Main, near cascade, far cascade.
     pub(crate) views: [ViewBufs; 3],
     pub(crate) inst_bind: wgpu::BindGroup,
+    /// Bindless: the shared vertex/index buffers and the material table; draws [0, n_opaque_draws) are opaque.
+    mega: Option<(wgpu::Buffer, wgpu::Buffer)>,
+    mat_bind: Option<wgpu::BindGroup>,
+    n_opaque_draws: u32,
+    n_draws: u32,
     /// Identifies this world for the cached far shadow map.
     pub(crate) id: u64,
 }
@@ -71,22 +76,64 @@ impl CullWorld {
         let mut inst_batch = Vec::with_capacity(n_inst as usize);
         let mut args = vec![];
         let mut next = 0u32;
+        let bindless = r.bindless;
+        // bindless: every batch's vertices and indices in one buffer pair, every material in one table
+        let (mut vb_off, mut ib_off) = (vec![0u32; batches.len()], vec![0u32; batches.len()]);
+        let (mut nv, mut ni) = (0u64, 0u64);
+        let mut mats: Vec<std::sync::Arc<crate::Material>> = vec![];
+        let mut mat_idx = vec![0u32; batches.len()];
         for (bi, b) in batches.iter().enumerate() {
+            vb_off[bi] = nv as u32;
+            ib_off[bi] = ni as u32;
+            nv += b.n_verts as u64;
+            ni += b.ib.size() / 4;
+            let k = match mats.iter().position(|m| std::sync::Arc::ptr_eq(m, &b.material)) {
+                Some(k) => k,
+                None => {
+                    mats.push(b.material.clone());
+                    mats.len() - 1
+                }
+            };
+            mat_idx[bi] = (k as u32).min(crate::MAX_MATERIALS - 1);
+        }
+        if mats.len() > crate::MAX_MATERIALS as usize {
+            eprintln!("cull: {} materials, {} slots", mats.len(), crate::MAX_MATERIALS);
+        }
+        // draw slots: opaque batches first, then glazing, so each is one contiguous run of indirect draws
+        first_draw = vec![(0u32, 0u32); batches.len()];
+        let order: Vec<usize> = (0..batches.len()).filter(|&i| !batches[i].transparent).chain((0..batches.len()).filter(|&i| batches[i].transparent)).collect();
+        let mut n_opaque_draws = 0u32;
+        let mut draw0_of = vec![0u32; batches.len()];
+        for &bi in &order {
+            let b = batches[bi];
             let draw0 = bases.len() as u32;
-            first_draw.push((draw0, b.lods.len() as u32));
+            draw0_of[bi] = draw0;
+            first_draw[bi] = (draw0, b.lods.len() as u32);
             for l in &b.lods {
                 bases.push(next);
-                next += b.n_inst;
                 // index_count, instance_count, first_index, base_vertex, first_instance
-                args.extend([l[1], 0, l[0], 0, 0]);
+                if bindless {
+                    args.extend([l[1], 0, l[0] + ib_off[bi], vb_off[bi], next]);
+                } else {
+                    args.extend([l[1], 0, l[0], 0, 0]);
+                }
+                next += b.n_inst;
             }
+            if !b.transparent {
+                n_opaque_draws = bases.len() as u32;
+            }
+        }
+        let mut inst_mat = Vec::with_capacity(n_inst as usize);
+        for (bi, b) in batches.iter().enumerate() {
             let mut err = [0.0f32; 4];
             for (k, e) in b.lod_err.iter().take(4).enumerate() {
                 err[k] = *e;
             }
-            info.push(BatchInfo { lmin: b.local[0].into(), n_lods: b.lods.len().min(4) as u32, lmax: b.local[1].into(), draw0, flags: b.transparent as u32, pad: [0; 3], err });
+            info.push(BatchInfo { lmin: b.local[0].into(), n_lods: b.lods.len().min(4) as u32, lmax: b.local[1].into(), draw0: draw0_of[bi], flags: b.transparent as u32, pad: [0; 3], err });
             inst_batch.extend(std::iter::repeat_n(bi as u32, b.n_inst as usize));
+            inst_mat.extend(std::iter::repeat_n(mat_idx[bi], b.n_inst as usize));
         }
+        let n_draws = bases.len() as u32;
         let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let insts = d.create_buffer(&wgpu::BufferDescriptor { label: Some("cull insts"), size: (n_inst.max(1) as u64) * std::mem::size_of::<crate::Instance>() as u64, usage: storage, mapped_at_creation: false });
         let mut enc = d.create_command_encoder(&Default::default());
@@ -96,7 +143,32 @@ impl CullWorld {
             enc.copy_buffer_to_buffer(&b.inst, 0, &insts, off, b.n_inst as u64 * stride);
             off += b.n_inst as u64 * stride;
         }
+        let mega = bindless.then(|| {
+            let vsz = std::mem::size_of::<crate::TexVertex>() as u64;
+            let vbuf = d.create_buffer(&wgpu::BufferDescriptor { label: Some("mega vertices"), size: (nv * vsz).max(4), usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let ibuf = d.create_buffer(&wgpu::BufferDescriptor { label: Some("mega indices"), size: (ni * 4).max(4), usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            for (bi, b) in batches.iter().enumerate() {
+                enc.copy_buffer_to_buffer(&b.vb, 0, &vbuf, vb_off[bi] as u64 * vsz, b.n_verts as u64 * vsz);
+                enc.copy_buffer_to_buffer(&b.ib, 0, &ibuf, ib_off[bi] as u64 * 4, b.ib.size());
+            }
+            (vbuf, ibuf)
+        });
         gpu.queue.submit([enc.finish()]);
+        let mat_bind = bindless.then(|| {
+            let mats = &mats[..mats.len().min(crate::MAX_MATERIALS as usize)];
+            let v = |k: usize| mats.iter().map(|m| &m.views[k]).collect::<Vec<_>>();
+            let (b0, b1, b2) = (v(0), v(1), v(2));
+            d.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("materials"),
+                layout: &r.mat_arr_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureViewArray(&b0) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureViewArray(&b1) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureViewArray(&b2) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&r.mat_sampler) },
+                ],
+            })
+        });
         let init = |label, c: &[u8], usage| d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: c, usage });
         let pad = |v: &[u32]| if v.is_empty() { vec![0u32] } else { v.to_vec() };
         let inst_batch = init("cull inst batch", bytemuck::cast_slice(&pad(&inst_batch)), storage);
@@ -107,7 +179,12 @@ impl CullWorld {
             args: init(label, bytemuck::cast_slice(&pad(&args)), wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC),
             ids: d.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: next.max(1) as u64 * 4, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX, mapped_at_creation: false }),
         };
-        let inst_bind = d.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("instances"), layout: &r.inst_bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: insts.as_entire_binding() }] });
+        let inst_mat = init("cull inst material", bytemuck::cast_slice(&pad(&inst_mat)), storage);
+        let inst_bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("instances"),
+            layout: &r.inst_bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: insts.as_entire_binding() }, wgpu::BindGroupEntry { binding: 1, resource: inst_mat.as_entire_binding() }],
+        });
         static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
             insts,
@@ -121,6 +198,10 @@ impl CullWorld {
             args_template: pad(&args),
             views: [view("cull main"), view("cull near"), view("cull far")],
             inst_bind,
+            mega,
+            mat_bind,
+            n_opaque_draws,
+            n_draws,
             id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
@@ -185,7 +266,7 @@ impl CullWorld {
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(hiz) },
             ],
         });
-        let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("cull"), timestamp_writes: None });
+        let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("cull"), timestamp_writes: r.prof.as_ref().and_then(|p| p.compute("cull")) });
         p.set_pipeline(&r.cull_pipeline);
         p.set_bind_group(0, &bind, &[]);
         p.dispatch_workgroups(gx, gy, 1);
@@ -194,6 +275,19 @@ impl CullWorld {
     /// Records the indirect draws of the batches whose world bounds meet `planes` (opaque or glazing only).
     pub(crate) fn draw<'a>(&'a self, p: &mut wgpu::RenderPass<'a>, batches: &[&'a Batch], v: usize, planes: &[[f32; 4]; 6], glass: bool) {
         let vb = &self.views[v];
+        if let (Some((vbuf, ibuf)), Some(mb)) = (&self.mega, &self.mat_bind) {
+            // everything in one run: no state changes between draws (first_instance offsets the id lists)
+            p.set_bind_group(1, mb, &[]);
+            p.set_vertex_buffer(0, vbuf.slice(..));
+            p.set_vertex_buffer(1, vb.ids.slice(..));
+            p.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+            let (a, b) = if glass { (self.n_opaque_draws, self.n_draws) } else { (0, self.n_opaque_draws) };
+            if b > a {
+                p.multi_draw_indexed_indirect(&vb.args, a as u64 * 20, b - a);
+            }
+            let _ = (batches, planes);
+            return;
+        }
         for (bi, b) in batches.iter().enumerate() {
             if b.transparent != glass || !box_visible(planes, &b.world) {
                 continue;
@@ -275,7 +369,7 @@ impl Hiz {
     }
 
     pub fn build(&self, r: &crate::Renderer, enc: &mut wgpu::CommandEncoder) {
-        let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("hiz"), timestamp_writes: None });
+        let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("hiz"), timestamp_writes: r.prof.as_ref().and_then(|p| p.compute("hiz")) });
         p.set_pipeline(&r.hiz_init_pipeline);
         p.set_bind_group(0, &self.init, &[]);
         p.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);

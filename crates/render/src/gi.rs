@@ -137,7 +137,11 @@ impl Gi {
 
     /// Records `n` propagation steps (rounded up to even, so the result lands in the volume the shaders read).
     pub fn iterate(&self, enc: &mut wgpu::CommandEncoder, n: u32) {
-        let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("gi"), timestamp_writes: None });
+        self.iterate_ts(enc, n, None);
+    }
+
+    pub fn iterate_ts(&self, enc: &mut wgpu::CommandEncoder, n: u32, ts: Option<wgpu::ComputePassTimestampWrites<'_>>) {
+        let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("gi"), timestamp_writes: ts });
         p.set_pipeline(&self.step);
         for i in 0..n.div_ceil(2) * 2 {
             p.set_bind_group(0, &self.binds[(i % 2) as usize], &[]);
