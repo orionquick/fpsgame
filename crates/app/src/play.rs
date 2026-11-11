@@ -143,9 +143,9 @@ fn output_size(window: &Window, w: u32, h: u32) -> (u32, u32) {
     (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1))
 }
 
-/// Internal render scale of the output (FPS_RENDER_SCALE, default 0.5 per axis): temporal upscaling fills it in.
+/// Internal render scale of the output (FPS_RENDER_SCALE, default 0.66 per axis): temporal upscaling fills it in.
 pub fn render_scale() -> f32 {
-    std::env::var("FPS_RENDER_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.5).clamp(0.25, 1.0)
+    std::env::var("FPS_RENDER_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.66).clamp(0.25, 1.0)
 }
 
 fn frame_view(gpu: &Gpu, format: wgpu::TextureFormat, w: u32, h: u32) -> wgpu::TextureView {
