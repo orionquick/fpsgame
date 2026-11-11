@@ -1676,7 +1676,7 @@ fn bridge_ring() -> Vec<Vec2> {
 /// The tall tower at the link's far end (42 m with its mesh lantern), world plan from the lidar.
 fn tower_ring() -> Vec<Vec2> {
     // turned about 32 degrees with the street, as the lidar and the map's building outline both show
-    [(-15.0, 101.0), (0.0, 110.0), (-6.0, 121.0), (-21.0, 112.0)].iter().map(|&(x, z)| Vec2::new(x, z) - HOME).collect()
+    [(-16.1, 100.3), (0.0, 110.0), (-6.0, 121.0), (-22.1, 111.3)].iter().map(|&(x, z)| Vec2::new(x, z) - HOME).collect()
 }
 
 /// The lantern's footprint on the tower (map outline of its upper part; the lidar puts its top at 42 m).
@@ -1688,6 +1688,116 @@ fn lantern_ring() -> Vec<Vec2> {
 fn grow(r: &[Vec2], d: f32) -> Vec<Vec2> {
     let c = r.iter().copied().sum::<Vec2>() / r.len() as f32;
     r.iter().map(|&p| p + (p - c).normalize() * d).collect()
+}
+
+/// A wall from `a` to `b` whose outside is toward `out`, with holes (metres from `a`, height): see `wall_holes`.
+fn face(g: &mut Geo, k: Key, a: Vec2, b: Vec2, out: Vec2, y0: f32, y1: f32, holes: &[[f32; 4]]) {
+    let r = (b - a).normalize();
+    if Vec2::new(-r.y, r.x).dot(out) > 0.0 {
+        wall_holes(g, k, a, b, y0, y1, holes);
+    } else {
+        let len = (b - a).length();
+        let hs: Vec<[f32; 4]> = holes.iter().map(|h| [len - h[1], len - h[0], h[2], h[3]]).collect();
+        wall_holes(g, k, b, a, y0, y1, &hs);
+    }
+}
+
+/// The lantern tower's stone (measured on a street photo with the camera solved against the lidar corners, heights
+/// agreeing with the lidar): a 27 m base on the full footprint; a 31 m shoulder on its west strip; the tall south
+/// part to 36.5 m under the mesh lantern. Horizontal notches 0.7 m high are cut into the south and east corners at four
+/// levels (4 m along the street face, 1.3 m round the corner); a recessed full-height glass slot divides the plaza
+/// face between the tall part and the east pier; a slit window near the top of the street face; the bridge's door.
+fn lantern_tower(g: &mut Geo, m: &Mats) {
+    let v3 = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let w = |x: f32, z: f32| Vec2::new(x, z) - HOME;
+    let (nn, e, s, wc) = (w(-16.1, 100.3), w(0.0, 110.0), w(-6.0, 121.0), w(-22.1, 111.3));
+    let (t_n, t_e, t_w) = (w(-11.0, 108.0), w(-2.0, 113.0), w(-16.0, 115.0));
+    let (d_sw, d_se) = ((wc - s).normalize(), (e - s).normalize());
+    let (o_sw, o_se) = (-d_se, -d_sw);
+    // (heights: the photo read with the pano's own pitch puts the shoulder at 31, the stone top at 36.5 and the
+    // lantern's top at 42 - the three heights the lidar gives for this footprint)
+    let (base, shoulder, tall) = (27.0f32, 31.0f32, 36.5f32);
+    // (notches and slit placed down from the stone's top as read off the photo at the pano's pose)
+    let levels = [9.9f32, 14.0, 19.0, 24.2];
+    let nh = 0.75;
+    let (l_se, l_ne) = ((e - s).length(), (nn - e).length());
+    let pane = Key::new(Mat::Plain(40), [0.012, 0.03, 0.075]);
+    let frame = Key::new(Mat::Plain(120), [0.45, 0.47, 0.5]);
+    let dark = Key::new(Mat::Plain(230), [0.03, 0.028, 0.026]);
+    // --- the base's four faces
+    let h_sw: Vec<[f32; 4]> = levels.iter().map(|&y| [0.0, 4.0, y, y + nh]).collect();
+    let slot = [8.3f32, 9.7, 2.0, base];
+    let mut h_se: Vec<[f32; 4]> = levels.iter().flat_map(|&y| [[0.0, 1.3, y, y + nh], [l_se - 1.3, l_se, y, y + nh]]).collect();
+    h_se.push(slot);
+    // the bridge lands on the north-east face
+    let bridge = (Vec2::new(BRIDGE_TOWER.0, BRIDGE_TOWER.1) - HOME - e).dot(d_sw);
+    let deck = TERR_Y + 9.0 * TERR_RISE + 0.25;
+    let mut h_ne: Vec<[f32; 4]> = levels.iter().map(|&y| [0.0, 1.3, y, y + nh]).collect();
+    h_ne.push([bridge - 1.3, bridge + 1.3, deck, deck + 2.7]);
+    face(g, m.sandstone, s, wc, o_sw, 0.0, base, &h_sw);
+    face(g, m.sandstone, s, e, o_se, 0.0, base, &h_se);
+    face(g, m.sandstone, e, nn, d_se, 0.0, base, &h_ne);
+    face(g, m.sandstone, nn, wc, d_sw, 0.0, base, &[]);
+    poly_up(g, m.concrete, &[v3(nn, base), v3(e, base), v3(s, base), v3(wc, base)]);
+    g.block_ring(&[nn, e, s, wc], 0.0, base);
+    {
+        let p = e + d_sw * bridge + d_sw.perp() * 0.0 - d_se * 0.5;
+        let r = if Vec2::new(-d_sw.y, d_sw.x).dot(d_se) > 0.0 { d_sw } else { -d_sw };
+        let o = p - r * 1.3;
+        g.quad(dark, v3(o, deck), Vec3::new(r.x, 0.0, r.y) * 2.6, Vec3::Y * 2.7);
+    }
+    // --- the notches' insides (in shade), south corner then east corner
+    g.shade = true;
+    for &y in &levels {
+        let (p1, p2, p3) = (s + d_sw * 4.0, s + d_sw * 4.0 + d_se * 1.3, s + d_se * 1.3);
+        face(g, m.sandstone, p3, p2, o_sw, y, y + nh, &[]);
+        face(g, m.sandstone, p1, p2, o_se, y, y + nh, &[]);
+        poly_up(g, stone_flat(), &[v3(s, y), v3(p1, y), v3(p2, y), v3(p3, y)]);
+        poly_down(g, stone_flat(), &[v3(s, y + nh), v3(p1, y + nh), v3(p2, y + nh), v3(p3, y + nh)]);
+        let (q1, q2, q3) = (e - d_se * 1.3, e - d_se * 1.3 + d_sw * 1.3, e + d_sw * 1.3);
+        face(g, m.sandstone, q1, q2, d_se, y, y + nh, &[]);
+        face(g, m.sandstone, q3, q2, o_se, y, y + nh, &[]);
+        poly_up(g, stone_flat(), &[v3(e, y), v3(q1, y), v3(q2, y), v3(q3, y)]);
+        poly_down(g, stone_flat(), &[v3(e, y + nh), v3(q1, y + nh), v3(q2, y + nh), v3(q3, y + nh)]);
+    }
+    // --- the glass slot: stone jambs 0.7 m deep, dark blue glass with a mullion at each floor
+    {
+        let (pa, pb) = (s + d_se * slot[0], s + d_se * slot[1]);
+        let inw = d_sw * 0.7;
+        face(g, m.sandstone, pa, pa + inw, d_se, slot[2], slot[3], &[]);
+        face(g, m.sandstone, pb, pb + inw, -d_se, slot[2], slot[3], &[]);
+        let fwd = Vec2::new(-d_se.y, d_se.x).dot(o_se) > 0.0;
+        let (o, r) = if fwd { (pa + inw, d_se) } else { (pb + inw, -d_se) };
+        g.quad(pane, v3(o, slot[2]), Vec3::new(r.x, 0.0, r.y) * (slot[1] - slot[0]), Vec3::Y * (slot[3] - slot[2]));
+        let mut y = slot[2];
+        while y <= slot[3] {
+            g.member(frame, v3(pa + inw + o_se * 0.04, y), v3(pb + inw + o_se * 0.04, y), 0.07, 0.07, Vec3::new(o_se.x, 0.0, o_se.y));
+            y += 3.4;
+        }
+        for p in [pa, pb] {
+            g.member(frame, v3(p + inw + o_se * 0.04, slot[2]), v3(p + inw + o_se * 0.04, slot[3]), 0.07, 0.07, Vec3::new(o_se.x, 0.0, o_se.y));
+        }
+    }
+    g.shade = false;
+    // --- the west shoulder and the tall south part
+    let id = |x: f32, z: f32| Vec2::new(x, z);
+    let cut = 7.1;
+    let ring = [wc, nn, nn - d_sw * cut, wc - d_sw * cut].map(|p| (p.x, p.y));
+    prism(g, m, &id, m.sandstone, &ring, base, &|_| shoulder, false);
+    let slit = [1.2f32, 1.9, 31.6, 35.4];
+    face(g, m.sandstone, s, t_w, o_sw, base, tall, &[slit]);
+    face(g, m.sandstone, s, t_e, o_se, base, tall, &[]);
+    face(g, m.sandstone, t_e, t_n, d_se, base, tall, &[]);
+    face(g, m.sandstone, t_n, t_w, d_sw, base, tall, &[]);
+    poly_up(g, m.concrete, &[v3(t_n, tall), v3(t_e, tall), v3(s, tall), v3(t_w, tall)]);
+    g.block_ring(&[t_n, t_e, s, t_w], base, tall);
+    {
+        let (pa, pb) = (s + d_sw * slit[0] - o_sw * 0.3, s + d_sw * slit[1] - o_sw * 0.3);
+        let fwd = Vec2::new(-d_sw.y, d_sw.x).dot(o_sw) > 0.0;
+        let (o, r) = if fwd { (pa, d_sw) } else { (pb, -d_sw) };
+        g.quad(dark, v3(o, slit[2]), Vec3::new(r.x, 0.0, r.y) * (slit[1] - slit[0]), Vec3::Y * (slit[3] - slit[2]));
+    }
+    let _ = l_ne;
 }
 
 /// The link building and the lantern tower: sandstone cladding with full-height glass slots, flat roofs.
@@ -1731,13 +1841,12 @@ fn home_towers(g: &mut Geo, m: &Mats) {
         poly_up(g, m.concrete, &pts.iter().map(|&p| v(p, h - 0.4)).collect::<Vec<_>>());
         g.block_ring(&pts, 0.0, h);
     };
-    let tr = tower_ring();
-    clad(g, &tr, 32.4, &[(1, 0.5), (2, 0.3)]);
+    let _ = &clad;
+    lantern_tower(g, m);
     // the lantern: a dark steel mesh cage on the tower's upper part
     let mesh = Key::new(Mat::Plain(100), [0.16, 0.16, 0.15]).wear(wear::METAL);
-    let (y0, y1) = (32.4, 42.0);
+    let (y0, y1) = (36.5, 41.5);
     let tr = lantern_ring();
-    clad(g, &tr, 33.4, &[]);
     for i in 0..4 {
         let (a, b) = (tr[i], tr[(i + 1) % 4]);
         let len = (b - a).length();
@@ -2562,7 +2671,8 @@ fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
     let deck = TERR_Y + 9.0 * TERR_RISE + 0.25;
     let h = 3.4;
     let hw = BRIDGE_W / 2.0;
-    let dark = Key::new(Mat::Plain(140), [0.07, 0.075, 0.08]);
+    let dark = Key::new(Mat::Plain(140), [0.2, 0.205, 0.21]);
+    let steel = Key::new(Mat::Plain(120), [0.4, 0.41, 0.42]);
     let glass = Key::new(Mat::Glass, [0.55, 0.62, 0.64]);
     // deck slab, soffit and white edge girders
     let q = [a - side * hw, z - side * hw, z + side * hw, a + side * hw];
@@ -2571,7 +2681,7 @@ fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
     g.block_ring(&q, deck - 0.35, deck);
     for sg in [-1.0f32, 1.0] {
         let o = side * (sg * (hw - 0.15));
-        g.member(m.white, v(a + o, deck - 0.8), v(z + o, deck - 0.8), 0.9, 0.35, sv);
+        g.member(steel, v(a + o, deck - 0.8), v(z + o, deck - 0.8), 0.9, 0.35, sv);
     }
     // the side frames
     let n = (len / 1.8).round().max(1.0) as i32;
@@ -2582,11 +2692,11 @@ fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
             g.member(dark, v(at(i), deck), v(at(i), deck + h), 0.18, 0.18, sv);
         }
         for i in 0..n {
-            g.member(m.white, v(at(i), deck + 0.15), v(at(i + 1), deck + h - 0.15), 0.12, 0.1, sv);
-            g.member(m.white, v(at(i + 1), deck + 0.15), v(at(i), deck + h - 0.15), 0.12, 0.1, sv);
+            g.member(steel, v(at(i), deck + 0.15), v(at(i + 1), deck + h - 0.15), 0.12, 0.1, sv);
+            g.member(steel, v(at(i + 1), deck + 0.15), v(at(i), deck + h - 0.15), 0.12, 0.1, sv);
         }
         for y in [deck + 0.05, deck + h] {
-            g.member(m.white, v(a + o, y), v(z + o, y), 0.28, 0.22, sv);
+            g.member(steel, v(a + o, y), v(z + o, y), 0.28, 0.22, sv);
         }
         // glass guard inside the frame
         let gi = side * (sg * (hw - 0.12));
@@ -2607,9 +2717,9 @@ fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
             let jitter = ((hsh % 1000) as f32 / 1000.0 - 0.5) * 0.3;
             let drop = ((hsh >> 10) % 1000) as f32 / 1000.0;
             let c = pa.lerp(pz, f) + side * (sg * (0.15 + jitter));
-            let col = [0.32 + 0.14 * drop, 0.015, 0.07];
+            let col = if hsh % 7 == 0 { [0.3, 0.02, 0.05] } else { [0.2 + 0.1 * drop, 0.16, 0.08] };
             let blob = Key::new(Mat::Plain(200), col);
-            let leaf = Key::new(Mat::Plain(220), [0.04, 0.12, 0.03]);
+            let leaf = Key::new(Mat::Plain(220), [0.07, 0.1, 0.04]);
             let y0 = deck + h + 0.3 - drop * 0.9;
             let sz = 0.22 + 0.18 * drop;
             g.cuboid(if j % 3 == 0 { leaf } else { blob }, Vec3::new(c.x - sz, y0, c.y - sz), Vec3::new(c.x + sz, y0 + sz * 1.4, c.y + sz));
@@ -2618,7 +2728,7 @@ fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
     // pergola cross beams over the walk
     for i in 0..=n {
         let p = a.lerp(z, i as f32 / n as f32);
-        g.member(m.white, v(p - side * (hw + 0.2), deck + h + 0.1), v(p + side * (hw + 0.2), deck + h + 0.1), 0.16, 0.3, ev);
+        g.member(steel, v(p - side * (hw + 0.2), deck + h + 0.1), v(p + side * (hw + 0.2), deck + h + 0.1), 0.16, 0.3, ev);
     }
     // the tower's door at the far end
     let d0 = z + dir * 0.02;
@@ -2792,22 +2902,6 @@ fn sw_offices(g: &mut Geo, m: &Mats) {
     // the stair spine and the sandstone block stepping up to the tower
     prism(g, m, &uv, m.sandstone, &[(90.0, -8.0), (94.0, -8.0), (94.0, 2.0), (90.0, 2.0)], 0.0, &flat(24.0), true);
     prism(g, m, &uv, m.sandstone, &[(93.0, 0.0), (104.0, 0.0), (104.0, 12.5), (93.0, 12.5)], 0.0, &flat(26.0), true);
-    // the lantern tower's street face: a column of slit windows near its east end, and one tall slit at the top
-    {
-        let tr = tower_ring();
-        let (a, b) = (Vec2::new(-21.0, 112.0) - HOME, Vec2::new(-6.0, 121.0) - HOME);
-        let _ = tr;
-        let e = (b - a).normalize();
-        let n = Vec2::new(-e.y, e.x) * if Vec2::new(-e.y, e.x).dot(a - (Vec2::new(-10.0, 111.0) - HOME)) > 0.0 { 1.0 } else { -1.0 };
-        let r3 = Vec3::new(e.x, 0.0, e.y);
-        let r3 = if r3.cross(Vec3::Y).dot(Vec3::new(n.x, 0.0, n.y)) > 0.0 { r3 } else { -r3 };
-        let len = (b - a).length();
-        for (f, y, w, h) in [(0.78, 7.5, 2.4, 0.5), (0.78, 11.5, 2.4, 0.5), (0.78, 15.5, 2.4, 0.5), (0.78, 19.5, 2.4, 0.5), (0.78, 23.5, 2.4, 0.5), (0.86, 27.0, 0.7, 3.0)] {
-            let c = a + e * (len * f) + n * 0.03;
-            let o = if r3.dot(Vec3::new(e.x, 0.0, e.y)) > 0.0 { c - e * (w / 2.0) } else { c + e * (w / 2.0) };
-            g.quad(dark, v3(o, y), r3 * w, Vec3::Y * h);
-        }
-    }
     // the office block's street face: a recessed loggia floor on the podium, then ribbon windows floor by floor
     let (fa, fb) = (uv(42.0, 12.5), uv(93.0, 12.5));
     let out = ev * 0.03;
