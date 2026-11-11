@@ -2280,15 +2280,28 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
             if blocked(p) || blocked(q) || blocked((p + q) / 2.0) {
                 return;
             }
-            // the bridge's passage through the frame (deck to its top beams) stays clear
-            if (0..=8).any(|k| {
-                let t = k as f32 / 8.0;
+            // the bridge's passage through the frame (deck to its top beams) stays clear: members are cut back to
+            // its sides, not dropped
+            let inside = |t: f32| {
                 let y = yp + (yq - yp) * t;
                 point_in(&br, p.lerp(q, t)) && y > d1 - 0.4 && y < d1 + 3.9
-            }) {
-                return;
+            };
+            const N: usize = 48;
+            let mut t0: Option<f32> = None;
+            for i in 0..=N {
+                let t = i as f32 / N as f32;
+                let out = i < N && !inside((t + 0.5 / N as f32).min(1.0));
+                match (t0, out) {
+                    (None, true) => t0 = Some(t),
+                    (Some(a0), false) => {
+                        let (pa0, pa1) = (p.lerp(q, a0), p.lerp(q, t));
+                        let (ya0, ya1) = (yp + (yq - yp) * a0, yp + (yq - yp) * t);
+                        g.member(k, v(pa0, ya0), v(pa1, ya1), wdt, dep, dn);
+                        t0 = None;
+                    }
+                    _ => {}
+                }
             }
-            g.member(k, v(p, yp), v(q, yq), wdt, dep, dn);
         };
         for &(y0, y1, lean) in &bands {
             // chords in front of the deck fascias
@@ -2384,15 +2397,23 @@ fn gate_frame(g: &mut Geo, m: &Mats, line: &[(Vec2, Vec2)], cores: &[Core]) {
             }
         }
         {
-            let plane = |r: f32| under_rows(r) - 0.3;
-            let r_h = 13.0;
-            let dn3 = Vec3::new(0.0, 1.0, 0.0);
-            for (f0, r0, f1, r1) in [(0.0, r_h, 1.0, r_h), (0.2, 0.6, 0.5, r_h), (0.8, 0.6, 0.5, r_h), (0.12, r_h, 0.0, r_h - 3.5), (0.88, r_h, 1.0, r_h - 3.5)] {
-                let (p, q) = (pt(f0, r0), pt(f1, r1));
+            // the V: in an upright plane at the upper deck's back, in front of the stepped underside: 45 degree arms
+            // from the chord under the letter truss near each column down to a gusset at mid-bay, sitting on a
+            // horizontal that runs column to column
+            let reach = 0.35;
+            let top_y = 31.5;
+            let apex_y = top_y - reach * (pb - pa).length();
+            let dn = Vec3::new(nrm.x, 0.0, nrm.y);
+            for (f0, y0, f1, y1, sz) in [(0.0, apex_y, 1.0, apex_y, 0.42), (0.5 - reach, top_y, 0.5, apex_y + 0.2, 0.4), (0.5 + reach, top_y, 0.5, apex_y + 0.2, 0.4)] {
+                let (p, q) = (pt(f0, 0.0), pt(f1, 0.0));
                 if blocked(p) || blocked(q) {
                     continue;
                 }
-                g.member(k, v(p, plane(r0)), v(q, plane(r1)), 0.34, 0.3, dn3);
+                g.member(k, v(p, y0), v(q, y1), sz, sz * 0.9, dn);
+            }
+            let c = pt(0.5, 0.0);
+            if !blocked(c) {
+                g.member(k, v(c, apex_y - 0.1), v(c, apex_y + 0.75), 1.0, 0.5, dn);
             }
         }
         // the roof's white edge over the frame
@@ -2436,7 +2457,8 @@ fn footbridge(g: &mut Geo, m: &Mats, frame: &[(Vec2, Vec2)]) {
         let s = (p - t).perp_dot(d) / den;
         let u = (p - t).perp_dot(e) / den;
         if (0.0..=1.0).contains(&u) && s > 0.0 {
-            start = t + e * (s + FRAME_OFF);
+            // lap 1.5 m onto the terrace concourse's deck inside the frame
+            start = t + e * (s + FRAME_OFF + 1.5);
         }
     }
     let (a, z) = (start, t);
