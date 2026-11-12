@@ -1033,19 +1033,22 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
             poly_up(g, m.concrete, &[v(ga, blk), v(gb, blk), v(ob, blk), v(oa, blk)]);
             g.block_ring(&[ga, gb, ob, oa], 0.0, blk);
         }
-        // --- canopy: white steel over the back rows (55-305 degrees)
+        // --- canopy (photo from the right-field seats): a thin flat roof, dark beneath, carried on slender white
+        // posts behind the top row with a truss and a knee brace at each, daylight showing between roof and seats
         if a.bearing > 55.0 && a.bearing < 305.0 {
             let cy = 39.4;
+            let under = Key::new(Mat::Plain(220), [0.3, 0.31, 0.32]);
             let (c0a, c0b) = (at(&a, a.canopy), at(&b, b.canopy));
             let (c1a, c1b) = (at(&a, a.canopy + CANOPY_DEPTH), at(&b, b.canopy + CANOPY_DEPTH));
-            poly_up(g, m.roof, &[v(c0a, cy + 0.6), v(c0b, cy + 0.6), v(c1b, cy + 1.1), v(c1a, cy + 1.1)]);
-            g.poly(m.steel, &[v(c0b, cy - 0.6), v(c0a, cy - 0.6), v(c0a, cy + 0.6), v(c0b, cy + 0.6)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
-            // underside (white) and a truss every few stations
-            g.poly(m.steel, &[v(c0b, cy - 0.6), v(c1b, cy - 0.2), v(c1a, cy - 0.2), v(c0a, cy - 0.6)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, 0.0, a.n.y));
+            let (top0, top1, edge) = (cy + 0.6, cy + 1.1, 0.3);
+            poly_up(g, m.roof, &[v(c0a, top0), v(c0b, top0), v(c1b, top1), v(c1a, top1)]);
+            g.poly(m.white, &[v(c0b, top0 - edge), v(c0a, top0 - edge), v(c0a, top0), v(c0b, top0)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+            g.poly(m.white, &[v(c1a, top1 - edge), v(c1b, top1 - edge), v(c1b, top1), v(c1a, top1)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            g.shade = true;
+            g.poly(under, &[v(c0b, top0 - edge), v(c1b, top1 - edge), v(c1a, top1 - edge), v(c0a, top0 - edge)], Vec3::new(e.x, 0.0, e.y), Vec3::new(a.n.x, 0.0, a.n.y));
+            g.shade = false;
             if i % 6 == 0 {
-                truss(g, m, c0a, c1a, cy - 0.6, up_top + 1.4);
-                // floodlights along the canopy's front edge
-                g.cuboid(m.led, v(c0a - a.n * 0.3, cy - 0.95) - Vec3::splat(0.25), v(c0a - a.n * 0.3, cy - 0.95) + Vec3::splat(0.25));
+                truss(g, m, c0a, c1a, top0 - edge, up_top + 1.4, e);
             }
         }
     }
@@ -1147,18 +1150,25 @@ fn seat_row(g: &mut Geo, f: &mut Furnisher, a: Vec2, b: Vec2, y: f32, face: Vec2
     }
 }
 
-/// A canopy truss: a white steel rafter from the canopy's front to its back with a mast down to the back wall.
-fn truss(g: &mut Geo, m: &Mats, front: Vec2, back: Vec2, y: f32, wall_top: f32) {
+/// One canopy frame: a tapered truss under the roof from its front edge (`y`, the roof's underside there) back to
+/// a post that stands on the parapet (`wall_top`), with a knee brace. `along` runs along the stand.
+fn truss(g: &mut Geo, m: &Mats, front: Vec2, back: Vec2, y: f32, wall_top: f32, along: Vec2) {
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
-    g.tube(m.steel, v(front, y), v(back, y + 0.4), 0.12, 6);
-    g.tube(m.steel, v(front, y - 1.4), v(back, y - 0.6), 0.09, 6);
-    let n = 6;
+    let a3 = Vec3::new(along.x, 0.0, along.y);
+    let rise = 0.5;
+    let top = |t: f32| v(front.lerp(back, t), y + rise * t - 0.05);
+    let bot = |t: f32| v(front.lerp(back, t), y + rise * t - 0.25 - 1.15 * t);
+    g.member(m.white, top(0.0), top(1.0), 0.2, 0.2, a3);
+    g.member(m.white, bot(0.0), bot(1.0), 0.18, 0.18, a3);
+    let n = 5;
     for k in 0..n {
         let (t0, t1) = (k as f32 / n as f32, (k + 1) as f32 / n as f32);
-        let (p0, p1) = (front.lerp(back, t0), front.lerp(back, t1));
-        g.tube(m.steel, v(p0, y - 1.4 + 0.8 * t0), v(p1, y + 0.4 * t1), 0.05, 4);
+        g.member(m.white, bot(t0), top(t1), 0.1, 0.1, a3);
+        g.member(m.white, bot(t1), top(t1), 0.1, 0.1, a3);
     }
-    g.tube(m.steel, v(back, wall_top), v(back, y + 0.4), 0.18, 8);
+    // the post, and a brace from it up to the truss
+    g.member(m.white, v(back, wall_top), top(1.0), 0.3, 0.3, a3);
+    g.member(m.white, v(back, wall_top + 0.5), bot(0.55), 0.16, 0.16, a3);
 }
 
 // ---------------------------------------------------------------- outfield
