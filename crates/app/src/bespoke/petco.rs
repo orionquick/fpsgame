@@ -1363,6 +1363,34 @@ fn hill_sample(f: &dyn Fn(usize, usize) -> f32, x: f32, z: f32) -> Option<f32> {
     Some((f(i, j) * (1.0 - fu) + f(i + 1, j) * fu) * (1.0 - fv) + (f(i, j + 1) * (1.0 - fu) + f(i + 1, j + 1) * fu) * fv)
 }
 
+/// Trees in the park beyond centre field, found in the lidar canopy (surface minus ground, blobs over 2.8 m):
+/// world x, z, height over the ground there, crown radius.
+pub const PARK_TREES: [(f32, f32, f32, f32); 37] = [
+    (-40.1, -166.2, 5.5, 1.1), (-38.4, -157.2, 8.0, 2.8), (-38.3, -215.7, 11.5, 2.0), (-37.7, -207.9, 12.2, 4.2), (-37.4, -167.9, 5.6, 1.3), (-32.2, -161.6, 5.2, 1.6),
+    (-31.2, -169.0, 5.3, 1.5), (-30.2, -214.0, 4.1, 1.7), (-28.7, -163.3, 5.1, 1.4), (-28.6, -176.0, 5.6, 1.7), (-27.8, -170.6, 5.3, 1.4), (-27.4, -180.6, 3.6, 1.3),
+    (-25.0, -178.4, 5.0, 1.2), (-24.6, -182.8, 6.2, 1.8), (-20.5, -187.0, 6.0, 2.4), (-15.4, -191.1, 5.9, 2.2), (-13.4, -209.9, 6.7, 1.1), (-10.5, -195.1, 6.3, 2.3),
+    (-8.6, -213.2, 6.4, 2.2), (-5.4, -197.5, 6.3, 1.5), (-4.5, -215.2, 4.8, 1.9), (9.5, -215.2, 5.0, 2.7), (17.0, -215.9, 4.2, 1.2), (26.0, -212.5, 4.8, 1.4),
+    (29.6, -214.5, 6.0, 1.5), (42.7, -213.7, 6.2, 3.6), (51.3, -205.5, 5.6, 3.9), (54.8, -189.6, 4.6, 1.7), (59.4, -211.7, 5.3, 1.2), (59.6, -151.7, 5.0, 1.4),
+    (59.8, -160.2, 4.3, 1.1), (60.0, -203.2, 5.5, 1.3), (60.1, -168.8, 5.5, 1.0), (60.8, -195.5, 6.2, 1.5), (61.0, -186.8, 6.0, 1.3), (61.1, -178.5, 6.0, 1.6),
+    (62.0, -205.2, 5.9, 1.0),
+];
+
+/// The height of the park's hand-built ground at a world point, given the surveyed terrain there: the hill's top,
+/// its lawn, or the terrain itself.
+pub fn park_ground(x: f32, z: f32, terr: f32) -> f32 {
+    let raw = |i: usize, j: usize| HILL[j][i];
+    match hill_sample(&raw, x, z) {
+        Some(h) if h >= HILL_EDGE => HILL_TOP,
+        Some(_) => hill_sample(&hill_low, x, z).unwrap_or(terr).max(terr),
+        None => terr,
+    }
+}
+
+/// Whether a world point is in the park.
+pub fn in_park(x: f32, z: f32) -> bool {
+    x > PARK.0 && x < PARK.1 + 2.0 && z > PARK.2 - 5.0 && z < PARK.3
+}
+
 /// The park beyond centre field (world x0, x1, z0, z1): its ground is built here, not by the city's ground mesh.
 const PARK: (f32, f32, f32, f32) = (-45.0, 62.0, -214.0, -143.5);
 

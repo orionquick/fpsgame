@@ -170,14 +170,12 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
     let mut out = vec![];
     // Hand-built ballpark buildings: the lidar tree finder took their awnings, planters and roof gardens for tree
     // tops. (origin x, z; unit u; u0, u1, v0, v1) boxes in each building's own frame; v is u turned 90 degrees.
-    let solids: [([f64; 2], [f64; 2], [f64; 4]); 5] = [
+    let solids: [([f64; 2], [f64; 2], [f64; 4]); 4] = [
         ([66.0, 74.0], [0.70711, -0.70711], [-15.0, 60.0, -22.0, 4.5]),
         ([-95.0, 48.0], [0.84805, 0.52992], [2.0, 110.0, -20.0, 26.0]),
         // the left-field warehouse, its balconies and stair tower, and the foul pole on its corner
         ([-105.4, -94.2], [1.0, 0.0], [-1.0, 38.0, -8.0, 34.0]),
-        // the amphitheatre hill beyond centre field (its trees would stand at the old ground level), and the
-        // batter's eye with the terraces either side
-        ([4.0, -206.0], [1.0, 0.0], [0.0, 46.0, 0.0, 36.0]),
+        // the batter's eye with the terraces either side
         ([-37.0, -144.0], [1.0, 0.0], [0.0, 80.0, 0.0, 28.0]),
     ];
     // the sidewalk in front of the east building has broadleaf street trees, not palms (street photos)
@@ -185,7 +183,8 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
     let pair = lib.catalog.get("sf_380a2c4bfa").filter(|a| !a.parts.is_empty());
     let mut east: Vec<(f64, [f64; 2])> = vec![];
     for (i, p) in c.trees.iter().enumerate() {
-        if !crate::world::in_focus(*p) {
+        // (the park's trees are placed from their own survey, below)
+        if !crate::world::in_focus(*p) || crate::bespoke::petco::in_park(p[0] as f32, p[1] as f32) {
             continue;
         }
         let local = |s: &([f64; 2], [f64; 2], [f64; 4])| {
@@ -233,16 +232,31 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         let mn = m.parts.iter().fold([f32::MAX; 3], |a, q| [a[0].min(q.min[0]), a[1].min(q.min[1]), a[2].min(q.min[2])]);
         let mx = m.parts.iter().fold([f32::MIN; 3], |a, q| [a[0].max(q.max[0]), a[1].max(q.max[1]), a[2].max(q.max[2])]);
         let (cx, cz) = ((mn[0] + mx[0]) as f64 * 0.5, (mn[2] + mx[2]) as f64 * 0.5);
-        for (k, a0) in [-13.4f64, -1.85, 11.8, 23.9].into_iter().enumerate() {
-            let a = [66.0 + 0.70711 * a0 + 0.70711 * 9.5, 74.0 - 0.70711 * a0 + 0.70711 * 9.5];
-            let rot = 45.0 + k as f64 * 70.0;
-            let (sx, sy, sz) = (2.2f64, 2.6f64, 3.9f64);
+        // one tree: trunk base at `a` on level `y`, turned by `rot`, scaled along the model's own axes
+        let mut plant = |out: &mut Vec<Placement>, a: [f64; 2], y: f64, rot: f64, (sx, sy, sz): (f64, f64, f64), tint: f32| {
             let r = rot.to_radians();
             let (ux, uz, zx, zz) = (r.sin(), -r.cos(), r.cos(), r.sin());
             // the trunk's base is the model's origin
             let (ox, oz) = (-cx * sx, -cz * sz);
             let (x, z) = (a[0] - ox * ux - oz * zx, a[1] - ox * uz - oz * zz);
-            out.push(Placement { asset: m.id.clone(), part: crate::library::ALL_PARTS, x, z, y: c.terrain.at(a[0], a[1]) - 0.05, rot, scale: [sx as f32, sy as f32, sz as f32], tint: [0.72, 0.72, 0.72], lod: 0, indoor: false });
+            out.push(Placement { asset: m.id.clone(), part: crate::library::ALL_PARTS, x, z, y, rot, scale: [sx as f32, sy as f32, sz as f32], tint: [tint; 3], lod: 0, indoor: false });
+        };
+        for (k, a0) in [-13.4f64, -1.85, 11.8, 23.9].into_iter().enumerate() {
+            let a = [66.0 + 0.70711 * a0 + 0.70711 * 9.5, 74.0 - 0.70711 * a0 + 0.70711 * 9.5];
+            plant(&mut out, a, c.terrain.at(a[0], a[1]) - 0.05, 45.0 + k as f64 * 70.0, (2.2, 2.6, 3.9), 0.72);
+        }
+        // the park beyond centre field: broadleaf trees where the lidar canopy shows them, each to its measured
+        // height and spread (the model is 3 m tall, 5.4 x 2.6 m across)
+        for (k, &(x, z, h, r)) in crate::bespoke::petco::PARK_TREES.iter().enumerate() {
+            let a = [x as f64, z as f64];
+            if !crate::world::in_focus(a) {
+                continue;
+            }
+            let hs = hash(k as u64, 9173);
+            let y = crate::bespoke::petco::park_ground(x, z, c.terrain.at(a[0], a[1]) as f32) as f64 - 0.05;
+            let spread = (r as f64 * 2.6).clamp(4.5, 9.0);
+            let tint = 0.62 + (hs % 20) as f32 / 100.0;
+            plant(&mut out, a, y, (hs % 360) as f64, (spread / 5.4, (h as f64).clamp(4.0, 12.5) / 3.0, spread / 2.6 * 0.8), tint);
         }
     }
 
