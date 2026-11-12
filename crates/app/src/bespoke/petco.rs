@@ -711,6 +711,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
     let mut back_arc = 0.0f32;
     let mut gate_line: Vec<(Vec2, Vec2)> = vec![];
     let mut gz_line: Vec<(Vec2, Vec2)> = vec![];
+    let mut base_segs: Vec<(Vec2, Vec2, Vec2)> = vec![];
     let mut prev_col: Option<Vec2> = None;
     for i in 0..st.len() - 1 {
         let (a, b) = (st[i], st[i + 1]);
@@ -858,12 +859,8 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                     poly_up(g, paving(), &q.map(|p| v(p, CONCOURSE_Y)));
                     g.block_ring(&q, 0.0, CONCOURSE_Y);
                     if !podium {
-                        // an open edge over the street: a stone base below, a rail above
-                        wall_poly(g, m.sandstone, &[v(o0, 0.0), v(o1, 0.0), v(o1, CONCOURSE_Y), v(o0, CONCOURSE_Y)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-                        for hh in [0.55f32, 1.05] {
-                            g.tube(m.rail, v(o0, CONCOURSE_Y + hh), v(o1, CONCOURSE_Y + hh), 0.025, 5);
-                        }
-                        g.block_ring(&[o0, o1, o1 + b.n * 0.1, o0 + a.n * 0.1], CONCOURSE_Y, CONCOURSE_Y + 1.05);
+                        // an open edge over the street: the podium's wall stands outside it (`street_podium`)
+                        base_segs.push((o0, o1, a.n.lerp(b.n, (f0 + f1) / 2.0).normalize()));
                     }
                 }
             }
@@ -1042,6 +1039,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
     }
     home_gate_front(g, m, &gate_line);
     gate_frame(g, m, &gz_line, cores);
+    street_podium(g, m, &base_segs);
     footbridge(g, m, &gz_line);
     grand_stair(g, f, m);
     home_towers(g, m);
@@ -2311,9 +2309,105 @@ fn runs(hole: impl Fn(f32) -> bool) -> Vec<(f32, f32, bool)> {
 // ---------------------------------------------------------------- home plate gate
 
 /// The bearings (from home) where the frame stands exposed behind home plate.
+/// The podium's street wall where the frame stands over the sidewalk (photos of the third-base side from the street:
+/// a sandstone wall about 8 m high in straight runs, the white columns rising from behind its top, plain service
+/// doors in it; the lidar puts its top at the concourse's 7.7 m). `segs`: the concourse's open edge, piece by piece
+/// (two ends and the outward normal). The wall stands `OUT` beyond that edge, clear of the columns, in facets a
+/// frame bay long, with a parapet; the strip between is paved.
+fn street_podium(g: &mut Geo, m: &Mats, segs: &[(Vec2, Vec2, Vec2)]) {
+    const OUT: f32 = 2.1;
+    const FOOT: f32 = -1.6;
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let door = Key::new(Mat::Plain(200), [0.42, 0.33, 0.2]);
+    let top = CONCOURSE_Y + 1.0;
+    // chain the pieces into unbroken runs
+    let mut runs: Vec<Vec<(Vec2, Vec2, Vec2)>> = vec![];
+    for &sg in segs {
+        match runs.last_mut() {
+            Some(r) if (r.last().unwrap().1 - sg.0).length() < 0.4 => r.push(sg),
+            _ => runs.push(vec![sg]),
+        }
+    }
+    let mut n_facet = 0;
+    for run in runs {
+        let total: f32 = run.iter().map(|s| (s.1 - s.0).length()).sum();
+        if total < 1.0 {
+            continue;
+        }
+        // facets: equal shares of the run, each close to a bay long
+        let n = (total / GZ_BAY).round().max(1.0) as usize;
+        let share = total / n as f32;
+        let (mut i0, mut acc) = (0usize, 0.0f32);
+        for k in 0..n {
+            // the pieces of this facet
+            let mut i1 = i0;
+            let mut len = 0.0;
+            while i1 < run.len() && (acc + len + (run[i1].1 - run[i1].0).length() / 2.0 < share * (k + 1) as f32 || i1 == i0) {
+                len += (run[i1].1 - run[i1].0).length();
+                i1 += 1;
+            }
+            if k + 1 == n {
+                i1 = run.len();
+            }
+            acc += len;
+            let part = &run[i0..i1];
+            i0 = i1;
+            if part.is_empty() {
+                continue;
+            }
+            let (a, b) = (part[0].0 + part[0].2 * OUT, part[part.len() - 1].1 + part[part.len() - 1].2 * OUT);
+            let e = (b - a).normalize_or_zero();
+            let out = { let o = Vec2::new(e.y, -e.x); if o.dot(part[0].2) > 0.0 { o } else { -o } };
+            let w = (b - a).length();
+            // a pair of service doors in every other facet that is long enough
+            let mut holes: Vec<[f32; 4]> = vec![];
+            if w > 8.0 && n_facet % 2 == 0 {
+                holes.push([w * 0.5 - 1.6, w * 0.5 + 1.6, FOOT, 1.9]);
+            }
+            n_facet += 1;
+            face(g, m.sandstone, a, b, out, FOOT, top, &holes);
+            for h in &holes {
+                let (p, q) = (a + e * h[0] - out * 0.35, a + e * h[1] - out * 0.35);
+                g.poly(door, &[v(p, h[2]), v(q, h[2]), v(q, h[3]), v(p, h[3])], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                let mid = (p + q) / 2.0 + out * 0.01;
+                g.poly(m.soffit, &[v(mid - e * 0.02, h[2]), v(mid + e * 0.02, h[2]), v(mid + e * 0.02, h[3]), v(mid - e * 0.02, h[3])], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                // jambs and head
+                for (x, d) in [(h[0], 1.0f32), (h[1], -1.0)] {
+                    let j = a + e * x;
+                    g.poly(stone_flat(), &[v(j, h[2]), v(j - out * 0.35, h[2]), v(j - out * 0.35, h[3]), v(j, h[3])], Vec3::new(-out.x, 0.0, -out.y) * d, Vec3::Y);
+                }
+                poly_down(g, stone_flat(), &[v(a + e * h[0], h[3]), v(a + e * h[1], h[3]), v(a + e * h[1] - out * 0.35, h[3]), v(a + e * h[0] - out * 0.35, h[3])]);
+            }
+            // parapet: inner face and coping
+            let (ia, ib) = (a - out * 0.4, b - out * 0.4);
+            face(g, m.sandstone, ib, ia, -out, CONCOURSE_Y, top, &[]);
+            poly_up(g, stone_flat(), &[v(a, top), v(b, top), v(ib, top), v(ia, top)]);
+            g.block_ring(&[a, b, ib, ia], FOOT, top);
+            // the paved strip from the concourse's edge out to the parapet
+            for s in part {
+                let on = |p: Vec2| ia + e * (p - ia).dot(e);
+                let q = [s.0, on(s.0), on(s.1), s.1];
+                poly_up(g, paving(), &q.map(|p| v(p, CONCOURSE_Y)));
+                g.block_ring(&q, FOOT, CONCOURSE_Y);
+            }
+        }
+        // the run's two ends, back to the concourse edge
+        for (p, nrm, sgn) in [(run[0].0, run[0].2, -1.0f32), (run[run.len() - 1].1, run[run.len() - 1].2, 1.0)] {
+            let e = Vec2::new(nrm.y, -nrm.x) * sgn;
+            face(g, m.sandstone, p - nrm * 0.2, p + nrm * OUT, e, FOOT, top, &[]);
+        }
+    }
+}
+
+/// Where the open frame stops on the third-base side (the end of the upper deck).
+const GZ_WEST_END: f32 = 316.0;
+/// ... and on the first-base side.
+const GZ_EAST_END: f32 = 44.0;
+
 fn home_gate(b: f32) -> bool {
-    // from the tower's side round to where the east building stands in front of the bowl (photos)
-    (134.0..212.0).contains(&b)
+    // from where the east building stands in front of the bowl, round behind home and up the third-base side to the
+    // end of the stand: on the street there (photos) the same white frame stands open over the sandstone podium
+    (GZ_EAST_END..GZ_WEST_END).contains(&b)
 }
 
 /// The home plate gate's street face: lettering on the white top band. `line` is the outer face of the top band (point, outward normal) station by station.
