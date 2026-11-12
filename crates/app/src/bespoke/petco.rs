@@ -353,7 +353,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     for b in [95.0f32, 265.0] {
         disc(&mut g, m.dirt, dir(b) * 9.5, 1.52, 0.02);
     }
-    western_metal(&mut g, &m, c);
+    western_metal(&mut g, &mut f, &m, &|p: Vec2| c.terrain.at((p.x + HOME.x) as f64, (p.y + HOME.y) as f64) as f32);
     for t in TOWERS {
         tower(&mut g, &m, t);
     }
@@ -1203,58 +1203,208 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
 
 // ---------------------------------------------------------------- Western Metal Supply Co., towers, boards
 
-/// The 1909 Western Metal Supply Co. building in the left-field corner (OSM footprint, 23 m to the parapet):
-/// red brick, four tall storeys of windows, a painted name band, seating balconies on the field sides, rooftop
-/// bleachers under a white canopy. The left-field pole stands at its south-east corner.
-fn western_metal(g: &mut Geo, m: &Mats, _c: &city::City) {
-    let brick = Key::new(Mat::Surface("ufmhehts"), [0.95, 0.85, 0.8]).tile(2.0).wear(wear::STONE);
-    let trim = Key::new(Mat::Plain(160), [0.82, 0.78, 0.7]);
-    let win = Key::new(Mat::Glass, [0.25, 0.3, 0.32]);
+/// The old metal-supply warehouse in the left-field corner, the foul pole on its south-east corner. Measured on a
+/// long-lens photo square to its field face (41 px per metre across the 32.1 m face, heights tied to the lidar: roof
+/// 23 m, top balcony 17.1 m) and on the lidar for the roof:
+/// - red-brown brick, four storeys; a black painted band 2.3 m deep under the parapet carries the name in white;
+/// - the field face has seven bays at 4.43 m, each opening 2.85 m wide with dark green steel sash set back in the
+///   brick: floors at 6.6, 11.4 and 17.1 m;
+/// - white concrete balconies on tapered brackets: one the whole length at the top floor (standing room), three
+///   below it and two below those, each with two rows of seats;
+/// - on the roof (23 m) a rail all round, the stair penthouse to 31 m and two blocks of bleachers rising west to 28 m;
+/// - the street faces keep their punched windows; a pale stair tower and a brick annex stand against the north face.
+/// The name on the band is a stand-in (no real business names in the game).
+fn western_metal(g: &mut Geo, f: &mut Furnisher, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
+    let brick = Key::new(Mat::Surface("ufmhehts"), WM_BRICK).tile(2.0);
+    let white = Key::new(Mat::Plain(215), [0.8, 0.8, 0.78]);
+    let black = Key::new(Mat::Plain(245), [0.013, 0.013, 0.015]);
+    let sash = Key::new(Mat::Plain(190), [0.06, 0.085, 0.09]);
+    let pane = Key::new(Mat::Plain(40), [0.016, 0.02, 0.024]);
     let (x0, x1, z0, z1) = (-105.4 - HOME.x, -74.1 - HOME.x, -94.2 - HOME.y, -62.1 - HOME.y);
-    let h = 23.1;
-    let corners = [Vec2::new(x0, z1), Vec2::new(x1, z1), Vec2::new(x1, z0), Vec2::new(x0, z0)];
+    let (deck, parapet, band) = (23.0, 23.3, 21.0);
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
-    for k in 0..4 {
-        let (a, b) = (corners[k], corners[(k + 1) % 4]);
-        let e = (b - a).normalize();
-        let out = Vec2::new(e.y, -e.x);
-        let len = (b - a).length();
-        // wall, then windows: 4 storeys x bays of 3.9 m, recessed glass with stone sills
-        g.poly(brick, &[v(a, 0.0), v(b, 0.0), v(b, h), v(a, h)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
-        let bays = (len / 3.9).floor() as i32;
-        let bw = len / bays as f32;
-        for fl in 0..4 {
-            let y0 = 1.6 + fl as f32 * 5.0;
-            for bi in 0..bays {
-                if bi == 0 || bi == bays - 1 {
-                    continue; // brick corner piers
+    let (sw, se, ne, nw) = (Vec2::new(x0, z1), Vec2::new(x1, z1), Vec2::new(x1, z0), Vec2::new(x0, z0));
+    const PITCH: f32 = 4.43;
+    const OPEN: f32 = 2.85;
+    const FIRST: f32 = 1.02;
+    // an opening's sash: glass set back, a frame, a heavy transom at door height and small lights above
+    let glazing = |g: &mut Geo, left: Vec2, right: Vec2, h: [f32; 4], depth: f32, doors: bool| {
+        let r = (right - left).normalize();
+        let out = Vec2::new(-r.y, r.x);
+        let r3 = Vec3::new(r.x, 0.0, r.y);
+        let at = |u: f32, y: f32, fwd: f32| v(left + r * u - out * (depth - fwd), y);
+        g.quad(pane, at(h[0], h[2], 0.0), r3 * (h[1] - h[0]), Vec3::Y * (h[3] - h[2]));
+        let bar = |g: &mut Geo, u0: f32, u1: f32, y0: f32, y1: f32| g.quad(sash, at(u0, y0, 0.03), r3 * (u1 - u0), Vec3::Y * (y1 - y0));
+        let (w, t) = (h[1] - h[0], 0.07);
+        bar(g, h[0], h[1], h[3] - t, h[3]);
+        bar(g, h[0], h[1], h[2], h[2] + t);
+        let head = if doors { (h[2] + 2.35).min(h[3] - 0.6) } else { h[2] + (h[3] - h[2]) * 0.5 };
+        bar(g, h[0], h[1], head - 0.06, head + 0.06);
+        for k in 0..=3 {
+            let u = h[0] + w * k as f32 / 3.0;
+            bar(g, (u - t / 2.0).max(h[0]), (u + t / 2.0).min(h[1]), h[2], h[3]);
+        }
+        // the small lights over the transom
+        let rows = ((h[3] - head) / 0.75).round().max(1.0) as i32;
+        for j in 1..rows {
+            let y = head + (h[3] - head) * j as f32 / rows as f32;
+            bar(g, h[0], h[1], y - 0.02, y + 0.02);
+        }
+        for k in 0..6 {
+            let u = h[0] + w * (k as f32 + 0.5) / 6.0;
+            bar(g, u - 0.015, u + 0.015, head, h[3]);
+        }
+    };
+    // one face: brick with its openings, the band above; `rows` are (sill, head, doors) per storey, `skip` the bays
+    // left as plain brick on a storey (bay, row)
+    let wall = |g: &mut Geo, left: Vec2, right: Vec2, base: f32, rows: &[(f32, f32, bool)], skip: &dyn Fn(usize, usize) -> bool| {
+        let len = (right - left).length();
+        let bays = ((len - 2.0 * FIRST + (PITCH - OPEN)) / PITCH).floor() as usize;
+        let first = (len - (bays as f32 * PITCH - (PITCH - OPEN))) / 2.0;
+        let mut holes = vec![];
+        for (j, &(y0, y1, _)) in rows.iter().enumerate() {
+            for b in 0..bays {
+                if !skip(b, j) && y1 > base + 0.5 {
+                    holes.push((j, [first + b as f32 * PITCH, first + b as f32 * PITCH + OPEN, y0.max(base), y1]));
                 }
-                let p0 = a + e * (bi as f32 * bw + 0.7) + out * 0.02;
-                let wv = e * (bw - 1.4);
-                g.quad(win, v(p0, y0), Vec3::new(wv.x, 0.0, wv.y), Vec3::Y * 3.2);
-                g.quad(trim, v(p0 - e * 0.1 + out * 0.03, y0 - 0.25), Vec3::new(wv.x + e.x * 0.2, 0.0, wv.y + e.y * 0.2), Vec3::Y * 0.25);
             }
         }
-        // painted name band under the parapet (field sides)
-        if k == 0 || k == 1 {
-            g.quad(trim, v(a + out * 0.02 + e * 1.0, h - 2.6), Vec3::new(e.x, 0.0, e.y) * (len - 2.0), Vec3::Y * 1.5);
+        let hs: Vec<[f32; 4]> = holes.iter().map(|h| h.1).collect();
+        wall_holes(g, brick, left, right, base.min(0.0), band, &hs);
+        wall_holes(g, black, left, right, band, parapet, &[]);
+        for (j, h) in holes {
+            reveal(g, brick, left, right, h, 0.45);
+            glazing(g, left, right, h, 0.45, rows[j].2);
         }
-        g.quad(trim, v(a + out * 0.03, h - 0.4), Vec3::new(e.x, 0.0, e.y) * len, Vec3::Y * 0.4);
+    };
+    let none = |_: usize, _: usize| false;
+    // field face (seen from the field: the pole end on the left). Ground floor: two openings by the pole, the rest
+    // stands behind the seats
+    let field_rows = [(0.3, 4.4, true), (6.6, 10.05, true), (11.4, 16.1, true), (17.1, band, true)];
+    wall(g, se, ne, 0.0, &field_rows, &|b, j| j == 0 && b > 1);
+    // the face on the foul line: plain brick this end; the grandstand covers the rest
+    wall(g, sw, se, 0.0, &[], &none);
+    // street faces: storefronts and three storeys of windows
+    let street = |p: Vec2| terr(p).max(0.0);
+    let (gw, gn) = (street(Vec2::new(x0 - 2.0, (z0 + z1) / 2.0)), street(Vec2::new((x0 + x1) / 2.0, z0 - 2.0)));
+    let street_rows = |gy: f32| [(gy + 0.5, gy + 4.3, true), (7.6, 10.0, false), (12.4, 15.6, false), (18.0, 20.5, false)];
+    wall(g, nw, sw, gw, &street_rows(gw), &none);
+    // against the north face (lidar): a pale stair tower 6 m wide running 18 m north, 31 m high, and beside it a
+    // brick annex 10 m square at roof height; between them they cover the face from x -92 to -76
+    let (tx0, tx1, ax1) = (-92.0 - HOME.x, -86.0 - HOME.x, -76.0 - HOME.x);
+    let north_len = x1 - x0;
+    let n_bays = ((north_len - 2.0 * FIRST + (PITCH - OPEN)) / PITCH).floor() as usize;
+    let n_first = (north_len - (n_bays as f32 * PITCH - (PITCH - OPEN))) / 2.0;
+    wall(g, ne, nw, gn, &street_rows(gn), &|b, _| {
+        let (u0, u1) = (n_first + b as f32 * PITCH, n_first + b as f32 * PITCH + OPEN);
+        x1 - u1 < ax1 + 0.4 && x1 - u0 > tx0 - 0.4
+    });
+    let stucco = pale_precast();
+    let (tn, an) = (z0 - 17.8, z0 - 9.8);
+    g.solid(stucco, Vec3::new(tx0, gn.min(0.0), tn), Vec3::new(tx1, 31.0, z0));
+    // the tower's street face: three raking slits and a tall narrow light (aerial photos)
+    let slit = Key::new(Mat::Plain(60), [0.02, 0.024, 0.028]);
+    for (k, y) in [11.0f32, 17.5, 24.0].into_iter().enumerate() {
+        let za = tn + 3.0 + k as f32 * 0.6;
+        g.poly(slit, &[Vec3::new(tx0 - 0.02, y, za + 4.2), Vec3::new(tx0 - 0.02, y + 0.9, za), Vec3::new(tx0 - 0.02, y + 1.5, za), Vec3::new(tx0 - 0.02, y + 0.6, za + 4.2)], -Vec3::Z, Vec3::Y);
     }
-    poly_up(g, m.concrete, &corners.map(|p| v(p, h)));
-    g.block_ring(&corners, 0.0, h);
-    // rooftop canopy over the bleachers
-    let r = [Vec2::new(x0 + 3.0, z1 - 3.0), Vec2::new(x1 - 2.0, z1 - 3.0), Vec2::new(x1 - 2.0, z0 + 10.0), Vec2::new(x0 + 3.0, z0 + 10.0)];
-    poly_up(g, m.roof, &r.map(|p| v(p, h + 7.4)));
-    for p in r {
-        g.tube(m.steel, v(p, h), v(p, h + 7.4), 0.14, 8);
+    g.quad(slit, Vec3::new(tx0 - 0.02, 4.0, tn + 10.4), -Vec3::Z * 0.5, Vec3::Y * 24.0);
+    wall_holes(g, brick, Vec2::new(ax1, an), Vec2::new(tx1, an), gn.min(0.0), deck, &[]);
+    wall_holes(g, brick, Vec2::new(ax1, z0), Vec2::new(ax1, an), gn.min(0.0), deck, &[]);
+    poly_up(g, m.concrete, &[Vec3::new(tx1, deck, z0), Vec3::new(ax1, deck, z0), Vec3::new(ax1, deck, an), Vec3::new(tx1, deck, an)]);
+    g.block_ring(&[Vec2::new(tx1, z0), Vec2::new(ax1, z0), Vec2::new(ax1, an), Vec2::new(tx1, an)], 0.0, deck);
+    // the name, on both field faces and the north face (where the tower hides its middle)
+    for (a, b) in [(se, ne), (sw, se), (ne, nw)] {
+        let r = (b - a).normalize();
+        let out = Vec2::new(-r.y, r.x);
+        let len = (b - a).length();
+        sign(g, "sgn_supply", [0.9, 0.9, 0.87], (a + b) / 2.0 + out * 0.03, band + (parapet - band - 1.45) / 2.0, r, len - 1.1, 1.45);
     }
-    // field-side balconies with a rail on each upper floor
-    for fl in 1..4 {
-        let y = 1.2 + fl as f32 * 5.0;
-        let (a, b) = (corners[1], corners[2]);
-        g.cuboid(m.concrete, v(a, y - 0.25) + Vec3::new(0.0, 0.0, 0.5), v(b, y) + Vec3::new(1.6, 0.0, -0.5));
-        g.tube(m.rail, v(a + Vec2::new(1.6, 0.5), y + 1.0), v(b + Vec2::new(1.6, -0.5), y + 1.0), 0.03, 6);
+    // roof: deck, coping, rail
+    poly_up(g, m.concrete, &[v(sw, deck), v(se, deck), v(ne, deck), v(nw, deck)]);
+    g.block_ring(&[sw, se, ne, nw], 0.0, deck);
+    let ring = [sw, se, ne, nw];
+    for k in 0..4 {
+        let (a, b) = (ring[k], ring[(k + 1) % 4]);
+        let e = (b - a).normalize();
+        let inw = Vec2::new(-e.y, e.x) * if Vec2::new(-e.y, e.x).dot((sw + ne) / 2.0 - a) > 0.0 { 1.0 } else { -1.0 };
+        // inner face and top of the parapet
+        g.poly(white, &[v(b + inw * 0.3, deck), v(a + inw * 0.3, deck), v(a + inw * 0.3, parapet), v(b + inw * 0.3, parapet)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+        poly_up(g, white, &[v(a, parapet), v(b, parapet), v(b + inw * 0.3, parapet), v(a + inw * 0.3, parapet)]);
+        rail_run(g, m, a + inw * 0.15, b + inw * 0.15, parapet, 0.8);
+    }
+    // stair penthouse
+    g.solid(pale_precast(), Vec3::new(-85.0 - HOME.x, deck, -82.0 - HOME.y), Vec3::new(-81.0 - HOME.x, 31.0, -72.0 - HOME.y));
+    // two blocks of bleachers rising west, an aisle between
+    let (front, rows, pitch, rise) = (-86.0 - HOME.x, 11, 0.9f32, 0.45f32);
+    for (za, zb) in [(-71.0 - HOME.y, -63.3 - HOME.y), (-80.6 - HOME.y, -73.0 - HOME.y)] {
+        for j in 0..rows {
+            let (xa, xb) = (front - j as f32 * pitch, front - (j + 1) as f32 * pitch);
+            let y = deck + 0.3 + j as f32 * rise;
+            g.cuboid(m.concrete, Vec3::new(xb, deck, za), Vec3::new(xa, y, zb));
+            seat_row(g, f, Vec2::new(xb + SEAT_SETBACK, za + 0.3), Vec2::new(xb + SEAT_SETBACK, zb - 0.3), y, Vec2::X, (true, true), 0.0);
+        }
+        // closed sides and back, in the park's navy
+        let (xw, top) = (front - rows as f32 * pitch, deck + 0.3 + rows as f32 * rise);
+        g.cuboid(m.navy, Vec3::new(xw - 0.15, deck, za), Vec3::new(xw, top + 1.0, zb));
+    }
+    // balconies on the field face: (level, depth, runs along the face from the pole end, seats)
+    let face_len = z1 - z0;
+    let balconies: [(f32, f32, &[(f32, f32)], bool); 3] = [(17.1, 4.5, &[(0.0, face_len - 0.9)], false), (11.4, 3.6, &[(-0.3, 8.55), (8.95, 22.0), (22.5, face_len - 0.8)], true), (6.6, 3.6, &[(-0.3, 8.55), (8.95, 22.0)], true)];
+    for (y, d, runs, seats) in balconies {
+        for &(s0, s1) in runs {
+            let (za, zb) = (z1 - s0, z1 - s1);
+            // slab, deep edge beam, soffit
+            g.cuboid(white, Vec3::new(x1, y - 0.3, zb), Vec3::new(x1 + d, y, za));
+            g.cuboid(white, Vec3::new(x1 + d - 0.25, y - 0.8, zb), Vec3::new(x1 + d, y + 0.08, za));
+            // tapered brackets on the piers
+            for k in 0..=7 {
+                let s = (FIRST + k as f32 * PITCH - (PITCH - OPEN) / 2.0).clamp(0.45, face_len - 0.45);
+                if s < s0 + 0.2 || s > s1 - 0.2 {
+                    continue;
+                }
+                let z = z1 - s;
+                let side = [Vec3::new(x1, y - 0.3, 0.0), Vec3::new(x1 + d - 0.25, y - 0.3, 0.0), Vec3::new(x1 + d - 0.25, y - 0.8, 0.0), Vec3::new(x1, y - 1.5, 0.0)];
+                for (dz, n) in [(-0.2f32, -Vec3::Z), (0.2, Vec3::Z)] {
+                    g.poly(white, &side.map(|q| q + Vec3::Z * (z + dz)), -n.cross(Vec3::Y), Vec3::Y);
+                }
+                g.poly(white, &[Vec3::new(x1, y - 1.5, z + 0.2), Vec3::new(x1, y - 1.5, z - 0.2), Vec3::new(x1 + d - 0.25, y - 0.8, z - 0.2), Vec3::new(x1 + d - 0.25, y - 0.8, z + 0.2)], Vec3::Z, Vec3::new(1.0, 0.2, 0.0).normalize());
+            }
+            // rail: front and both ends
+            let (fa, fb) = (Vec2::new(x1 + d - 0.1, za), Vec2::new(x1 + d - 0.1, zb));
+            rail_run(g, m, fa, fb, y + 0.08, 1.05);
+            rail_run(g, m, Vec2::new(x1, za), fa, y, 1.1);
+            rail_run(g, m, fb, Vec2::new(x1, zb), y, 1.1);
+            if seats {
+                // two rows, the back one a step up
+                for (k, back) in [(0, 0.0f32), (1, 0.9)] {
+                    let x = x1 + d - 1.25 - back;
+                    let yy = y + k as f32 * 0.3;
+                    if k == 1 {
+                        g.cuboid(m.concrete, Vec3::new(x1 + 0.9, y, zb + 0.15), Vec3::new(x + 0.6, yy, za - 0.15));
+                    }
+                    seat_row(g, f, Vec2::new(x, zb + 0.4), Vec2::new(x, za - 0.4), yy, Vec2::X, (true, true), 0.0);
+                }
+            }
+        }
+    }
+}
+
+/// Brick tint for the warehouse: red-brown, between its measure against the white balcony fascias in an overcast
+/// photo and its deeper colour in a sunlit aerial.
+const WM_BRICK: [f32; 3] = [0.92, 0.58, 0.46];
+
+/// A guard rail from `a` to `b` standing on level `y`, `h` high: posts, a top rail and two lighter rails below it.
+fn rail_run(g: &mut Geo, m: &Mats, a: Vec2, b: Vec2, y: f32, h: f32) {
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let len = (b - a).length();
+    let n = (len / 1.6).ceil().max(1.0) as i32;
+    for k in 0..=n {
+        let p = a.lerp(b, k as f32 / n as f32);
+        g.tube(m.rail, v(p, y), v(p, y + h), 0.022, 4);
+    }
+    for t in [1.0f32, 0.55, 0.12] {
+        g.tube(m.rail, v(a, y + h * t), v(b, y + h * t), if t == 1.0 { 0.028 } else { 0.014 }, 4);
     }
 }
 

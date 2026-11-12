@@ -443,6 +443,8 @@ fn signs() -> std::io::Result<()> {
         ("sgn_ballpark".into(), "BALLPARK".into(), "Graduate", 0.05, (3.4, 0.72), false),
         ("sgn_will_call".into(), "WILL CALL".into(), "Montserrat", 0.0, (1.5, 0.2), false),
         ("sgn_atm".into(), "ATM".into(), "Montserrat", 0.02, (0.62, 0.26), false),
+        // the warehouse's painted name band (a stand-in name)
+        ("sgn_supply".into(), "PACIFIC METAL SUPPLY CO.".into(), "Montserrat", 0.1, (31.0, 1.45), false),
     ];
     for n in 1..=9 {
         list.push((format!("sgn_n{n}"), n.to_string(), "Graduate", 0.04, (0.24, 0.26), true));
