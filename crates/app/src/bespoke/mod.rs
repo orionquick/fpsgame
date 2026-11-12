@@ -87,7 +87,7 @@ pub fn all(c: &city::City) -> Vec<Building> {
 
 /// World plan rings where hand-built ground replaces the city's (the ballpark's field).
 pub fn ground_holes() -> Vec<Vec<[f64; 2]>> {
-    vec![petco::field_ring(), petco::plaza_ring(), petco::park_ring()]
+    vec![petco::field_ring(), petco::plaza_ring(), petco::park_ring(), petco::cf_ring()]
 }
 
 pub const PARTITION_T: f32 = 0.12;

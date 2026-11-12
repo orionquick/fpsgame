@@ -1339,7 +1339,8 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
         mound(g, m, p);
     }
     // centre-field terrace at 4 m (grass) from 6 m behind the wall; the batter's eye stands on it (`centre_field`)
-    let cf = wall_stations(-5.5, 17.0);
+    // (the sand terrace from 7.5 degrees round to right field is built in `centre_field`)
+    let cf = wall_stations(-5.5, BEACH.0);
     for w in cf.windows(2) {
         let (a, b) = (w[0], w[1]);
         let n0 = if a.bearing < 6.0 { 6.0 } else { 13.0 };
@@ -1356,6 +1357,20 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
 // ---------------------------------------------------------------- centre field and the park beyond
 // From the lidar surface and the aerial image (positions, sizes, levels) and a 2019 photo from the upper deck
 // (what each thing is). World coordinates in the comments; `w` turns them into the ballpark's frame.
+
+/// The sand terrace's span along the outfield wall, in degrees from home.
+const BEACH: (f32, f32) = (7.5, 17.6);
+
+/// The ground behind centre field that is built by hand (a ground hole): the sector from the batter's eye round to
+/// right field, from the wall back to the park. Kept 3 m inside the hand-built sector at its two ends, because the
+/// city's ground is cut out cell by cell (4 m).
+pub fn cf_ring() -> Vec<[f64; 2]> {
+    let (b0, b1) = (-4.0f32, BEACH.1 - 1.6);
+    let n = 24;
+    let near = (0..=n).map(|k| { let b = b0 + (b1 - b0) * k as f32 / n as f32; dir(b) * (interp(&WALL, b) - 0.5) });
+    let far = (0..=n).rev().map(|k| { let b = b0 + (b1 - b0) * k as f32 / n as f32; dir(b) * (interp(&WALL, b) + 44.0) });
+    near.chain(far).map(|p| { let q = p + HOME; [q.x as f64, q.y as f64] }).collect()
+}
 
 /// The terrace behind centre field (lidar 3-4 m; just over the surveyed ground, which would otherwise cover it).
 const CF_TERR: f32 = 4.0;
@@ -1476,7 +1491,6 @@ fn centre_field(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
     let w = |x: f32, z: f32| Vec2::new(x, z) - HOME;
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
     let dark = eye_dark();
-    let sand = Key::new(Mat::Plain(240), [0.4, 0.33, 0.22]);
     let hedge = Key::new(Mat::Plain(240), [0.04, 0.1, 0.035]);
 
     // --- the batter's eye (lidar: 26 x 17 m, its roof 14 m at the field edge rising to 18 m behind): a black
@@ -1552,18 +1566,60 @@ fn centre_field(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
         g.quad(cloth, v(c, gy + 15.6) + Vec3::X * 0.08 + Vec3::new(0.94, 0.0, 0.34) * 1.9, -Vec3::new(0.94, 0.0, 0.34) * 1.9, Vec3::Y * 1.2);
     }
 
-    // --- right of it: the sand terrace behind the fence, named on its wall
-    let beach = wall_stations(6.5, 16.5);
+    // --- right of it, from the lidar: behind the fence a paved strip at 0.6 m, 7.5 m deep at the batter's eye
+    // widening to 13 m by right field; then a wall up to a 4.0 m parapet and the sand terrace behind it at 3.2 m,
+    // 13 m deep; then a kerb up to the park. The terrace is named on its wall (the 2019 photo shows the name
+    // across that wall over the heads of people standing on the strip).
+    let sand = Key::new(Mat::Surface("pht_baseball_playground"), [1.0, 0.9, 0.68]).tile(3.0).rough(0.95);
+    let low = |b: f32| 7.5 + (b - 8.0).clamp(0.0, 8.0) * 0.7;
+    let (low_y, sand_y, top_y) = (0.6f32, 3.2f32, CF_TERR);
+    let beach = wall_stations(BEACH.0, BEACH.1);
     for s in beach.windows(2) {
         let (a, b) = (s[0], s[1]);
-        poly_up(g, sand, &[v(a.p + a.n * 13.2, CF_TERR + 0.05), v(b.p + b.n * 13.2, CF_TERR + 0.05), v(b.p + b.n * 36.0, CF_TERR + 0.05), v(a.p + a.n * 36.0, CF_TERR + 0.05)]);
-        rail_run(g, m, a.p + a.n * 13.15, b.p + b.n * 13.15, CF_TERR, 1.05);
+        let (la, lb) = (low(a.bearing), low(b.bearing));
+        let at = |s: &Station, n: f32| s.p + s.n * n;
+        let inw = -(a.n + b.n).normalize();
+        if a.bearing > BEACH.1 - 2.2 {
+            // the end by right field: a stone block the height of the terrace
+            let q = [at(&a, 0.45), at(&b, 0.45), at(&b, 45.0), at(&a, 45.0)];
+            face(g, m.sandstone, q[0], q[1], inw, 0.0, top_y, &[]);
+            poly_up(g, paving(), &q.map(|p| v(p, top_y)));
+            g.block_ring(&q, 0.0, top_y);
+            if (a.bearing - (BEACH.1 - 2.2)) < 0.61 {
+                let e = (a.p - b.p).normalize();
+                face(g, m.sandstone, at(&a, 0.45), at(&a, la + 13.0), e, low_y, top_y, &[]);
+            }
+            continue;
+        }
+        // the strip behind the fence
+        let q = [at(&a, 0.45), at(&b, 0.45), at(&b, lb), at(&a, la)];
+        poly_up(g, paving(), &q.map(|p| v(p, low_y)));
+        g.block_ring(&q, 0.0, low_y);
+        // the terrace wall and its parapet
+        face(g, m.sandstone, at(&a, la), at(&b, lb), inw, low_y, top_y, &[]);
+        face(g, m.sandstone, at(&b, lb + 0.4), at(&a, la + 0.4), -inw, sand_y, top_y, &[]);
+        poly_up(g, stone_flat(), &[v(at(&a, la), top_y), v(at(&b, lb), top_y), v(at(&b, lb + 0.4), top_y), v(at(&a, la + 0.4), top_y)]);
+        g.block_ring(&[at(&a, la), at(&b, lb), at(&b, lb + 0.4), at(&a, la + 0.4)], 0.0, top_y);
+        rail_run(g, m, at(&a, la + 0.2), at(&b, lb + 0.2), top_y, 0.3);
+        // sand, then the kerb up to the park's level and its lawn
+        let q = [at(&a, la + 0.4), at(&b, lb + 0.4), at(&b, lb + 13.0), at(&a, la + 13.0)];
+        poly_up(g, sand, &q.map(|p| v(p, sand_y)));
+        g.block_ring(&q, 0.0, sand_y);
+        face(g, m.sandstone, at(&a, la + 13.0), at(&b, lb + 13.0), inw, sand_y, top_y, &[]);
+        let q = [at(&a, la + 13.0), at(&b, lb + 13.0), at(&b, 45.0), at(&a, 45.0)];
+        poly_up(g, m.grass, &q.map(|p| v(p, top_y)));
+        g.block_ring(&q, 0.0, top_y);
     }
-    let (ba, bb) = (beach[beach.len() / 2 - 2], beach[beach.len() / 2 + 2]);
-    let (pa, pb) = (ba.p + ba.n * 12.96, bb.p + bb.n * 12.96);
+    // the wall facing the batter's eye side, and the name
+    let first = beach[0];
+    let e0 = (beach[1].p - beach[0].p).normalize();
+    face(g, eye_dark(), first.p + first.n * 0.45, first.p + first.n * 13.0, e0, 0.0, top_y, &[]);
+    let k = beach.len() * 2 / 5;
+    let (ba, bb) = (beach[k - 3], beach[k + 3]);
+    let (pa, pb) = (ba.p + ba.n * (low(ba.bearing) - 0.04), bb.p + bb.n * (low(bb.bearing) - 0.04));
     let e = (pb - pa).normalize();
-    g.quad(m.navy, v(pa, CF_TERR - 1.2), Vec3::new(e.x, 0.0, e.y) * (pb - pa).length(), Vec3::Y * 1.1);
-    sign(g, "sgn_the_beach", [0.95, 0.95, 0.93], (pa + pb) / 2.0 - Vec2::new(-e.y, e.x) * 0.03, CF_TERR - 0.98, -e, (pb - pa).length() * 0.7, 0.66);
+    g.quad(m.navy, v(pa, top_y - 1.25), Vec3::new(e.x, 0.0, e.y) * (pb - pa).length(), Vec3::Y * 1.1);
+    sign(g, "sgn_the_beach", [0.95, 0.95, 0.93], (pa + pb) / 2.0 - Vec2::new(-e.y, e.x) * 0.03, top_y - 1.03, -e, (pb - pa).length() * 0.7, 0.66);
 
     // --- the walk behind centre field (world z -150..-143.5) and the paved walk up the park's west side
     let drape = |g: &mut Geo, k: Key, x0: f32, x1: f32, z0: f32, z1: f32, step: f32, lift: f32, skip: &dyn Fn(f32, f32) -> bool| {
