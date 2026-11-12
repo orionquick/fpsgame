@@ -774,8 +774,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let (ta, tb) = (at(&a, a.terrace), at(&b, b.terrace));
         let t_under = TERR_Y - 0.9;
         g.poly(m.navy, &[v(tb, t_under), v(ta, t_under), v(ta, TERR_Y + 0.2), v(tb, TERR_Y + 0.2)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
-        // (light-emitting faces are one-sided; this winding shows toward the field)
-        g.poly(m.led, &[v(ta - a.n * 0.02, 10.9), v(tb - b.n * 0.02, 10.9), v(tb - b.n * 0.02, 11.5), v(ta - a.n * 0.02, 11.5)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+        ribbon(g, ta - a.n * 0.02, tb - b.n * 0.02, 10.85, 11.55, arc[i], arc[i + 1]);
         // --- terrace rows: 10, under the upper deck's overhang
         let t_rows = (((a.upper + 3.5) - (a.terrace + 0.3)) / TERR_PITCH).floor().clamp(4.0, 12.0) as i32;
         for j in 0..t_rows {
@@ -816,7 +815,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         // --- upper deck: facia, rows with stepped aisles, rails
         let (ua, ub) = (at(&a, a.upper), at(&b, b.upper));
         g.poly(m.navy, &[v(ub, UP_Y - 2.3), v(ua, UP_Y - 2.3), v(ua, UP_Y + 0.25), v(ub, UP_Y + 0.25)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
-        g.poly(m.led, &[v(ua - a.n * 0.02, UP_Y - 1.5), v(ub - b.n * 0.02, UP_Y - 1.5), v(ub - b.n * 0.02, UP_Y - 0.7), v(ua - a.n * 0.02, UP_Y - 0.7)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+        ribbon(g, ua - a.n * 0.02, ub - b.n * 0.02, UP_Y - 1.5, UP_Y - 0.7, arc[i] + 9.0, arc[i + 1] + 9.0);
         g.tube(m.rail, v(ua + a.n * 0.15, UP_Y + 1.0), v(ub + b.n * 0.15, UP_Y + 1.0), 0.03, 6);
         let u_rows = UP_ROWS as i32;
         for j in 0..u_rows {
@@ -1116,6 +1115,17 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
     let _ = front;
 }
 
+/// A stretch of ribbon board on a fascia, from `a` to `b` (left to right as it is read) between two heights; `s0`,
+/// `s1`: metres along the stand, so the picture runs on from one stretch to the next (it repeats every 24 m).
+/// Light-emitting faces show from one side only: `a` to `b` must run left to right for the viewer.
+fn ribbon(g: &mut Geo, a: Vec2, b: Vec2, y0: f32, y1: f32, s0: f32, s1: f32) {
+    let k = Key::new(Mat::Screen("scr_ribbon"), [1.0, 1.0, 1.0]).tile(1.0);
+    let e = (b - a).normalize_or_zero();
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let (u0, u1) = (s0 / 24.0, s1 / 24.0);
+    g.poly_mapped(k, &[v(a, y0), v(b, y0), v(b, y1), v(a, y1)], &[[u0, 0.0], [u1, 0.0], [u1, -1.0], [u0, -1.0]], Vec3::new(e.x, 0.0, e.y), Vec3::Y, false);
+}
+
 /// One row of steps (tread + riser) between stations a and b; in an aisle the riser is split in two half steps.
 fn step_row(g: &mut Geo, m: &Mats, a: &Station, b: &Station, n0a: f32, n0b: f32, pitch: f32, y: f32, rise: f32, in_aisle: bool) {
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
@@ -1248,8 +1258,7 @@ fn tier(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], n0: f32, n1: f
             // wall at the back
             g.poly(m.navy, &[v(fb, y0 - 1.5), v(fa, y0 - 1.5), v(fa, y0), v(fb, y0)], -ev, Vec3::Y);
             let (ra, rb) = (fa - a.n * 0.03, fb - b.n * 0.03);
-            // (light-emitting faces are one-sided: wound so the lit side faces the field)
-            g.poly(m.led, &[v(ra, y0 - 1.25), v(rb, y0 - 1.25), v(rb, y0 - 0.45), v(ra, y0 - 0.45)], ev, Vec3::Y);
+            ribbon(g, ra, rb, y0 - 1.25, y0 - 0.45, prev, arc);
             let (wa, wb) = (at(&a, n0 + 8.0), at(&b, n0 + 8.0));
             g.shade = true;
             g.poly(m.soffit, &[v(wb, facia_from), v(wa, facia_from), v(wa, y0 + 1.0), v(wb, y0 + 1.0)], -ev, Vec3::Y);
