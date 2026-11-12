@@ -165,7 +165,7 @@ impl Camera {
         let dir = look_dir(yaw_deg, pitch_deg);
         let view = Mat4::look_at_rh(eye, eye + dir, Vec3::Y);
         let flat = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
-        Self { view_proj: Mat4::perspective_rh(fov_y_deg.to_radians(), aspect, 0.1, 5000.0) * view, eye, focus: eye + flat * (NEAR_HALF * 0.6), fog: 0.0009, proj_y: 1.0 / (fov_y_deg.to_radians() * 0.5).tan() }
+        Self { view_proj: Mat4::perspective_rh(fov_y_deg.to_radians(), aspect, 0.1, 5000.0) * view, eye, focus: eye + flat * (NEAR_HALF * 0.6), fog: haze_density(), proj_y: 1.0 / (fov_y_deg.to_radians() * 0.5).tan() }
     }
 }
 
@@ -758,7 +758,7 @@ impl Renderer {
         let proj = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.05, 400.0);
         for (i, (fwd, up)) in faces.iter().enumerate() {
             let view = Mat4::look_at_rh(pos, pos + *fwd, *up);
-            let cam = Camera { view_proj: proj * view, eye: pos, focus: pos, fog: 0.0009, proj_y: 1.0 };
+            let cam = Camera { view_proj: proj * view, eye: pos, focus: pos, fog: haze_density(), proj_y: 1.0 };
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             face(&mut enc, &cam, &t, &tmp_view);
             enc.copy_texture_to_texture(
@@ -1186,6 +1186,12 @@ impl Renderer {
         }
         t.prev_cull.set(Some(cam.view_proj));
     }
+}
+
+/// Aerial haze per metre (FPS_HAZE): 0.0005 loses about a tenth of the contrast at 200 m, as in clear-day photos
+/// across the ballpark (0.0009 before, which greyed the far stands).
+fn haze_density() -> f32 {
+    std::env::var("FPS_HAZE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0005)
 }
 
 /// Level-of-detail quality (FPS_LOD, default 0.5: a level may be off by up to 2 px; 1 = 1 px, higher = finer).

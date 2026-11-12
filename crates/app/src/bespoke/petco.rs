@@ -233,10 +233,12 @@ struct Mats {
 fn mats() -> Mats {
     let s = |id: &'static str, t: [f32; 3]| Key::new(Mat::Surface(id), t);
     Mats {
-        grass: s("sfklehwa", [0.62, 0.92, 0.5]).tile(2.0).rough(0.85),
-        grass_dark: s("sfklehwa", [0.5, 0.78, 0.42]).tile(2.0).rough(0.85),
+        // (grass, dirt and track are set against a 2019 photo from the upper deck: lit grass (87,120,59) with
+        // mowing stripes 7% either side, infield dirt (200,154,128), warning track (134,93,78))
+        grass: s("sfklehwa", [0.283, 0.731, 0.5]).tile(2.0).rough(0.85),
+        grass_dark: s("sfklehwa", [0.209, 0.541, 0.37]).tile(2.0).rough(0.85),
         dirt: s("pht_baseball_playground", [0.92, 0.58, 0.4]).tile(3.0),
-        track: s("pht_red_laterite_soil_stones", [0.95, 0.78, 0.68]).tile(2.0),
+        track: s("pht_red_laterite_soil_stones", [0.58, 0.65, 0.58]).tile(2.0),
         chalk: Key::new(Mat::Plain(200), [0.92, 0.92, 0.9]),
         rubber: Key::new(Mat::Plain(160), [0.95, 0.95, 0.94]),
         // (grey: the smooth-concrete scan used before reads brown in this renderer)

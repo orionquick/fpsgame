@@ -341,7 +341,11 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let fv = f0 + (max(vec3f(1.0 - rough), f0) - f0) * pow(1.0 - ndv, 5.0);
     let kd = (1.0 - fv) * (1.0 - metal);
     let sun = g.sun_col.rgb * sun_shadow(i.world, nv) * ndl;
-    var c = (kd * base + ggx(n, v, l, rough, f0) * PI) * sun;
+    // very rough surfaces (grass, soil, broom-finished concrete, chalked plastic) are not smooth facets: their
+    // own texture shadows the grazing sheen a microfacet lobe predicts, which otherwise whitens a whole field or
+    // street seen toward the sun
+    let sheen = 1.0 - 0.85 * smoothstep(0.55, 0.9, rough) * (1.0 - metal);
+    var c = (kd * base + ggx(n, v, l, rough, f0) * PI * sheen) * sun;
     c += kd * local_lights(i.world, n, v, base, rough) * ao;
     // inside a baked probe: diffuse light and glossy reflections come from the probe (split-sum PBR)
     let pw = probe_weight(i.world);
