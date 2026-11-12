@@ -8,6 +8,7 @@ mod play;
 mod procmodel;
 mod proctex;
 mod review;
+mod scan;
 mod service;
 mod world;
 
@@ -178,7 +179,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("play") => {
             let c = city::City::load(&city_path())?;
             let scene = scene_arg(&args).map(|n| editor::Store::new(&scenes_dir(), &n).load(&editor::World::new(c.clone()))).transpose()?;
-            play::run(c, scene, (arg(&args, "--x", -291.5), arg(&args, "--z", -250.0)), arg(&args, "--yaw", 0.0))?;
+            // (with the captured mesh drawn, start on the home plate plaza facing the gate; otherwise downtown)
+            let (dx, dz, dyaw) = if scan::mode() == scan::Mode::Only { (30.0, 128.0, -40.0) } else { (-291.5, -250.0, 0.0) };
+            play::run(c, scene, (arg(&args, "--x", dx), arg(&args, "--z", dz)), arg(&args, "--yaw", dyaw))?;
         }
         Some("dsm") => {
             // fps dsm X0 Z0 X1 Z1: lidar surface (highest return) over a rect at 0.5 m -> out/dsm.bin (f32 metres above

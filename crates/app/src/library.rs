@@ -77,7 +77,7 @@ impl Library {
                     let (inbox, cache_dir) = (&inbox, &cache_dir);
                     let small = matches!(a.group.as_str(), "interior" | "polyhaven" | "sketchfab");
                     // stencil decals cover metres with fine linework: full 4K
-                    let size = if a.group == "decals" { 4096 } else if bc || !small { TEX } else { TEX / 2 };
+                    let size = if a.group == "decals" || a.group == "scan" { 4096 } else if bc || !small { TEX } else { TEX / 2 };
                     s.spawn(move || {
                         let file = cache_dir.join(format!("{}_{size}.bct", key.replace('#', "_")));
                         if bc {

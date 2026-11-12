@@ -25,6 +25,8 @@ pub struct Ctx {
     pub gi_tris: Vec<crate::gi::Tri>,
     pub gi_city: Vec<crate::gi::Prism>,
     focus: Option<[f64; 4]>,
+    /// The captured mesh of the ballpark's block, when its local data is present.
+    scan_batches: Vec<render::Batch>,
 }
 
 impl Ctx {
@@ -46,7 +48,8 @@ impl Ctx {
         let probes = crate::bespoke::all_probes(&city);
         let gi_city = crate::gi::prisms(&city);
         let gi_tris = lib.as_ref().map_or(vec![], |l| crate::gi::tris(l, &city));
-        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], lights, probes, gi_tris, gi_city, focus: None }
+        let scan_batches = if crate::scan::mode() == crate::scan::Mode::Off { vec![] } else { lib.as_mut().map_or(vec![], |l| crate::scan::batches(&gpu, &renderer, l)) };
+        Self { gpu, renderer, base, scene, city, lib, city_batches, prefab_batches: vec![], building_batches: vec![], lights, probes, gi_tris, gi_city, focus: None, scan_batches }
     }
     /// Re-uploads the city with this editor scene's objects.
     pub fn set_scene(&mut self, s: &editor::Scene) {
@@ -75,7 +78,10 @@ impl Ctx {
         self.focus = Some(rect);
     }
     pub fn batches(&self) -> Vec<&render::Batch> {
-        self.city_batches.iter().chain(&self.building_batches).chain(&self.prefab_batches).collect()
+        match crate::scan::mode() {
+            crate::scan::Mode::Only => self.scan_batches.iter().collect(),
+            _ => self.city_batches.iter().chain(&self.building_batches).chain(&self.prefab_batches).chain(&self.scan_batches).collect(),
+        }
     }
 }
 

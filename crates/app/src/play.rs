@@ -68,6 +68,8 @@ struct App {
     /// Playable rectangle from the scene; the player can't leave it.
     bounds: Option<[f32; 4]>,
     collision: Collision,
+    /// Floors of the captured mesh, when that is what is drawn: the player walks on those instead.
+    floors: Option<crate::scan::Floors>,
     gfx: Option<Gfx>,
     player: Player,
     keys: HashSet<KeyCode>,
@@ -127,6 +129,11 @@ pub fn load(gpu: &Gpu, renderer: &Renderer, city: &City, editor_scene: Option<&e
             report("scene objects", &sb);
             batches.extend(sb);
         }
+        match crate::scan::mode() {
+            crate::scan::Mode::Off => {}
+            crate::scan::Mode::Only => batches = crate::scan::batches(gpu, renderer, lib),
+            crate::scan::Mode::Both => batches.extend(crate::scan::batches(gpu, renderer, lib)),
+        }
     }
     let lights = if crate::bespoke::undecorated() { vec![] } else { crate::bespoke::all_lights(city) };
     let probes = crate::bespoke::all_probes(city);
@@ -165,7 +172,8 @@ fn frame_view(gpu: &Gpu, format: wgpu::TextureFormat, w: u32, h: u32) -> wgpu::T
 pub fn run(city: City, scene: Option<editor::Scene>, spawn: (f32, f32), yaw: f32) -> Result<(), Box<dyn std::error::Error>> {
     let collision = Collision::new(&city, scene.as_ref());
     let (spawn, yaw) = scene.as_ref().and_then(|s| s.spawns.first()).map_or((spawn, yaw), |sp| ((sp.x as f32, sp.z as f32), sp.yaw as f32));
-    let y = city.terrain.at(spawn.0 as f64, spawn.1 as f64) as f32;
+    let floors = crate::scan::Floors::load();
+    let y = floors.as_ref().and_then(|f| f.lowest(spawn.0, spawn.1)).unwrap_or(city.terrain.at(spawn.0 as f64, spawn.1 as f64) as f32);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let bounds = scene.as_ref().and_then(|s| s.bounds).map(|b| [b[0] as f32, b[1] as f32, b[2] as f32, b[3] as f32]);
@@ -174,6 +182,7 @@ pub fn run(city: City, scene: Option<editor::Scene>, spawn: (f32, f32), yaw: f32
         bounds,
         editor_scene: scene,
         collision,
+        floors,
         gfx: None,
         player: Player { pos: Vec3::new(spawn.0, y, spawn.1), vy: 0.0, yaw, pitch: 0.0, grounded: true, fly: false },
         keys: HashSet::new(),
@@ -210,6 +219,35 @@ impl App {
             return;
         }
         let speed = if self.keys.contains(&KeyCode::ShiftLeft) { SPRINT } else { WALK };
+        if let Some(fl) = &self.floors {
+            // on the captured mesh: a move is allowed where there is a floor within a step up of the feet (whole
+            // move, else along x or z alone, so walls can be slid along); then gravity onto that floor
+            let reach = p.pos.y + STEP + 0.15;
+            let (dx, dz) = (wish.x * speed * dt, wish.z * speed * dt);
+            for (mx, mz) in [(dx, dz), (dx, 0.0), (0.0, dz)] {
+                let ahead = (mx.signum() * RADIUS * (mx != 0.0) as i32 as f32, mz.signum() * RADIUS * (mz != 0.0) as i32 as f32);
+                if (mx != 0.0 || mz != 0.0) && fl.under(p.pos.x + mx + ahead.0, p.pos.z + mz + ahead.1, reach).is_some() {
+                    p.pos.x += mx;
+                    p.pos.z += mz;
+                    break;
+                }
+            }
+            if p.grounded && self.keys.contains(&KeyCode::Space) {
+                p.vy = JUMP;
+                p.grounded = false;
+            }
+            p.vy -= GRAVITY * dt;
+            p.pos.y += p.vy * dt;
+            let floor = fl.under(p.pos.x, p.pos.z, p.pos.y + STEP + 0.15).unwrap_or(p.pos.y);
+            if p.pos.y <= floor {
+                p.pos.y = floor;
+                p.vy = 0.0;
+                p.grounded = true;
+            } else if p.pos.y > floor + 0.05 {
+                p.grounded = false;
+            }
+            return;
+        }
         let mut xz = [p.pos.x + wish.x * speed * dt, p.pos.z + wish.z * speed * dt];
         self.collision.push_out(&mut xz, p.pos.y + STEP, HEIGHT - STEP, RADIUS);
         if let Some(b) = self.bounds {
