@@ -152,6 +152,7 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         }
     }
 
+    out.retain(|p| crate::world::in_focus([p.x, p.z]));
     out
 }
 
@@ -184,6 +185,9 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
     let pair = lib.catalog.get("sf_380a2c4bfa").filter(|a| !a.parts.is_empty());
     let mut east: Vec<(f64, [f64; 2])> = vec![];
     for (i, p) in c.trees.iter().enumerate() {
+        if !crate::world::in_focus(*p) {
+            continue;
+        }
         let local = |s: &([f64; 2], [f64; 2], [f64; 4])| {
             let (dx, dz) = (p[0] - s.0[0], p[1] - s.0[1]);
             (dx * s.1[0] + dz * s.1[1], -dx * s.1[1] + dz * s.1[0])
@@ -271,6 +275,10 @@ pub fn markings(lib: &Library, c: &City, area: [f64; 4]) -> Vec<(String, [f32; 3
         let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
         let len = dx.hypot(dz);
         if len < 0.2 {
+            return;
+        }
+        // a stripe is drawn whole or not at all
+        if !crate::world::in_focus(a) || !crate::world::in_focus(b) {
             return;
         }
         let (ux, uz) = (dx / len, dz / len);

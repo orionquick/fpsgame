@@ -35,7 +35,7 @@ const CITY_ALBEDO: Vec3 = Vec3::new(0.36, 0.33, 0.3);
 pub fn prisms(c: &city::City) -> Vec<Prism> {
     c.buildings
         .iter()
-        .filter(|b| !crate::bespoke::claimed(c, b) && b.outer.len() >= 3)
+        .filter(|b| !crate::bespoke::claimed(c, b) && !crate::world::building_hidden(b) && b.outer.len() >= 3)
         .map(|b| {
             let base = b.base_y.unwrap_or_else(|| c.terrain.at(b.outer[0][0], b.outer[0][1])) as f32;
             Prism { ring: b.outer.iter().map(|p| [p[0] as f32, p[1] as f32]).collect(), y0: base + b.min_height as f32, y1: base + b.height as f32 }

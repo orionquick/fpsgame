@@ -1,6 +1,115 @@
 use city::City;
 use render::{Gpu, Scene, Vertex};
 
+/// The part of the city that is drawn while work is concentrated on the ballpark: its own block out to the far
+/// kerbs of the streets round it - 7th Avenue on the west, J Street on the north, 10th Avenue and Park Boulevard on
+/// the east and south-east, the railway on the south-west. Everything outside is left out of the picture: ground,
+/// streets, trees, buildings. Two convex pieces (world x, z), both wound the same way.
+/// `FPS_CITY=full` brings the whole city back.
+const FOCUS: [&[[f64; 2]]; 2] = [
+    &[[-129.0, -267.0], [152.0, -267.0], [152.0, -143.0], [-129.0, -143.0]],
+    &[[-129.0, -143.0], [152.0, -143.0], [222.0, -36.0], [224.0, -22.0], [-7.0, 218.0], [-129.0, 132.0]],
+];
+
+pub fn focused() -> bool {
+    // (the tests walk streets all over the city: they always see all of it)
+    !cfg!(test) && std::env::var("FPS_CITY").map_or(true, |v| v != "full")
+}
+
+fn side(a: [f64; 2], b: [f64; 2], p: [f64; 2]) -> f64 {
+    (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+}
+
+fn in_piece(r: &[[f64; 2]], p: [f64; 2]) -> bool {
+    (0..r.len()).all(|i| side(r[i], r[(i + 1) % r.len()], p) >= 0.0)
+}
+
+/// Whether a world point is drawn (always, when the whole city is shown).
+pub fn in_focus(p: [f64; 2]) -> bool {
+    !focused() || FOCUS.iter().any(|r| in_piece(r, p))
+}
+
+/// Whether a generic building is left out altogether (drawing, collision, bounce light): it stands outside the
+/// focus area. Judged by the middle of its outline, so a building across the street is never cut in half.
+pub fn building_hidden(b: &city::model::Building) -> bool {
+    let n = b.outer.len().max(1) as f64;
+    let c = [b.outer.iter().map(|p| p[0]).sum::<f64>() / n, b.outer.iter().map(|p| p[1]).sum::<f64>() / n];
+    if !focused() {
+        return false;
+    }
+    // 10th Avenue curves along the east side: the focus area's straight edge takes in a little ground beyond it,
+    // but no building beyond the street's centre line belongs to the block
+    const TENTH: [[f64; 2]; 4] = [[140.0, -140.0], [170.0, -67.0], [200.0, -37.0], [210.0, -27.0]];
+    let beyond_tenth = TENTH.windows(2).any(|w| c[1] >= w[0][1] && c[1] <= w[1][1] && c[0] > w[0][0] + (w[1][0] - w[0][0]) * (c[1] - w[0][1]) / (w[1][1] - w[0][1]));
+    !in_focus(c) || beyond_tenth
+}
+
+/// Cuts a city mesh down to the focus area: triangles are clipped on its boundary, not just dropped, so the ground
+/// and streets end in a clean line.
+fn clip_to_focus(m: &mut city::mesh::Mesh) {
+    if !focused() {
+        return;
+    }
+    #[derive(Clone, Copy)]
+    struct V {
+        pos: [f32; 3],
+        nrm: [f32; 3],
+        col: [f32; 3],
+        uv: [f32; 2],
+        tan: [f32; 4],
+    }
+    let get = |m: &city::mesh::Mesh, i: u32| V { pos: m.pos[i as usize], nrm: m.nrm[i as usize], col: m.col[i as usize], uv: m.uv[i as usize], tan: m.tan[i as usize] };
+    let xz = |v: &V| [v.pos[0] as f64, v.pos[2] as f64];
+    let mix = |a: &V, b: &V, t: f32| {
+        let l = |x: f32, y: f32| x + (y - x) * t;
+        V { pos: [l(a.pos[0], b.pos[0]), l(a.pos[1], b.pos[1]), l(a.pos[2], b.pos[2])], nrm: a.nrm, col: a.col, uv: [l(a.uv[0], b.uv[0]), l(a.uv[1], b.uv[1])], tan: a.tan }
+    };
+    let old = std::mem::take(&mut m.idx);
+    let mut idx = Vec::with_capacity(old.len());
+    for t in old.chunks_exact(3) {
+        let tri = [get(m, t[0]), get(m, t[1]), get(m, t[2])];
+        if FOCUS.iter().any(|r| tri.iter().all(|v| in_piece(r, xz(v)))) {
+            idx.extend_from_slice(t);
+            continue;
+        }
+        for r in FOCUS {
+            let mut poly: Vec<V> = tri.to_vec();
+            for i in 0..r.len() {
+                let (a, b) = (r[i], r[(i + 1) % r.len()]);
+                let mut next = Vec::with_capacity(poly.len() + 2);
+                for k in 0..poly.len() {
+                    let (p, q) = (poly[k], poly[(k + 1) % poly.len()]);
+                    let (dp, dq) = (side(a, b, xz(&p)), side(a, b, xz(&q)));
+                    if dp >= 0.0 {
+                        next.push(p);
+                    }
+                    if (dp >= 0.0) != (dq >= 0.0) {
+                        next.push(mix(&p, &q, (dp / (dp - dq)) as f32));
+                    }
+                }
+                poly = next;
+                if poly.len() < 3 {
+                    break;
+                }
+            }
+            if poly.len() >= 3 {
+                let b = m.pos.len() as u32;
+                for v in &poly {
+                    m.pos.push(v.pos);
+                    m.nrm.push(v.nrm);
+                    m.col.push(v.col);
+                    m.uv.push(v.uv);
+                    m.tan.push(v.tan);
+                }
+                for k in 1..poly.len() as u32 - 1 {
+                    idx.extend([b, b + k, b + k + 1]);
+                }
+            }
+        }
+    }
+    m.idx = idx;
+}
+
 /// The static city, built once: flat-shaded geometry (grass, pitch, trees) and textured surfaces per material slot.
 pub struct Base {
     pub verts: Vec<Vertex>,
@@ -13,7 +122,8 @@ impl Base {
     /// building volumes, so leave those out (the volumes stay as collision only).
     pub fn new(c: &City, prefabs: bool) -> Self {
         let (mut verts, mut idx, mut slots) = (vec![], vec![], vec![]);
-        for (slot, m) in city::mesh::build_slots_ex(c, &crate::bespoke::ground_holes()) {
+        for (slot, mut m) in city::mesh::build_slots_ex(c, &crate::bespoke::ground_holes()) {
+            clip_to_focus(&mut m);
             if prefabs && matches!(slot, city::mesh::Slot::Tree | city::mesh::Slot::Wall(_) | city::mesh::Slot::Roof) {
                 continue;
             }
@@ -148,7 +258,7 @@ impl Collision {
             solids.push(Solid { ring, min, max, y0: g - 0.05, y1: g + o.size[1] as f32 });
         }
         for b in &c.buildings {
-            if crate::bespoke::claimed(c, b) {
+            if crate::bespoke::claimed(c, b) || building_hidden(b) {
                 continue;
             }
             let (y0, y1) = city::mesh::building_span(b, &c.terrain);

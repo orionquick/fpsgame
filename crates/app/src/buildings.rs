@@ -143,7 +143,8 @@ fn build_all(lib: &Library, c: &City, focus: [f64; 4]) -> (Vec<Placement>, Stats
     let roof_tile = piece(lib, "Urban Modular Building Roof Set", 2, 0, false).or_else(|| piece(lib, "Modular Building Flat Roof Kit", 1, 0, false));
     let spans: std::collections::HashMap<&str, (f64, f64)> = c.buildings.iter().map(|b| (b.osm.as_str(), city::mesh::building_span(b, &c.terrain))).collect();
     for b in &c.buildings {
-        if crate::bespoke::claimed(c, b) {
+        // (while work is concentrated on the ballpark's block, buildings outside it are not built)
+        if crate::bespoke::claimed(c, b) || crate::world::building_hidden(b) {
             continue;
         }
         let (y0, y1) = city::mesh::building_span(b, &c.terrain);
