@@ -799,7 +799,17 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                 continue;
             }
             let (p0, p1) = (ca.lerp(cb, f0), ca.lerp(cb, f1));
-            g.poly(m.stucco, &[v(p1, t_top), v(p0, t_top), v(p0, UP_Y - 1.0), v(p1, UP_Y - 1.0)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+            // the suites (photo from the right-field seats: a dark glazed band in the deck's shadow, a pale
+            // spandrel over it): a low sill, glass with a mullion at each bay, the spandrel
+            let (sill, head) = (t_top + 0.9, (UP_Y - 2.2).max(t_top + 2.6));
+            let fe = Vec3::new(-e.x, 0.0, -e.y);
+            g.shade = true;
+            g.poly(m.soffit, &[v(p1, t_top), v(p0, t_top), v(p0, sill), v(p1, sill)], fe, Vec3::Y);
+            g.poly(suite_glass(), &[v(p1, sill), v(p0, sill), v(p0, head), v(p1, head)], fe, Vec3::Y);
+            g.poly(m.stucco, &[v(p1, head), v(p0, head), v(p0, UP_Y - 1.0), v(p1, UP_Y - 1.0)], fe, Vec3::Y);
+            let inn = -(a.n + b.n).normalize() * 0.03;
+            g.poly(m.soffit, &[v(p0 + inn - e * 0.05, sill), v(p0 + inn + e * 0.05, sill), v(p0 + inn + e * 0.05, head), v(p0 + inn - e * 0.05, head)], -fe, Vec3::Y);
+            g.shade = false;
             g.block_ring(&[p0, p1, ca1.lerp(cb1, f1), ca1.lerp(cb1, f0)], t_top - 0.1, UP_Y);
         }
         // --- upper deck: facia, rows with stepped aisles, rails
@@ -928,7 +938,9 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                 let above = decks.iter().map(|d| d.0).filter(|&d| d > y + 0.5).fold(f32::MAX, f32::min);
                 let top_y = (soffit(&a, up_back_a, ra_in) - 0.05).min(above - 0.35);
                 if top_y > y + 0.5 && top_y < 60.0 {
+                    g.shade = true;
                     g.poly(m.interior, &[v(ia, y), v(ib, y), v(ib, top_y), v(ia, top_y)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                    g.shade = false;
                     if i % 4 == 0 {
                         g.light(v(ia.lerp(oa, 0.5), top_y - 0.4), 7.0, [1.1, 1.0, 0.85]);
                     }
@@ -1291,6 +1303,11 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
 
 /// The terrace behind centre field (lidar 3-4 m; just over the surveyed ground, which would otherwise cover it).
 const CF_TERR: f32 = 4.0;
+
+/// Suite glazing in the shadow under the upper deck.
+fn suite_glass() -> Key {
+    Key::new(Mat::Plain(45), [0.02, 0.026, 0.032])
+}
 
 fn eye_dark() -> Key {
     Key::new(Mat::Plain(245), [0.012, 0.016, 0.014])
