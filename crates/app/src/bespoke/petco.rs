@@ -875,6 +875,53 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                 }
             }
         }
+        // --- rooms along the back of the main concourse (street photo of the third-base side: pale enclosed volumes
+        // stand behind the frame at this level, between open bays): from 7 m to 1.5 m inside the frame, floor to
+        // the deck above, six station bays in every eight; concession counters on the side facing the seats. They
+        // are what closes the view from the field under the terrace - without them the bowl is see-through
+        {
+            let ub = |s: &Station| s.upper + 0.3 + UP_ROWS * UP_PITCH;
+            let room = |k: usize| -> bool {
+                if k + 1 >= st.len() {
+                    return false;
+                }
+                let (sa, sb) = (st[k], st[k + 1]);
+                let c = (at(&sa, ub(&sa) - 4.2) + at(&sb, ub(&sb) - 4.2)) / 2.0;
+                home_gate(sa.bearing) && home_gate(sb.bearing) && k % 8 < 6
+                    && !GATES.iter().any(|&gb| (sa.bearing - gb).abs() < 5.0)
+                    && !(171.0..186.0).contains(&sa.bearing)
+                    && !cores.iter().any(|cr| cr.covers(c) || cr.covers(at(&sa, ub(&sa) - 1.5)) || cr.covers(at(&sb, ub(&sb) - 1.5)))
+                    && !point_in(&bridge_ring(), c)
+            };
+            if room(i) {
+                let wall = Key::new(Mat::Plain(215), [0.55, 0.53, 0.49]);
+                let (y0, y1) = (CONCOURSE_Y, t_top - TERR_RISE + 0.25 - 0.35);
+                let (ia, ib, oa, ob) = (at(&a, up_back_a - 7.0), at(&b, up_back_b - 7.0), at(&a, up_back_a - 1.5), at(&b, up_back_b - 1.5));
+                let e3 = Vec3::new(e.x, 0.0, e.y);
+                g.shade = true;
+                g.poly(wall, &[v(ib, y0), v(ia, y0), v(ia, y1), v(ib, y1)], -e3, Vec3::Y);
+                g.poly(wall, &[v(oa, y0), v(ob, y0), v(ob, y1), v(oa, y1)], e3, Vec3::Y);
+                if i == 0 || !room(i - 1) {
+                    g.poly(wall, &[v(ia, y0), v(oa, y0), v(oa, y1), v(ia, y1)], Vec3::new(a.n.x, 0.0, a.n.y), Vec3::Y);
+                }
+                if !room(i + 1) {
+                    g.poly(wall, &[v(ob, y0), v(ib, y0), v(ib, y1), v(ob, y1)], -Vec3::new(b.n.x, 0.0, b.n.y), Vec3::Y);
+                }
+                // the side toward the seats: a counter along the middle bays, a navy band, a lit sign over it
+                let o = -(a.n + b.n).normalize() * 0.04;
+                let (p, q) = (ia + o, ib + o);
+                if (1..=4).contains(&(i % 8)) {
+                    g.poly(eye_dark(), &[v(q, y0 + 1.05), v(p, y0 + 1.05), v(p, y0 + 2.45), v(q, y0 + 2.45)], -e3, Vec3::Y);
+                    g.poly(m.steel, &[v(q, y0 + 0.95), v(p, y0 + 0.95), v(p, y0 + 1.05), v(q, y0 + 1.05)], -e3, Vec3::Y);
+                    g.poly(m.soffit, &[v(q, y0), v(p, y0), v(p, y0 + 0.95), v(q, y0 + 0.95)], -e3, Vec3::Y);
+                    g.poly(m.navy, &[v(q, y0 + 2.45), v(p, y0 + 2.45), v(p, y0 + 3.3), v(q, y0 + 3.3)], -e3, Vec3::Y);
+                    g.shade = false;
+                    g.poly(m.led_warm, &[v(p + o, y0 + 2.65), v(q + o, y0 + 2.65), v(q + o, y0 + 3.1), v(p + o, y0 + 3.1)], e3, Vec3::Y);
+                }
+                g.shade = false;
+                g.block_ring(&[ia, ib, ob, oa], y0, y1);
+            }
+        }
         // soffit under the upper deck (from the facia's foot back and up, parallel to the rake)
         if home_gate(a.bearing) && home_gate(b.bearing) {
             let under_rows = Key::new(Mat::Plain(215), [0.42, 0.43, 0.44]);
