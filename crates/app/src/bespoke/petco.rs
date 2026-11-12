@@ -354,11 +354,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
         disc(&mut g, m.dirt, dir(b) * 9.5, 1.52, 0.02);
     }
     western_metal(&mut g, &mut f, &m, &|p: Vec2| c.terrain.at((p.x + HOME.x) as f64, (p.y + HOME.y) as f64) as f32);
-    for t in TOWERS {
-        tower(&mut g, &m, t);
-    }
-    board(&mut g, &m, Vec2::new(-99.7, -42.8) - HOME, Vec2::X, 27.0, 33.0, 49.5, true);
-    board(&mut g, &m, Vec2::new(99.1, -43.7) - HOME, Vec2::NEG_X, 27.0, 38.0, 47.5, false);
+    lights_and_boards(&mut g, &m);
     Some(Building { osm: OSM, geo: g, furniture: f.out })
 }
 
@@ -1408,70 +1404,205 @@ fn rail_run(g: &mut Geo, m: &Mats, a: Vec2, b: Vec2, y: f32, h: f32) {
     }
 }
 
-/// Light towers (world centre, lidar footprint half-size, top height): sandstone shafts with white lattice crowns
-/// carrying the lamp banks, aimed at the field.
-const TOWERS: [(f32, f32, f32, f32); 6] = [
-    (67.1, 21.2, 5.5, 64.6),
-    (-67.9, 22.8, 5.5, 65.0),
-    (53.2, 42.3, 4.0, 54.0),
-    (-54.6, 42.8, 4.0, 54.3),
-    (87.0, -109.8, 4.5, 58.5),
-    (-58.3, -108.7, 4.0, 66.0),
-];
+// ---------------------------------------------------------------- lights, towers and boards
+// All from the lidar (0.5 m surface): where each thing stands, how long and deep it is and how high. Their look
+// is from photos: the lamp banks are open white steel frames of floodlights tipped toward the field, standing on
+// white portals on the canopy or on masts over the boards; the two towers are plain cream shafts.
 
-fn tower(g: &mut Geo, m: &Mats, t: (f32, f32, f32, f32)) {
-    let c = Vec2::new(t.0, t.1) - HOME;
-    let (r, top) = (t.2, t.3);
-    let shaft_top = top - 15.0;
-    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
-    // the shafts are pale precast, not sandstone (photos)
-    g.solid(pale_precast(), v(c - Vec2::splat(r * 0.8), 0.0), v(c + Vec2::splat(r * 0.8), shaft_top));
-    // lattice crown: four legs and rings
-    let aim = (Vec2::new(0.0, -50.0) - c).normalize();
-    let side = aim.perp();
-    let legs = [c + side * r - aim * r * 0.5, c - side * r - aim * r * 0.5, c - side * r + aim * r * 0.6, c + side * r + aim * r * 0.6];
-    for p in legs {
-        g.tube(m.steel, v(p, shaft_top), v(p + aim * 0.8, top - 1.0), 0.16, 6);
+/// An oriented box (plan centre `c`, unit long axis `a`, half length and half width), walls, top and collision.
+fn obox(g: &mut Geo, k: Key, c: Vec2, a: Vec2, hl: f32, hw: f32, y0: f32, y1: f32) {
+    let b = Vec2::new(-a.y, a.x);
+    let r = [c - a * hl - b * hw, c + a * hl - b * hw, c + a * hl + b * hw, c - a * hl + b * hw];
+    for k2 in 0..4 {
+        let (p, q) = (r[k2], r[(k2 + 1) % 4]);
+        face(g, k, p, q, (p + q) / 2.0 - c, y0, y1, &[]);
     }
-    for k in 0..4 {
-        let y = shaft_top + 3.0 + k as f32 * 3.0;
-        for i in 0..4 {
-            g.tube(m.steel, v(legs[i], y), v(legs[(i + 1) % 4], y + 1.5), 0.07, 4);
-        }
+    poly_up(g, k, &r.map(|p| Vec3::new(p.x, y1, p.y)));
+    g.block_ring(&r, y0, y1);
+}
+
+/// A bank of floodlights: an open frame `w` wide from `y0` to `y1`, its foot centred on `c`, facing `fwd` and
+/// tipped forward by `lean` at the top; lamps in rows a metre apart.
+fn light_bank(g: &mut Geo, m: &Mats, c: Vec2, fwd: Vec2, y0: f32, y1: f32, w: f32, lean: f32) {
+    let lens = Key::new(Mat::Plain(35), [0.5, 0.53, 0.57]);
+    let fwd = fwd.normalize();
+    let right = Vec2::new(fwd.y, -fwd.x);
+    let r3 = Vec3::new(right.x, 0.0, right.y);
+    let rise = Vec3::new(fwd.x * lean, y1 - y0, fwd.y * lean);
+    let up = rise.normalize();
+    let n = r3.cross(up);
+    let at = |s: f32, t: f32| Vec3::new(c.x, y0, c.y) + r3 * s + rise * t;
+    // frame: the sides, top and bottom, a rail behind every other row
+    let h = rise.length();
+    let rows = (h / 1.0).round().max(2.0) as i32;
+    let cols = (w / 0.9).round().max(2.0) as i32;
+    for s in [-w / 2.0, w / 2.0] {
+        g.member(m.white, at(s, 0.0), at(s, 1.0), 0.22, 0.3, n);
     }
-    // the lamp bank: a frame facing the field with rows of lamps (lit)
-    let face = c + aim * (r * 0.6 + 0.8);
-    let bw = r * 2.0;
-    g.quad(m.steel, v(face - side * bw / 2.0 + aim * 0.3, top - 7.5), Vec3::new(side.x, 0.0, side.y) * bw, Vec3::Y * 7.0);
-    for row in 0..5 {
-        for col in 0..((bw / 1.1) as i32) {
-            let p = face - side * (bw / 2.0 - 0.55 - col as f32 * 1.1) + aim * 0.4;
-            let y = top - 7.0 + row as f32 * 1.35;
-            g.cuboid(m.led, v(p, y) - Vec3::splat(0.33), v(p, y) + Vec3::splat(0.33));
+    for j in (0..=rows).step_by(2) {
+        let t = j as f32 / rows as f32;
+        g.member(m.white, at(-w / 2.0, t) - n * 0.2, at(w / 2.0, t) - n * 0.2, 0.16, 0.2, n);
+    }
+    g.member(m.white, at(-w / 2.0, 1.0), at(w / 2.0, 1.0), 0.2, 0.3, n);
+    // lamps: a lens in front, the housing behind
+    let (dx, dt, sz) = (w / cols as f32, 1.0 / rows as f32, 0.62f32);
+    for j in 0..rows {
+        for i in 0..cols {
+            let p = at(-w / 2.0 + (i as f32 + 0.5) * dx, (j as f32 + 0.5) * dt);
+            g.quad(lens, p - r3 * (sz / 2.0) - up * (sz / 2.0) + n * 0.12, r3 * sz, up * sz);
+            g.quad(m.white, p + r3 * (sz / 2.0) - up * (sz / 2.0) - n * 0.14, -r3 * sz, up * sz);
         }
     }
 }
 
-/// A video board on a white steel frame: the screen faces `face`; the left-field one has a name sign on top.
-fn board(g: &mut Geo, m: &Mats, c: Vec2, face: Vec2, w: f32, y0: f32, y1: f32, sign: bool) {
+/// A lamp bank on a white steel portal standing on the canopy (`base` high): legs splayed along the bank, each
+/// with a stay behind it, tied at the feet.
+fn light_rack(g: &mut Geo, m: &Mats, c: Vec2, fwd: Vec2, base: f32, y0: f32, y1: f32, w: f32) {
+    let fwd = fwd.normalize();
+    let right = Vec2::new(fwd.y, -fwd.x);
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
-    let side = Vec2::new(-face.y, face.x);
-    let a = c - side * (w / 2.0);
-    let screen = Key::new(Mat::Screen("scr_ballgame"), [1.0, 1.0, 1.0]).tile(w * 0.94);
-    // dark cabinet, then the picture on its face
-    g.solid(m.navy, v(c - side * (w / 2.0) - face * 1.5, y0) .min(v(c + side * (w / 2.0), y1)), v(c - side * (w / 2.0) - face * 1.5, y0).max(v(c + side * (w / 2.0), y1)));
-    let inset = 0.6;
-    g.decal(screen, v(a + side * inset + face * 0.02, y0 + inset), Vec3::new(side.x, 0.0, side.y) * (w - 2.0 * inset), Vec3::Y * (y1 - y0 - 2.0 * inset), w * 0.94);
-    // legs down to the stands' back
-    for t in [0.1f32, 0.5, 0.9] {
-        let p = a + side * (w * t) - face * 0.8;
-        g.tube(m.steel, v(p, 14.0), v(p, y0), 0.35, 8);
+    let f3 = Vec3::new(fwd.x, 0.0, fwd.y);
+    let n = (w / 7.0).round().max(2.0) as i32;
+    for k in 0..n {
+        let s = -w / 2.0 + w * (k as f32 + 0.5) / n as f32;
+        let top = c + right * s;
+        for d in [-1.6f32, 1.6] {
+            g.member(m.white, v(top + right * d - fwd * 0.4, base), v(top, y0 + 0.3), 0.3, 0.3, f3);
+        }
+        g.member(m.white, v(top - fwd * 3.2, base), v(top, y0 + (y1 - y0) * 0.6) + f3 * 0.2, 0.26, 0.26, Vec3::new(right.x, 0.0, right.y));
+        g.member(m.white, v(top + right * -1.6 - fwd * 0.4, base + 0.15), v(top + right * 1.6 - fwd * 0.4, base + 0.15), 0.24, 0.24, f3);
     }
-    if sign {
-        let k = Key::new(Mat::Light, [1.4, 1.4, 1.35]);
-        g.quad(m.navy, v(c - side * 9.0 + face * 0.05, y1 + 0.3), Vec3::new(side.x, 0.0, side.y) * 18.0, Vec3::Y * 3.0);
-        g.quad(k, v(c - side * 8.0 + face * 0.08, y1 + 1.1), Vec3::new(side.x, 0.0, side.y) * 16.0, Vec3::Y * 1.4);
+    light_bank(g, m, c, fwd, y0, y1, w, 1.1);
+}
+
+/// One of the two cream towers behind the upper deck (lidar: a shaft 15.7 x 8.5 m turned 45 degrees to the grid,
+/// walls to 59 m, its field end 6 m higher; photos: plain pale stucco, a line of small square windows, a tall lamp
+/// bank on the field end). `c` plan centre, `a` the long axis toward the field.
+fn stair_tower(g: &mut Geo, m: &Mats, c: Vec2, a: Vec2) {
+    let stucco = pale_precast();
+    let dark = Key::new(Mat::Plain(60), [0.02, 0.024, 0.028]);
+    let a = a.normalize();
+    let b = Vec2::new(-a.y, a.x);
+    let (hl, hw, top, tall, tall_len) = (7.85, 4.25, 59.0, 63.5, 6.0);
+    obox(g, stucco, c, a, hl, hw, 0.0, top);
+    obox(g, stucco, c + a * (hl - tall_len / 2.0), a, tall_len / 2.0, hw, top, tall);
+    // windows up both long faces, near the field end; a deep notch under the top of the lower part
+    for side in [-1.0f32, 1.0] {
+        let out = b * side;
+        let right = Vec2::new(out.y, -out.x);
+        let r3 = Vec3::new(right.x, 0.0, right.y);
+        let p = c + a * (hl - tall_len - 1.6) + out * (hw + 0.02);
+        let mut y = 26.0;
+        while y < 55.0 {
+            g.quad(dark, Vec3::new(p.x, y, p.y) - r3 * 0.45, r3 * 0.9, Vec3::Y * 0.9);
+            y += 3.6;
+        }
+        let q = c - a * (hl - 3.2) + out * (hw + 0.02);
+        g.quad(dark, Vec3::new(q.x, top - 6.5, q.y) - r3 * 1.6, r3 * 3.2, Vec3::Y * 3.4);
     }
+    // the lamp bank on brackets off the field end
+    let f = c + a * (hl + 1.3);
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    for s in [-2.6f32, 2.6] {
+        for y in [56.0f32, 60.0, 63.3] {
+            g.member(m.white, v(c + a * hl + b * s, y), v(f + b * s + a * 0.25 * (y - 55.5) / 9.0, y), 0.22, 0.22, Vec3::Y);
+        }
+    }
+    light_bank(g, m, f, a, 55.5, 64.6, 6.4, 1.0);
+}
+
+/// A video board on a white steel frame (lidar: plan centre `c` of the frame, `n` the way the screen faces, the
+/// frame from `back` to `front` along `n`): the cabinet `w` wide from `y0` to `y1` showing `screen`; columns in two
+/// rows down to `base`, girts and bracing behind; `sign` = a name panel on top (from, to along the board, top);
+/// `lights` = a mast and lamp bank over it (from, to along the board, bank foot, bank top).
+fn video_board(g: &mut Geo, m: &Mats, c: Vec2, n: Vec2, back: f32, front: f32, w: f32, y0: f32, y1: f32, base: f32, screen: &'static str, sign_on: Option<(f32, f32, f32)>, lights: (f32, f32, f32, f32)) {
+    let cab = Key::new(Mat::Plain(240), [0.016, 0.018, 0.024]);
+    let n = n.normalize();
+    let right = Vec2::new(n.y, -n.x);
+    let (r3, n3) = (Vec3::new(right.x, 0.0, right.y), Vec3::new(n.x, 0.0, n.y));
+    let v = |t: f32, d: f32, y: f32| { let p = c + right * t + n * d; Vec3::new(p.x, y, p.y) };
+    // cabinet and picture
+    obox(g, cab, c + n * (front - 0.8), right, w / 2.0, 0.8, y0, y1);
+    let pw = w - 0.9;
+    g.decal(Key::new(Mat::Screen(screen), [1.0, 1.0, 1.0]).tile(pw), v(-pw / 2.0, front + 0.03, y0 + 0.45), r3 * pw, Vec3::Y * (y1 - y0 - 0.9), pw);
+    // frame: columns under the cabinet and at the back, girts, cross bracing on the back
+    let bays = (w / 9.0).round().max(2.0) as i32;
+    let back_col = back + 0.5;
+    for k in 0..=bays {
+        let t = -w / 2.0 + 0.6 + (w - 1.2) * k as f32 / bays as f32;
+        g.member(m.white, v(t, front - 2.0, base), v(t, front - 2.0, y0), 0.6, 0.6, n3);
+        g.member(m.white, v(t, back_col, base), v(t, back_col, y1 - 0.5), 0.6, 0.6, n3);
+        for y in [y0 - 0.4, (y0 + y1) / 2.0, y1 - 0.8] {
+            g.member(m.white, v(t, back_col, y), v(t, front - 1.6, y), 0.35, 0.35, r3);
+        }
+        if k < bays {
+            let t1 = -w / 2.0 + 0.6 + (w - 1.2) * (k + 1) as f32 / bays as f32;
+            for (ya, yb) in [(y0 - 0.4, (y0 + y1) / 2.0), ((y0 + y1) / 2.0, y1 - 0.8)] {
+                g.member(m.white, v(t, back_col, ya), v(t1, back_col, yb), 0.28, 0.28, n3);
+                g.member(m.white, v(t1, back_col, ya), v(t, back_col, yb), 0.28, 0.28, n3);
+            }
+            for y in [base + 0.5, y0 - 0.4, (y0 + y1) / 2.0, y1 - 0.8] {
+                g.member(m.white, v(t, back_col, y), v(t1, back_col, y), 0.35, 0.35, n3);
+            }
+        }
+    }
+    if sign_on.is_some() {
+        // the city side of the main board: a billboard on the back of the frame with the name across it
+        let (bw, by0, by1) = (w * 0.62, y0 + 1.5, y1 - 1.0);
+        g.quad(cab, v(bw / 2.0, back - 0.1, by0), -r3 * bw, Vec3::Y * (by1 - by0));
+        let bc = c - n * (back.abs() + 0.14);
+        sign(g, "sgn_ballpark", [0.95, 0.95, 0.93], Vec2::new(bc.x, bc.y), (by0 + by1) / 2.0 - 1.6, -right, bw * 0.8, 3.2);
+    }
+    if let Some((t0, t1, top)) = sign_on {
+        obox(g, cab, c + right * ((t0 + t1) / 2.0) + n * (front - 0.5), right, (t1 - t0) / 2.0, 0.5, y1, top);
+        let sc = c + right * ((t0 + t1) / 2.0) + n * (front + 0.04);
+        sign(g, "sgn_ballpark", [0.95, 0.95, 0.93], sc, y1 + (top - y1) * 0.22, right, (t1 - t0) * 0.8, (top - y1) * 0.56);
+    }
+    // the mast: two braced legs up from the frame, the bank at their head
+    let (t0, t1, ly0, ly1) = lights;
+    let d = (front + back) / 2.0;
+    for t in [t0 + 0.6, t1 - 0.6] {
+        g.member(m.white, v(t, d - 1.2, y1 - 0.5), v(t, d - 1.2, ly1 - 1.0), 0.7, 0.7, n3);
+        g.member(m.white, v(t, d + 1.6, y1 - 0.5), v(t, d + 0.4, ly0 + 1.0), 0.5, 0.5, r3);
+    }
+    let mut y = y1 + 3.0;
+    let mut flip = false;
+    while y + 5.0 < ly1 {
+        let (ta, tb) = if flip { (t1 - 0.6, t0 + 0.6) } else { (t0 + 0.6, t1 - 0.6) };
+        g.member(m.white, v(ta, d - 1.2, y), v(tb, d - 1.2, y + 5.0), 0.3, 0.3, n3);
+        g.member(m.white, v(t0 + 0.6, d - 1.2, y), v(t1 - 0.6, d - 1.2, y), 0.3, 0.3, n3);
+        y += 5.0;
+        flip = !flip;
+    }
+    let bc = c + right * ((t0 + t1) / 2.0) + n * (d + 0.6);
+    light_bank(g, m, bc, n, ly0, ly1, t1 - t0 + 1.5, 1.2);
+}
+
+/// Everything that lights the field or shows it a picture.
+fn lights_and_boards(g: &mut Geo, m: &Mats) {
+    let w = |x: f32, z: f32| Vec2::new(x, z) - HOME;
+    // the park is all but symmetric about x = -0.4: the first-base side mirrors the third-base side's measures
+    let mx = |p: Vec2| Vec2::new(-0.8 - (p.x + HOME.x) - HOME.x, p.y);
+    let md = |d: Vec2| Vec2::new(-d.x, d.y);
+    let canopy = 40.5;
+    // cream towers
+    let (tc, ta) = (w(-68.05, 21.55), Vec2::new(0.70711, -0.70711));
+    stair_tower(g, m, tc, ta);
+    stair_tower(g, m, mx(tc), md(ta));
+    // portals on the canopy either side of home: a 15 m bank to 54 m
+    let (rc, rf) = (w(-55.0, 43.5), Vec2::new(0.676, -0.737));
+    light_rack(g, m, rc, rf, canopy, 47.3, 54.0, 15.0);
+    light_rack(g, m, mx(rc), md(rf), canopy, 47.3, 54.0, 15.0);
+    // along the end of each upper deck: two banks side by side on a 28 m run, to 54 m
+    for zc in [-51.0f32, -37.0] {
+        let ec = w(-100.2, zc);
+        light_rack(g, m, ec, Vec2::X, canopy, 47.6, 54.0, 12.6);
+        light_rack(g, m, mx(ec), Vec2::NEG_X, canopy, 47.6, 54.0, 12.6);
+    }
+    // left field: the main board, 37.7 x 18.7 m, its name over the middle and a lamp bank on a mast to 66 m
+    video_board(g, m, w(-58.8, -110.6), Vec2::new(0.691, 0.723), -6.0, 4.5, 37.7, 17.8, 36.5, 7.0, "scr_lf_board", Some((-8.0, 7.0, 41.0)), (-6.5, 4.5, 56.5, 66.0));
+    // right field: a long three-panel board at the top of the stand, lamps to 58.5 m
+    video_board(g, m, w(87.3, -110.9), Vec2::new(-0.66, 0.751), -3.0, 3.0, 38.0, 29.5, 39.0, 17.0, "scr_rf_board", None, (-4.5, 8.0, 50.5, 58.5));
 }
 
 // ---------------------------------------------------------------- dugouts, netting

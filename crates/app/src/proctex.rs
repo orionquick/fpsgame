@@ -517,7 +517,13 @@ pub fn all() -> std::io::Result<()> {
 
 /// Rasterises a colour SVG (a TV picture, a poster) into an opaque surface.
 pub fn svg_surface(svg: &std::path::Path, id: &str, wm: f32, hm: f32, px: u32) -> Result<(), Box<dyn std::error::Error>> {
-    let tree = resvg::usvg::Tree::from_data(&std::fs::read(svg)?, &resvg::usvg::Options::default())?;
+    // lettering in these pictures uses the project's typefaces (in the asset inbox); without them text is left out
+    let mut opt = resvg::usvg::Options::default();
+    let fonts = crate::root().join("data/megascans_inbox/fonts");
+    for f in ["Graduate-Regular.ttf", "Montserrat-SemiBold.ttf"] {
+        let _ = opt.fontdb_mut().load_font_file(fonts.join(f));
+    }
+    let tree = resvg::usvg::Tree::from_data(&std::fs::read(svg)?, &opt)?;
     let size = tree.size();
     let (w, h) = (px, ((px as f32) * size.height() / size.width()).round() as u32);
     let mut pix = resvg::tiny_skia::Pixmap::new(w, h).ok_or("bad size")?;
