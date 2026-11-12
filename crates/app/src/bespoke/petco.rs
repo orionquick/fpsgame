@@ -1044,16 +1044,38 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
     grand_stair(g, f, m);
     home_towers(g, m);
     sw_offices(g, m);
-    // end walls closing the bowl at both foul poles
-    for s in [st[0], st[st.len() - 1]] {
-        let e = s.n.perp();
-        let pts = [s.p + s.n * s.front, s.p + s.n * (s.upper + 0.3 + UP_ROWS * UP_PITCH + 0.6)];
-        let top = UP_Y + UP_ROWS * UP_RISE + 1.4;
-        wall_poly(g, m.sandstone, &[v(pts[0], 0.0), v(pts[1], 0.0), v(pts[1], top), v(pts[0], top * 0.25)], Vec3::new(s.n.x, 0.0, s.n.y), Vec3::Y);
-        wall_poly(g, m.sandstone, &[v(pts[1], 0.0), v(pts[0], 0.0), v(pts[0], top * 0.25), v(pts[1], top)], Vec3::new(-s.n.x, 0.0, -s.n.y), Vec3::Y);
-        let _ = e;
-        let _ = front;
+    // the ends of the bowl (photo of the first-base end from the park: no wall - the stand simply stops, its tiers
+    // closed by a side panel that follows the rake, the white rakers and decks showing between them, on a
+    // sandstone base that follows the lower rows up to the concourse)
+    for (s, away) in [(st[0], st[0].p - st[1].p), (st[st.len() - 1], st[st.len() - 1].p - st[st.len() - 2].p)] {
+        let out = Vec3::new(away.x, 0.0, away.y).normalize();
+        let at = |n: f32| s.p + s.n * n;
+        let both = |g: &mut Geo, k: Key, pts: &[Vec3]| {
+            g.poly(k, pts, Vec3::new(s.n.x, 0.0, s.n.y), Vec3::Y);
+            let rev: Vec<Vec3> = pts.iter().rev().copied().collect();
+            g.poly(k, &rev, -Vec3::new(s.n.x, 0.0, s.n.y), Vec3::Y);
+        };
+        let rows = (((s.lb_end - 0.8) / LB_PITCH).floor() as i32).max(1);
+        let nc = 0.8 + (rows + LB_EXT_ROWS) as f32 * LB_PITCH;
+        let up_back = s.upper + 0.3 + UP_ROWS * UP_PITCH;
+        let up_top = UP_Y + UP_ROWS * UP_RISE;
+        let t_rows = (((s.upper + 3.5) - (s.terrace + 0.3)) / TERR_PITCH).floor().clamp(4.0, 12.0);
+        let (t_back, t_top) = (s.terrace + 0.3 + t_rows * TERR_PITCH, TERR_Y + t_rows * TERR_RISE);
+        // the base: under the lower rows, then level with the concourse's parapet
+        let base = [v(at(s.front), 0.0), v(at(up_back + 0.35), 0.0), v(at(up_back + 0.35), CONCOURSE_Y + 1.1), v(at(nc), CONCOURSE_Y + 1.1), v(at(s.lb_end), LB_BREAK_Y + 1.1), v(at(s.front), 1.3)];
+        let r3 = Vec3::new(s.n.x, 0.0, s.n.y) * if Vec3::new(s.n.x, 0.0, s.n.y).cross(Vec3::Y).dot(out) > 0.0 { 1.0 } else { -1.0 };
+        let ordered: Vec<Vec3> = if r3.dot(Vec3::new(s.n.x, 0.0, s.n.y)) > 0.0 { base.to_vec() } else { base.iter().rev().copied().collect() };
+        wall_poly(g, m.sandstone, &ordered, r3, Vec3::Y);
+        let back: Vec<Vec3> = ordered.iter().rev().copied().collect();
+        g.poly(stone_flat(), &back, -r3, Vec3::Y);
+        g.block_ring(&[at(s.front), at(up_back + 0.35), at(up_back + 0.35) - away.normalize() * 0.3, at(s.front) - away.normalize() * 0.3], 0.0, 1.3);
+        // side panels of the terrace and the upper deck
+        both(g, m.navy, &[v(at(s.terrace), TERR_Y - 0.9), v(at(t_back), t_top - 0.9), v(at(t_back), t_top + 1.1), v(at(s.terrace), TERR_Y + 1.1)]);
+        both(g, m.navy, &[v(at(s.upper), UP_Y - 2.3), v(at(up_back), up_top - 2.3), v(at(up_back), up_top + 1.1), v(at(s.upper), UP_Y + 1.1)]);
+        g.block_ring(&[at(s.terrace), at(t_back), at(t_back) - away.normalize() * 0.2, at(s.terrace) - away.normalize() * 0.2], TERR_Y - 0.9, t_top + 1.1);
+        g.block_ring(&[at(s.upper), at(up_back), at(up_back) - away.normalize() * 0.2, at(s.upper) - away.normalize() * 0.2], UP_Y - 2.3, up_top + 1.1);
     }
+    let _ = front;
 }
 
 /// One row of steps (tread + riser) between stations a and b; in an aisle the riser is split in two half steps.
