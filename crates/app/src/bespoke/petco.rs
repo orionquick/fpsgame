@@ -774,7 +774,8 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         let (ta, tb) = (at(&a, a.terrace), at(&b, b.terrace));
         let t_under = TERR_Y - 0.9;
         g.poly(m.navy, &[v(tb, t_under), v(ta, t_under), v(ta, TERR_Y + 0.2), v(tb, TERR_Y + 0.2)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
-        g.poly(m.led, &[v(tb - b.n * 0.02, 10.9), v(ta - a.n * 0.02, 10.9), v(ta - a.n * 0.02, 11.5), v(tb - b.n * 0.02, 11.5)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+        // (light-emitting faces are one-sided; this winding shows toward the field)
+        g.poly(m.led, &[v(ta - a.n * 0.02, 10.9), v(tb - b.n * 0.02, 10.9), v(tb - b.n * 0.02, 11.5), v(ta - a.n * 0.02, 11.5)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
         // --- terrace rows: 10, under the upper deck's overhang
         let t_rows = (((a.upper + 3.5) - (a.terrace + 0.3)) / TERR_PITCH).floor().clamp(4.0, 12.0) as i32;
         for j in 0..t_rows {
@@ -815,7 +816,7 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
         // --- upper deck: facia, rows with stepped aisles, rails
         let (ua, ub) = (at(&a, a.upper), at(&b, b.upper));
         g.poly(m.navy, &[v(ub, UP_Y - 2.3), v(ua, UP_Y - 2.3), v(ua, UP_Y + 0.25), v(ub, UP_Y + 0.25)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
-        g.poly(m.led, &[v(ub - b.n * 0.02, UP_Y - 1.5), v(ua - a.n * 0.02, UP_Y - 1.5), v(ua - a.n * 0.02, UP_Y - 0.7), v(ub - b.n * 0.02, UP_Y - 0.7)], Vec3::new(-e.x, 0.0, -e.y), Vec3::Y);
+        g.poly(m.led, &[v(ua - a.n * 0.02, UP_Y - 1.5), v(ub - b.n * 0.02, UP_Y - 1.5), v(ub - b.n * 0.02, UP_Y - 0.7), v(ua - a.n * 0.02, UP_Y - 0.7)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
         g.tube(m.rail, v(ua + a.n * 0.15, UP_Y + 1.0), v(ub + b.n * 0.15, UP_Y + 1.0), 0.03, 6);
         let u_rows = UP_ROWS as i32;
         for j in 0..u_rows {
@@ -939,7 +940,29 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                 let top_y = (soffit(&a, up_back_a, ra_in) - 0.05).min(above - 0.35);
                 if top_y > y + 0.5 && top_y < 60.0 {
                     g.shade = true;
-                    g.poly(m.interior, &[v(ia, y), v(ib, y), v(ib, top_y), v(ia, top_y)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                    g.poly(Key::new(Mat::Plain(215), [0.55, 0.53, 0.49]), &[v(ia, y), v(ib, y), v(ib, top_y), v(ia, top_y)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+                    // concession stands along the concourse: three bays in every eight are a counter under a dark
+                    // opening with a lit sign band over it; a pair of doors in another
+                    let (o, len) = (a.n.lerp(b.n, 0.5).normalize() * 0.04, (ib - ia).length());
+                    let e3 = Vec3::new(e.x, 0.0, e.y);
+                    let bay = i % 8;
+                    if top_y > y + 3.3 && len > 1.2 {
+                        let (p, q) = (ia + o + e * 0.12, ib + o - e * 0.12);
+                        if (1..=3).contains(&bay) {
+                            g.poly(eye_dark(), &[v(p, y + 1.05), v(q, y + 1.05), v(q, y + 2.45), v(p, y + 2.45)], e3, Vec3::Y);
+                            g.poly(m.soffit, &[v(p, y), v(q, y), v(q, y + 0.95), v(p, y + 0.95)], e3, Vec3::Y);
+                            g.poly(m.steel, &[v(p, y + 0.95), v(q, y + 0.95), v(q, y + 1.05), v(p, y + 1.05)], e3, Vec3::Y);
+                            g.poly(m.navy, &[v(p, y + 2.45), v(q, y + 2.45), v(q, y + 3.15), v(p, y + 3.15)], e3, Vec3::Y);
+                            g.shade = false;
+                            // (the sign runs unbroken along the stand: no inset at the bay joints)
+                            // (light-emitting faces are one-sided: wound so the lit side faces out)
+                            g.poly(m.led_warm, &[v(ib + o * 2.5, y + 2.6), v(ia + o * 2.5, y + 2.6), v(ia + o * 2.5, y + 3.0), v(ib + o * 2.5, y + 3.0)], -e3, Vec3::Y);
+                            g.shade = true;
+                        } else if bay == 6 && len > 2.4 {
+                            let mid = (p + q) / 2.0;
+                            g.poly(eye_dark(), &[v(mid - e * 1.0, y), v(mid + e * 1.0, y), v(mid + e * 1.0, y + 2.25), v(mid - e * 1.0, y + 2.25)], e3, Vec3::Y);
+                        }
+                    }
                     g.shade = false;
                     if i % 4 == 0 {
                         g.light(v(ia.lerp(oa, 0.5), top_y - 0.4), 7.0, [1.1, 1.0, 0.85]);
@@ -1225,7 +1248,8 @@ fn tier(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], n0: f32, n1: f
             // wall at the back
             g.poly(m.navy, &[v(fb, y0 - 1.5), v(fa, y0 - 1.5), v(fa, y0), v(fb, y0)], -ev, Vec3::Y);
             let (ra, rb) = (fa - a.n * 0.03, fb - b.n * 0.03);
-            g.poly(m.led, &[v(rb, y0 - 1.25), v(ra, y0 - 1.25), v(ra, y0 - 0.45), v(rb, y0 - 0.45)], -ev, Vec3::Y);
+            // (light-emitting faces are one-sided: wound so the lit side faces the field)
+            g.poly(m.led, &[v(ra, y0 - 1.25), v(rb, y0 - 1.25), v(rb, y0 - 0.45), v(ra, y0 - 0.45)], ev, Vec3::Y);
             let (wa, wb) = (at(&a, n0 + 8.0), at(&b, n0 + 8.0));
             g.shade = true;
             g.poly(m.soffit, &[v(wb, facia_from), v(wa, facia_from), v(wa, y0 + 1.0), v(wb, y0 + 1.0)], -ev, Vec3::Y);
