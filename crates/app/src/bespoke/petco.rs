@@ -2157,10 +2157,11 @@ fn video_board(g: &mut Geo, m: &Mats, c: Vec2, n: Vec2, back: f32, front: f32, w
     let right = Vec2::new(n.y, -n.x);
     let (r3, n3) = (Vec3::new(right.x, 0.0, right.y), Vec3::new(n.x, 0.0, n.y));
     let v = |t: f32, d: f32, y: f32| { let p = c + right * t + n * d; Vec3::new(p.x, y, p.y) };
-    // cabinet and picture
+    // cabinet and picture (the picture stands well proud of the cabinet: from across the park a few centimetres are
+    // not enough for the depth buffer to tell them apart)
     obox(g, cab, c + n * (front - 0.8), right, w / 2.0, 0.8, y0, y1);
     let pw = w - 0.9;
-    g.decal(Key::new(Mat::Screen(screen), [1.0, 1.0, 1.0]).tile(pw), v(-pw / 2.0, front + 0.03, y0 + 0.45), r3 * pw, Vec3::Y * (y1 - y0 - 0.9), pw);
+    g.decal(Key::new(Mat::Screen(screen), [1.0, 1.0, 1.0]).tile(pw), v(-pw / 2.0, front + 0.12, y0 + 0.45), r3 * pw, Vec3::Y * (y1 - y0 - 0.9), pw);
     // frame: columns under the cabinet and at the back, girts, cross bracing on the back
     let bays = (w / 9.0).round().max(2.0) as i32;
     let back_col = back + 0.5;
