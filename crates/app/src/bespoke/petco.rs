@@ -16,6 +16,8 @@ use super::Building;
 use glam::{Vec2, Vec3};
 
 pub const OSM: &str = "relation/1779874";
+/// The pavilion under the park's amphitheatre hill beyond centre field: built here as the hill.
+pub const PARK_PAVILION: &str = "way/1435588827";
 /// The Western Metal Supply Co. building (its own OSM way), built here as part of the ballpark.
 pub const WESTERN_METAL: &str = "way/769800588";
 /// Home plate (world x, z): the centre of the dirt circle on the aerial.
@@ -331,6 +333,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     let wall: Vec<Vec2> = WALL.iter().map(|&(b, d)| dir(b) * d).collect();
     field(&mut g, &m, &front, &wall);
     outfield_wall(&mut g, &m);
+    wall_panels(&mut g, &m);
     foul_poles(&mut g, &m);
     let st = stations(&front);
     if std::env::var("FPS_PETCO_DEBUG").is_ok() {
@@ -355,6 +358,7 @@ pub fn build(c: &city::City, cat: &assets::Catalog) -> Option<Building> {
     }
     western_metal(&mut g, &mut f, &m, &|p: Vec2| c.terrain.at((p.x + HOME.x) as f64, (p.y + HOME.y) as f64) as f32);
     lights_and_boards(&mut g, &m);
+    centre_field(&mut g, &m, &|p: Vec2| c.terrain.at((p.x + HOME.x) as f64, (p.y + HOME.y) as f64) as f32);
     Some(Building { osm: OSM, geo: g, furniture: f.out })
 }
 
@@ -569,6 +573,57 @@ fn outfield_wall(g: &mut Geo, m: &Mats) {
         g.poly(m.yellow, &[v(a, ha), v(a + out * t, ha), v(b + out * t, hb), v(b, hb)], Vec3::new(e.x, 0.0, e.y), Vec3::new(out.x, 0.0, out.y));
         g.poly(m.concrete, &[v(a + out * t, 0.0), v(b + out * t, 0.0), v(b + out * t, hb), v(a + out * t, ha)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
         g.block_ring(&[a, b, b + out * t, a + out * t], 0.0, ha.min(hb));
+    }
+}
+
+/// What hangs on the outfield wall: the distances in white numerals and a run of message panels, none across the
+/// hitter's background in dead centre. (The real wall carries sponsors' panels; these are the project's own words.)
+fn wall_panels(g: &mut Geo, m: &Mats) {
+    // the wall curves: a flat panel stands this far off it at its middle so its ends stay in front
+    const PAD: f32 = 0.14;
+    let white = Key::new(Mat::Plain(225), [0.82, 0.82, 0.8]);
+    let ink = [0.03, 0.05, 0.16];
+    let chalk = [0.95, 0.95, 0.93];
+    let at = |b: f32| {
+        let p = dir(b) * (interp(&WALL, b) - PAD);
+        let e = (dir(b + 0.5) * interp(&WALL, b + 0.5) - dir(b - 0.5) * interp(&WALL, b - 0.5)).normalize();
+        (p, e)
+    };
+    for (b, digits) in [(-42.5f32, [3usize, 3, 4]), (-27.0, [3, 5, 7]), (8.6, [3, 9, 6]), (25.5, [3, 9, 1]), (42.8, [3, 2, 2])] {
+        let (p, e) = at(b);
+        let h = wall_h(b);
+        for (k, d) in digits.into_iter().enumerate() {
+            sign(g, SGN_N[d - 1], chalk, p + e * ((k as f32 - 1.0) * 0.66) + dir(b) * (PAD - 0.03), h * 0.5 - 0.45, e, 0.56, 0.9);
+        }
+    }
+    let words = [("sgn_ballpark", 4.4f32, 0.92f32), ("sgn_san_diego", 4.6, 0.85), ("sgn_play_ball", 4.3, 0.84), ("sgn_tickets", 3.9, 0.74)];
+    let mut k = 0usize;
+    for b in [-38.5f32, -34.5, -31.0, -23.0, -19.5, -16.5, -13.2, -10.0, 12.5, 16.0, 19.5, 22.5, 29.0, 32.5, 36.0, 39.5] {
+        let (p, e) = at(b);
+        let h = wall_h(b);
+        let (w, ph) = (5.0f32, (h - 0.5).min(1.55));
+        let y0 = (h - ph) / 2.0;
+        let light = k % 2 == 1;
+        let o = p - e * (w / 2.0);
+        let n = Vec2::new(-e.y, e.x) * if Vec2::new(-e.y, e.x).dot(p) < 0.0 { 1.0 } else { -1.0 };
+        let back = Vec3::new(-n.x, 0.0, -n.y) * PAD;
+        g.quad(if light { white } else { m.navy }, Vec3::new(o.x, y0, o.y), Vec3::new(e.x, 0.0, e.y) * w, Vec3::Y * ph);
+        // the pad's edges
+        let (q0, q1) = (Vec3::new(o.x, y0, o.y), Vec3::new(o.x, y0, o.y) + Vec3::new(e.x, 0.0, e.y) * w);
+        g.quad(m.navy, q0 + back, -back, Vec3::Y * ph);
+        g.quad(m.navy, q1, back, Vec3::Y * ph);
+        g.quad(m.navy, q0 + Vec3::Y * ph, Vec3::new(e.x, 0.0, e.y) * w, back);
+        if !light {
+            // a thin white keyline round the dark panels
+            for (ya, yb) in [(y0, y0 + 0.05), (y0 + ph - 0.05, y0 + ph)] {
+                let q = p - e * (w / 2.0) + n * 0.01;
+                g.quad(white, Vec3::new(q.x, ya, q.y), Vec3::new(e.x, 0.0, e.y) * w, Vec3::Y * (yb - ya));
+            }
+        }
+        let (id, sw, sh) = words[k % words.len()];
+        let sh = sh.min(ph * 0.6);
+        sign(g, id, if light { ink } else { chalk }, p + n * 0.02, y0 + (ph - sh) / 2.0, e, sw.min(w - 0.7), sh);
+        k += 1;
     }
 }
 
@@ -1159,7 +1214,7 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
         poly_up(g, m.grass, &[v(a.p + a.n * 0.45, 0.01), v(b.p + b.n * 0.45, 0.01), v(b.p + b.n * 18.0, 0.01), v(a.p + a.n * 18.0, 0.01)]);
         // retaining wall up to the terrace at the back
         let e = (b.p - a.p).normalize();
-        wall_poly(g, m.sandstone, &[v(a.p + a.n * 18.0, 0.0), v(b.p + b.n * 18.0, 0.0), v(b.p + b.n * 18.0, 3.5), v(a.p + a.n * 18.0, 3.5)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+        wall_poly(g, m.sandstone, &[v(a.p + a.n * 18.0, 0.0), v(b.p + b.n * 18.0, 0.0), v(b.p + b.n * 18.0, CF_TERR), v(a.p + a.n * 18.0, CF_TERR)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
     }
     for (bb, k) in [(-13.0f32, 0), (-8.0, 1)] {
         let p = dir(bb) * (interp(&WALL, bb) + 9.0);
@@ -1167,34 +1222,325 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
         disc(g, m.dirt, p, 2.7, 0.03);
         mound(g, m, p);
     }
-    // centre-field terrace at 3.5 m (grass) from 6 m behind the wall, with the batter's eye on it
+    // centre-field terrace at 4 m (grass) from 6 m behind the wall; the batter's eye stands on it (`centre_field`)
     let cf = wall_stations(-5.5, 17.0);
     for w in cf.windows(2) {
         let (a, b) = (w[0], w[1]);
         let n0 = if a.bearing < 6.0 { 6.0 } else { 13.0 };
-        poly_up(g, m.grass_dark, &[v(a.p + a.n * n0, 3.5), v(b.p + b.n * n0, 3.5), v(b.p + b.n * 45.0, 3.5), v(a.p + a.n * 45.0, 3.5)]);
+        poly_up(g, m.grass_dark, &[v(a.p + a.n * n0, CF_TERR), v(b.p + b.n * n0, CF_TERR), v(b.p + b.n * 45.0, CF_TERR), v(a.p + a.n * 45.0, CF_TERR)]);
         let e = (b.p - a.p).normalize();
-        wall_poly(g, m.sandstone, &[v(b.p + b.n * n0, 0.0), v(a.p + a.n * n0, 0.0), v(a.p + a.n * n0, 3.5), v(b.p + b.n * n0, 3.5)], -Vec3::new(e.x, 0.0, e.y) * -1.0, Vec3::Y);
+        // dead centre the hitter's background is kept dark all the way down
+        let face = if a.bearing > -7.5 && a.bearing < 7.5 { eye_dark() } else { m.sandstone };
+        wall_poly(g, face, &[v(b.p + b.n * n0, 0.0), v(a.p + a.n * n0, 0.0), v(a.p + a.n * n0, CF_TERR), v(b.p + b.n * n0, CF_TERR)], -Vec3::new(e.x, 0.0, e.y) * -1.0, Vec3::Y);
         poly_up(g, m.grass_dark, &[v(a.p + a.n * 0.45, 0.01), v(b.p + b.n * 0.45, 0.01), v(b.p + b.n * n0, 0.01), v(a.p + a.n * n0, 0.01)]);
-        g.block_ring(&[a.p + a.n * n0, b.p + b.n * n0, b.p + b.n * 45.0, a.p + a.n * 45.0], 0.0, 3.5);
+        g.block_ring(&[a.p + a.n * n0, b.p + b.n * n0, b.p + b.n * 45.0, a.p + a.n * 45.0], 0.0, CF_TERR);
     }
-    // the batter's eye: a dark box 13.5 m high with a white pavilion roof above (bearings -4.5..4.5, 12-30 m out)
-    let eye = Key::new(Mat::Plain(200), [0.05, 0.055, 0.06]);
-    let (b0, b1) = (-4.5f32, 4.5);
-    let p = |b: f32, n: f32| dir(b) * (interp(&WALL, b) + n);
-    let c = [p(b0, 12.0), p(b1, 12.0), p(b1, 30.0), p(b0, 30.0)];
-    for k in 0..4 {
-        let (a, b) = (c[k], c[(k + 1) % 4]);
-        let e = (b - a).normalize();
-        g.poly(eye, &[v(a, 3.5), v(b, 3.5), v(b, 13.5), v(a, 13.5)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+}
+
+// ---------------------------------------------------------------- centre field and the park beyond
+// From the lidar surface and the aerial image (positions, sizes, levels) and a 2019 photo from the upper deck
+// (what each thing is). World coordinates in the comments; `w` turns them into the ballpark's frame.
+
+/// The terrace behind centre field (lidar 3-4 m; just over the surveyed ground, which would otherwise cover it).
+const CF_TERR: f32 = 4.0;
+
+fn eye_dark() -> Key {
+    Key::new(Mat::Plain(245), [0.012, 0.016, 0.014])
+}
+
+/// The park's hill: the lidar surface on a 3 m grid (world x from -3, z from -213; the 20th-percentile height in
+/// each cell, median-filtered and capped at the plateau so trees and people drop out). A level crescent at 8.7 m
+/// over the pavilion in the north-east, lawn sloping down from it to the south-west, a ramp climbing along its
+/// north-west side, a wall where it drops to the lawn.
+const HILL_GRID: (f32, f32, f32) = (-3.0, -213.0, 3.0);
+const HILL: [[f32; 22]; 22] = [
+    [4.3, 4.3, 4.3, 4.4, 4.4, 4.4, 4.4, 4.4, 4.4, 4.4, 4.4, 4.4, 4.4, 4.4, 4.4, 4.7, 4.8, 4.8, 4.8, 4.8, 4.9, 4.9],
+    [4.2, 4.2, 4.4, 4.6, 4.9, 5.1, 5.3, 5.3, 5.4, 5.6, 5.6, 5.2, 5.1, 4.3, 4.3, 4.2, 4.3, 4.8, 4.8, 4.8, 4.8, 4.9],
+    [4.2, 4.5, 4.9, 5.5, 6.1, 6.5, 6.6, 6.7, 6.9, 7.1, 7.3, 7.4, 7.4, 5.1, 4.2, 4.2, 4.2, 4.6, 5.2, 4.9, 4.9, 4.9],
+    [4.6, 5.3, 6.2, 6.4, 6.5, 6.6, 8.3, 8.3, 8.3, 7.9, 8.7, 8.7, 8.7, 8.7, 4.3, 4.2, 4.2, 4.5, 5.2, 5.2, 4.9, 4.9],
+    [6.3, 6.3, 6.4, 6.5, 6.5, 8.4, 9.3, 9.3, 9.3, 8.7, 8.7, 8.7, 8.7, 8.7, 8.7, 8.6, 4.2, 4.2, 4.5, 4.9, 4.9, 4.9],
+    [6.3, 6.4, 6.4, 6.5, 7.0, 8.6, 9.3, 9.3, 9.3, 8.7, 8.6, 8.7, 8.7, 8.7, 8.7, 8.7, 8.6, 4.4, 4.5, 4.7, 4.8, 4.9],
+    [6.1, 6.1, 6.4, 6.4, 6.5, 8.6, 8.6, 8.7, 8.7, 8.7, 8.7, 8.7, 8.7, 8.7, 8.7, 8.7, 8.7, 8.6, 4.8, 4.7, 4.8, 4.8],
+    [5.6, 5.5, 5.5, 5.4, 5.3, 5.1, 4.8, 4.4, 8.7, 8.7, 8.7, 8.7, 8.7, 8.7, 8.6, 8.6, 8.6, 8.6, 8.6, 4.8, 4.8, 4.8],
+    [5.2, 5.1, 4.9, 4.8, 4.7, 4.5, 4.2, 4.1, 4.2, 4.2, 8.7, 8.7, 8.6, 8.6, 8.6, 8.6, 8.6, 8.6, 8.6, 4.9, 4.7, 4.8],
+    [4.7, 4.6, 4.5, 4.4, 4.3, 4.0, 4.0, 4.1, 4.1, 4.3, 4.9, 5.8, 8.6, 8.6, 8.6, 8.6, 8.6, 8.6, 8.6, 4.9, 4.7, 4.7],
+    [4.2, 4.1, 4.1, 4.1, 4.0, 4.0, 4.0, 4.1, 4.3, 4.8, 5.4, 6.0, 6.6, 8.7, 8.6, 8.7, 8.6, 8.6, 6.7, 5.4, 4.7, 4.7],
+    [3.9, 3.9, 4.0, 3.9, 3.9, 4.0, 4.0, 4.3, 4.7, 5.2, 5.6, 6.0, 6.6, 7.2, 8.6, 8.6, 8.6, 8.1, 7.1, 5.7, 4.7, 4.8],
+    [3.9, 4.0, 4.0, 3.9, 3.9, 4.0, 4.1, 4.3, 4.7, 5.2, 5.6, 6.0, 6.5, 7.1, 7.7, 8.1, 8.1, 7.8, 7.3, 6.1, 4.7, 4.8],
+    [4.0, 4.0, 4.0, 4.0, 4.0, 4.1, 4.1, 4.1, 4.5, 4.9, 5.2, 5.7, 6.3, 6.8, 7.4, 7.7, 7.7, 7.4, 7.3, 6.5, 4.7, 4.8],
+    [3.8, 3.9, 4.0, 4.0, 4.0, 4.1, 4.1, 4.1, 4.1, 4.6, 4.9, 5.3, 6.0, 6.5, 7.0, 7.4, 7.4, 7.3, 6.9, 6.5, 4.7, 4.7],
+    [3.8, 3.9, 4.0, 4.0, 3.9, 4.0, 4.1, 4.1, 4.0, 4.3, 4.7, 5.2, 5.8, 6.2, 6.5, 7.0, 7.0, 6.9, 6.5, 6.1, 4.7, 4.7],
+    [3.7, 3.9, 4.0, 3.9, 3.9, 4.1, 4.1, 4.2, 4.1, 4.0, 4.6, 5.1, 5.4, 5.9, 6.2, 6.5, 6.5, 6.4, 6.1, 5.6, 4.7, 4.7],
+    [3.7, 4.0, 3.8, 3.8, 3.8, 4.1, 4.2, 4.2, 4.2, 4.0, 4.5, 4.7, 5.3, 5.5, 5.9, 6.1, 6.1, 5.9, 5.6, 5.1, 4.7, 4.7],
+    [3.9, 3.9, 4.0, 3.9, 3.9, 4.0, 4.1, 4.2, 4.2, 4.1, 4.2, 4.5, 5.0, 5.3, 5.5, 5.6, 5.6, 5.5, 5.1, 4.6, 4.7, 4.7],
+    [3.9, 3.9, 3.9, 3.8, 3.9, 3.9, 4.1, 4.1, 4.1, 4.0, 4.2, 4.5, 4.6, 5.0, 5.1, 5.2, 5.2, 5.0, 4.8, 4.6, 4.6, 4.6],
+    [3.9, 3.9, 3.9, 3.8, 3.8, 3.8, 3.9, 4.1, 4.0, 4.0, 4.0, 4.3, 4.5, 4.6, 4.7, 4.8, 4.8, 4.8, 4.5, 4.5, 4.6, 4.6],
+    [3.6, 3.7, 3.7, 3.7, 3.7, 3.7, 3.8, 3.8, 3.9, 3.9, 3.9, 4.1, 4.3, 4.4, 4.5, 4.7, 4.7, 4.4, 4.4, 4.5, 4.5, 4.6],
+];
+
+/// The plateau's level, and the grid height above which a point belongs to it.
+const HILL_TOP: f32 = 8.7;
+const HILL_EDGE: f32 = 8.3;
+
+/// The hill without its plateau: plateau nodes take the lowest ground beside them, so the lawn runs level to the
+/// foot of the plateau's wall instead of ramping up it (except where the lawn reaches the top by itself).
+fn hill_low(i: usize, j: usize) -> f32 {
+    let h = HILL[j][i];
+    if h < HILL_EDGE {
+        return h;
     }
-    poly_up(g, eye, &c.map(|q| v(q, 13.5)));
-    g.block_ring(&c, 0.0, 13.5);
-    let r = [p(b0 - 0.5, 10.0), p(b1 + 0.5, 10.0), p(b1 + 0.5, 32.0), p(b0 - 0.5, 32.0)];
-    poly_up(g, m.roof, &r.map(|q| v(q, 17.3)));
-    for q in r {
-        g.tube(m.steel, v(q, 13.5), v(q, 17.3), 0.15, 8);
+    let (mut low, mut high) = (f32::MAX, f32::MIN);
+    for dj in -1i32..=1 {
+        for di in -1i32..=1 {
+            let (a, b) = (i as i32 + di, j as i32 + dj);
+            if a >= 0 && b >= 0 && (a as usize) < HILL[0].len() && (b as usize) < HILL.len() && HILL[b as usize][a as usize] < HILL_EDGE {
+                low = low.min(HILL[b as usize][a as usize]);
+                high = high.max(HILL[b as usize][a as usize]);
+            }
+        }
     }
+    // where the lawn itself climbs to within a step or two of the top it runs on up to it: no wall there
+    if low == f32::MAX || high > 7.2 { HILL_TOP } else { low }
+}
+
+/// Bilinear sample of a node function over the hill's grid at a world point.
+fn hill_sample(f: &dyn Fn(usize, usize) -> f32, x: f32, z: f32) -> Option<f32> {
+    let (x0, z0, st) = HILL_GRID;
+    let (u, v) = ((x - x0) / st, (z - z0) / st);
+    if u < 0.0 || v < 0.0 || u > (HILL[0].len() - 1) as f32 || v > (HILL.len() - 1) as f32 {
+        return None;
+    }
+    let (i, j) = ((u as usize).min(HILL[0].len() - 2), (v as usize).min(HILL.len() - 2));
+    let (fu, fv) = (u - i as f32, v - j as f32);
+    Some((f(i, j) * (1.0 - fu) + f(i + 1, j) * fu) * (1.0 - fv) + (f(i, j + 1) * (1.0 - fu) + f(i + 1, j + 1) * fu) * fv)
+}
+
+/// The park beyond centre field (world x0, x1, z0, z1): its ground is built here, not by the city's ground mesh.
+const PARK: (f32, f32, f32, f32) = (-45.0, 62.0, -214.0, -143.5);
+
+pub fn park_ring() -> Vec<[f64; 2]> {
+    let (x0, x1, z0, z1) = (PARK.0 as f64, PARK.1 as f64, PARK.2 as f64, PARK.3 as f64);
+    vec![[x0, z0], [x1, z0], [x1, z1], [x0, z1]]
+}
+
+fn centre_field(g: &mut Geo, m: &Mats, terr: &dyn Fn(Vec2) -> f32) {
+    let w = |x: f32, z: f32| Vec2::new(x, z) - HOME;
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let dark = eye_dark();
+    let sand = Key::new(Mat::Plain(240), [0.4, 0.33, 0.22]);
+    let hedge = Key::new(Mat::Plain(240), [0.04, 0.1, 0.035]);
+
+    // --- the batter's eye (lidar: 26 x 17 m, its roof 14 m at the field edge rising to 18 m behind): a black
+    // block, a deck on it, and a metal roof on white posts that tips toward the field, the name across it
+    let (ex0, ex1, ez0, ez1) = (-14.0 - HOME.x, 12.0 - HOME.x, -143.0 - HOME.y, -126.0 - HOME.y);
+    let deck = 10.8;
+    g.solid(dark, Vec3::new(ex0, 0.0, ez0), Vec3::new(ex1, deck, ez1));
+    for (a, b) in [(Vec2::new(ex0, ez1), Vec2::new(ex1, ez1)), (Vec2::new(ex1, ez1), Vec2::new(ex1, ez0)), (Vec2::new(ex1, ez0), Vec2::new(ex0, ez0)), (Vec2::new(ex0, ez0), Vec2::new(ex0, ez1))] {
+        let inw = ((Vec2::new(ex0, ez0) + Vec2::new(ex1, ez1)) / 2.0 - (a + b) / 2.0).normalize() * 0.25;
+        face(g, dark, a, b, -inw, deck, deck + 1.1, &[]);
+        face(g, dark, a + inw, b + inw, inw, deck, deck + 1.1, &[]);
+        poly_up(g, dark, &[v(a, deck + 1.1), v(b, deck + 1.1), v(b + inw, deck + 1.1), v(a + inw, deck + 1.1)]);
+    }
+    let roof = Key::new(Mat::Surface("pht_corrugated_iron_02"), [1.0, 0.98, 1.22]).tile(2.7);
+    let (rx0, rx1, rz0, rz1, ry_front, ry_back) = (ex0 - 1.5, ex1 + 1.5, ez0 - 1.0, ez1 + 1.2, 14.0f32, 18.2f32);
+    let slope = Vec3::new(0.0, ry_back - ry_front, rz0 - rz1);
+    let up = slope.normalize();
+    let nrm = Vec3::X.cross(up);
+    let (c0, c1, c2, c3) = (Vec3::new(rx0, ry_front, rz1), Vec3::new(rx1, ry_front, rz1), Vec3::new(rx1, ry_back, rz0), Vec3::new(rx0, ry_back, rz0));
+    g.poly(roof, &[c0, c1, c2, c3], Vec3::X, up);
+    g.poly(m.white, &[c1 - nrm * 0.3, c0 - nrm * 0.3, c3 - nrm * 0.3, c2 - nrm * 0.3], -Vec3::X, up);
+    g.quad(m.white, c0 - nrm * 0.3, Vec3::X * (rx1 - rx0), nrm * 0.3);
+    g.quad(m.white, c2 - nrm * 0.3, -Vec3::X * (rx1 - rx0), nrm * 0.3);
+    for k in 0..5 {
+        let x = ex0 + 0.4 + (ex1 - ex0 - 0.8) * k as f32 / 4.0;
+        for (z, y) in [(ez1 - 0.4, ry_front + (ry_back - ry_front) * 0.09), (ez0 + 0.4, ry_back - (ry_back - ry_front) * 0.07)] {
+            g.member(m.white, Vec3::new(x, deck, z), Vec3::new(x, y - 0.3, z), 0.3, 0.3, Vec3::Z);
+        }
+    }
+    // the name on the roof, read from home plate
+    let (sw, sh) = (19.0f32, 4.2f32);
+    let o = c0 + Vec3::X * ((rx1 - rx0 - sw) / 2.0) + up * (slope.length() * 0.5 - sh / 2.0) + nrm * 0.04;
+    g.decal(Key::new(Mat::Surface("sgn_ballpark"), [0.07, 0.008, 0.03]).tile(1.0), o - Vec3::X * (sh / 24.0) - up * (sh / 24.0), Vec3::X * (sw + sh / 12.0), up * (sh * 13.0 / 12.0), 1.0);
+    // clipped hedges either side of the black
+    for (xa, xb) in [(ex0 - 4.0, ex0 - 0.2), (ex1 + 0.2, ex1 + 4.0)] {
+        g.cuboid(hedge, Vec3::new(xa, CF_TERR - 0.1, ez1 - 1.6), Vec3::new(xb, 8.6, ez1 + 1.6));
+    }
+
+    // --- left of it: a terrace bar at 5 m with a kiosk and parasols, big free-standing letters over it (lidar: a
+    // 12 m long frame 12 m high) and a row of flagpoles behind
+    let (tx0, tx1, tz0, tz1) = (-36.0 - HOME.x, -16.5 - HOME.x, -141.0 - HOME.y, -127.5 - HOME.y);
+    g.solid(m.concrete, Vec3::new(tx0, 3.4, tz0), Vec3::new(tx1, 5.0, tz1));
+    wall_holes(g, m.sandstone, Vec2::new(tx0, tz1 + 0.02), Vec2::new(tx1, tz1 + 0.02), 3.4, 5.0, &[]);
+    rail_run(g, m, Vec2::new(tx0, tz1 - 0.15), Vec2::new(tx1, tz1 - 0.15), 5.0, 1.05);
+    g.cuboid(Key::new(Mat::Plain(200), [0.12, 0.12, 0.13]), Vec3::new(tx0 + 2.0, 5.0, tz0 + 0.3), Vec3::new(tx0 + 11.0, 8.0, tz0 + 3.0));
+    let awning = Key::new(Mat::Plain(220), [0.85, 0.62, 0.08]);
+    g.poly(awning, &[Vec3::new(tx0 + 1.6, 7.2, tz0 + 4.6), Vec3::new(tx0 + 11.4, 7.2, tz0 + 4.6), Vec3::new(tx0 + 11.4, 8.0, tz0 + 3.0), Vec3::new(tx0 + 1.6, 8.0, tz0 + 3.0)], Vec3::X, Vec3::new(0.0, 0.45, -0.9).normalize());
+    let red = Key::new(Mat::Plain(230), [0.55, 0.05, 0.05]);
+    for k in 0..8 {
+        let c = Vec2::new(tx0 + 2.6 + (k / 2) as f32 * 4.6, tz1 - 2.6 - (k % 2) as f32 * 4.2);
+        g.tube(m.rail, v(c, 5.0), v(c, 7.5), 0.025, 4);
+        for s in 0..8 {
+            let (a0, a1) = (s as f32 / 8.0 * std::f32::consts::TAU, (s + 1) as f32 / 8.0 * std::f32::consts::TAU);
+            let (p0, p1) = (c + Vec2::new(a0.cos(), a0.sin()) * 1.5, c + Vec2::new(a1.cos(), a1.sin()) * 1.5);
+            let mid = ((p0 + p1) / 2.0 - c).normalize();
+            g.poly(red, &[v(p0, 7.0), v(p1, 7.0), v(c, 7.55)], Vec3::new(-mid.y, 0.0, mid.x), Vec3::new(-mid.x, 0.4, -mid.y).normalize());
+        }
+    }
+    let (lx0, lx1, lz) = (-30.5 - HOME.x, -17.5 - HOME.x, -135.0 - HOME.y);
+    for x in [lx0, (lx0 + lx1) / 2.0, lx1] {
+        g.member(m.white, Vec3::new(x, 5.0, lz - 0.25), Vec3::new(x, 12.0, lz - 0.25), 0.22, 0.22, Vec3::Z);
+    }
+    for y in [9.25f32, 12.0] {
+        g.member(m.white, Vec3::new(lx0, y, lz - 0.25), Vec3::new(lx1, y, lz - 0.25), 0.16, 0.16, Vec3::Z);
+    }
+    sign(g, "sgn_san_diego", [0.95, 0.95, 0.93], Vec2::new((lx0 + lx1) / 2.0, lz), 9.5, Vec2::X, lx1 - lx0 - 0.6, 2.3);
+    for k in 0..5 {
+        let c = Vec2::new(tx0 + 1.5 + k as f32 * 4.4, tz0 - 1.5);
+        let gy = terr(c);
+        g.tube(m.steel, v(c, gy), v(c, gy + 17.0), 0.07, 6);
+        let cloth = Key::new(Mat::Plain(230), [[0.6, 0.06, 0.06], [0.85, 0.85, 0.83], [0.05, 0.1, 0.32]][k % 3]);
+        g.quad(cloth, v(c, gy + 15.6) + Vec3::X * 0.08, Vec3::new(0.94, 0.0, 0.34) * 1.9, Vec3::Y * 1.2);
+        g.quad(cloth, v(c, gy + 15.6) + Vec3::X * 0.08 + Vec3::new(0.94, 0.0, 0.34) * 1.9, -Vec3::new(0.94, 0.0, 0.34) * 1.9, Vec3::Y * 1.2);
+    }
+
+    // --- right of it: the sand terrace behind the fence, named on its wall
+    let beach = wall_stations(6.5, 16.5);
+    for s in beach.windows(2) {
+        let (a, b) = (s[0], s[1]);
+        poly_up(g, sand, &[v(a.p + a.n * 13.2, CF_TERR + 0.05), v(b.p + b.n * 13.2, CF_TERR + 0.05), v(b.p + b.n * 36.0, CF_TERR + 0.05), v(a.p + a.n * 36.0, CF_TERR + 0.05)]);
+        rail_run(g, m, a.p + a.n * 13.15, b.p + b.n * 13.15, CF_TERR, 1.05);
+    }
+    let (ba, bb) = (beach[beach.len() / 2 - 2], beach[beach.len() / 2 + 2]);
+    let (pa, pb) = (ba.p + ba.n * 12.96, bb.p + bb.n * 12.96);
+    let e = (pb - pa).normalize();
+    g.quad(m.navy, v(pa, CF_TERR - 1.2), Vec3::new(e.x, 0.0, e.y) * (pb - pa).length(), Vec3::Y * 1.1);
+    sign(g, "sgn_the_beach", [0.95, 0.95, 0.93], (pa + pb) / 2.0 - Vec2::new(-e.y, e.x) * 0.03, CF_TERR - 0.98, -e, (pb - pa).length() * 0.7, 0.66);
+
+    // --- the walk behind centre field (world z -150..-143.5) and the paved walk up the park's west side
+    let drape = |g: &mut Geo, k: Key, x0: f32, x1: f32, z0: f32, z1: f32, step: f32, lift: f32, skip: &dyn Fn(f32, f32) -> bool| {
+        let (nx, nz) = (((x1 - x0) / step).ceil() as i32, ((z1 - z0) / step).ceil() as i32);
+        for i in 0..nx {
+            for j in 0..nz {
+                let (xa, xb) = (x0 + (x1 - x0) * i as f32 / nx as f32, x0 + (x1 - x0) * (i + 1) as f32 / nx as f32);
+                let (za, zb) = (z0 + (z1 - z0) * j as f32 / nz as f32, z0 + (z1 - z0) * (j + 1) as f32 / nz as f32);
+                if skip((xa + xb) / 2.0, (za + zb) / 2.0) {
+                    continue;
+                }
+                let q = [w(xa, zb), w(xb, zb), w(xb, za), w(xa, za)].map(|p| v(p, terr(p) + lift));
+                g.poly(k, &[q[0], q[1], q[2]], Vec3::X, -Vec3::Z);
+                g.poly(k, &[q[0], q[2], q[3]], Vec3::X, -Vec3::Z);
+            }
+        }
+    };
+    let never = |_: f32, _: f32| false;
+    // the surveyed ground is cut out over the park (`park_ring`): these strips are all there is underfoot
+    let pavers = Key::new(Mat::Surface("vlzlajnfw"), [0.8, 0.52, 0.45]).tile(1.5).rough(0.85);
+    let (px0, px1, pz0, pz1) = (PARK.0, PARK.1, PARK.2, PARK.3);
+    drape(g, paving(), px0, px1, -150.0, pz1, 5.0, 0.0, &never);
+    drape(g, paving(), px0, -40.0, pz0, -150.0, 5.0, 0.0, &never);
+    drape(g, pavers, -40.0, -33.5, pz0, -150.0, 5.0, 0.0, &never);
+    drape(g, paving(), 58.0, px1, pz0, -150.0, 5.0, 0.0, &never);
+
+    // --- the park: lawn, the children's ball field (aerial: x -33..-10, z -172..-150), the hill
+    let (hx0_w, hz0_w) = (HILL_GRID.0, HILL_GRID.1);
+    let hx1_w = hx0_w + HILL_GRID.2 * (HILL[0].len() - 1) as f32;
+    let field = |x: f32, z: f32| x > -33.0 && x < -10.0 && z > -172.0 && z < -150.0;
+    drape(g, m.grass, -33.5, hx0_w + 3.0, pz0, -150.0, 4.0, 0.0, &|x, z| field(x, z));
+    drape(g, m.grass, hx0_w + 3.0, hx1_w - 3.0, pz0, hz0_w + 3.0, 3.0, 0.0, &never);
+    drape(g, m.grass, hx0_w + 3.0, hx1_w - 3.0, -153.0, -150.0, 3.0, 0.0, &never);
+    drape(g, m.grass, hx1_w - 3.0, 58.0, pz0, -150.0, 3.0, 0.0, &never);
+    drape(g, m.grass_dark, -33.0, -10.0, -172.0, -150.0, 4.0, 0.0, &never);
+    // base paths and mound in infield dirt, a low fence round it
+    let (fx0, fx1, fz0, fz1) = (-31.5f32, -12.0f32, -170.5f32, -151.0f32);
+    let lift = |p: Vec2| v(p, terr(p) + 0.04);
+    for (a, b) in [((fx0, fz1), (fx1, fz1)), ((fx1, fz1), (fx1, fz0)), ((fx1, fz0), (fx0, fz0)), ((fx0, fz0), (fx0, fz1))] {
+        let (pa, pb) = (w(a.0, a.1), w(b.0, b.1));
+        let e = (pb - pa).normalize();
+        let inw = Vec2::new(-e.y, e.x) * if Vec2::new(-e.y, e.x).dot(w((fx0 + fx1) / 2.0, (fz0 + fz1) / 2.0) - pa) > 0.0 { 1.8 } else { -1.8 };
+        poly_up(g, m.dirt, &[lift(pa), lift(pb), lift(pb + inw), lift(pa + inw)]);
+        rail_run(g, m, w(a.0, a.1) - inw * 0.6, w(b.0, b.1) - inw * 0.6, terr(pa), 1.1);
+    }
+    disc(g, m.dirt, w((fx0 + fx1) / 2.0, (fz0 + fz1) / 2.0), 1.6, terr(w((fx0 + fx1) / 2.0, (fz0 + fz1) / 2.0)) + 0.04);
+
+    // the hill, from its lidar grid. Each grid square is split along the plateau's edge (where the surveyed height
+    // crosses `HILL_EDGE`): the part above is the level top, the part below is lawn, and a stone wall stands on
+    // the line between them. The square on top is paved (aerial: x 35..47, z -185..-177).
+    let (hx0, hz0, hst) = HILL_GRID;
+    let (ni, nj) = (HILL[0].len(), HILL.len());
+    let raw = |i: usize, j: usize| HILL[j][i];
+    let ground = |x: f32, z: f32| -> f32 {
+        let t = terr(w(x, z));
+        let edge = x < hx0 + 0.01 || z < hz0 + 0.01 || x > hx0 + hst * (ni - 1) as f32 - 0.01 || z > hz0 + hst * (nj - 1) as f32 - 0.01;
+        // the sheet's rim dips under the lawn laid round it (which overlaps its outer ring), so no gap can open
+        // where the two are sampled differently
+        if edge { t - 0.6 } else { hill_sample(&hill_low, x, z).unwrap_or(t).max(t) }
+    };
+    // on the plateau's edge the lawn either stops at the foot of the wall or, within a metre of the top, meets it
+    let at_cut = |x: f32, z: f32| { let y = ground(x, z); if HILL_TOP - y < 1.0 { HILL_TOP } else { y } };
+    let stone = stone_flat();
+    for j in 0..nj - 1 {
+        for i in 0..ni - 1 {
+            // corners in order round the square, with their surveyed heights
+            let c = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)].map(|(a, b)| (Vec2::new(hx0 + a as f32 * hst, hz0 + b as f32 * hst), raw(a, b)));
+            let (mut top, mut low, mut cut): (Vec<Vec2>, Vec<Vec2>, Vec<Vec2>) = (vec![], vec![], vec![]);
+            for k in 0..4 {
+                let ((p, h), (q, hq)) = (c[k], c[(k + 1) % 4]);
+                if h >= HILL_EDGE { top.push(p) } else { low.push(p) }
+                if (h >= HILL_EDGE) != (hq >= HILL_EDGE) {
+                    let x = p.lerp(q, (HILL_EDGE - h) / (hq - h));
+                    top.push(x);
+                    low.push(x);
+                    cut.push(x);
+                }
+            }
+            let paved = |p: &[Vec2]| { let m = p.iter().copied().sum::<Vec2>() / p.len() as f32; m.x > 35.0 && m.x < 47.0 && m.y > -185.0 && m.y < -177.0 };
+            if top.len() >= 3 {
+                let pts: Vec<Vec3> = top.iter().rev().map(|p| v(w(p.x, p.y), HILL_TOP)).collect();
+                g.poly(if paved(&top) { paving() } else { m.grass }, &pts, Vec3::X, -Vec3::Z);
+                g.block_ring(&top.iter().map(|p| w(p.x, p.y)).collect::<Vec<_>>(), 0.0, HILL_TOP);
+            }
+            if low.len() >= 3 {
+                let pts: Vec<Vec3> = low.iter().rev().map(|p| v(w(p.x, p.y), if cut.contains(p) { at_cut(p.x, p.y) } else { ground(p.x, p.y) })).collect();
+                for t in 1..pts.len() - 1 {
+                    g.poly(m.grass, &[pts[0], pts[t], pts[t + 1]], Vec3::X, -Vec3::Z);
+                }
+            }
+            if cut.len() == 2 {
+                // the wall, facing the low side, with a kerb standing over the top
+                let (a, b) = (cut[0], cut[1]);
+                let e = (b - a).normalize_or_zero();
+                let lowc = low.iter().copied().sum::<Vec2>() / low.len().max(1) as f32;
+                let out = Vec2::new(-e.y, e.x) * if Vec2::new(-e.y, e.x).dot(lowc - a) > 0.0 { 1.0 } else { -1.0 };
+                let (ya, yb) = (at_cut(a.x, a.y), at_cut(b.x, b.y));
+                if HILL_TOP - ya.min(yb) > 0.25 {
+                    let (l, r) = if Vec3::new(e.x, 0.0, e.y).cross(Vec3::Y).dot(Vec3::new(out.x, 0.0, out.y)) > 0.0 { (a, b) } else { (b, a) };
+                    let (yl, yr) = if l == a { (ya, yb) } else { (yb, ya) };
+                    let (pl, pr) = (w(l.x, l.y), w(r.x, r.y));
+                    let r3 = Vec3::new((pr - pl).normalize().x, 0.0, (pr - pl).normalize().y);
+                    g.poly(stone, &[v(pl, yl - 0.2), v(pr, yr - 0.2), v(pr, HILL_TOP + 0.45), v(pl, HILL_TOP + 0.45)], r3, Vec3::Y);
+                    let inw = -out * 0.3;
+                    g.poly(stone, &[v(pr + inw, HILL_TOP), v(pl + inw, HILL_TOP), v(pl + inw, HILL_TOP + 0.45), v(pr + inw, HILL_TOP + 0.45)], -r3, Vec3::Y);
+                    poly_up(g, stone, &[v(pl, HILL_TOP + 0.45), v(pr, HILL_TOP + 0.45), v(pr + inw, HILL_TOP + 0.45), v(pl + inw, HILL_TOP + 0.45)]);
+                }
+            }
+        }
+    }
+    // the lawn's collision, in 1 m steps so even its steepest part (1 in 3) can be walked
+    let cell = 1.0f32;
+    let (nx, nz) = ((hst * (ni - 1) as f32 / cell).round() as i32, (hst * (nj - 1) as f32 / cell).round() as i32);
+    for j in 0..nz {
+        for i in 0..nx {
+            let (xa, za) = (hx0 + i as f32 * cell, hz0 + j as f32 * cell);
+            let (cx, cz) = (xa + cell / 2.0, za + cell / 2.0);
+            if hill_sample(&raw, cx, cz).is_some_and(|h| h < HILL_EDGE) {
+                let y = [(xa, za), (xa + cell, za), (xa + cell, za + cell), (xa, za + cell)].iter().map(|&(x, z)| ground(x, z)).fold(ground(cx, cz), f32::max);
+                g.block_ring(&[w(xa, za), w(xa + cell, za), w(xa + cell, za + cell), w(xa, za + cell)], 0.0, y.min(HILL_TOP).max(terr(w(cx, cz))));
+            }
+        }
+    }
+    // a plinth on the square
+    let sy = HILL_TOP;
+    g.solid(pale_precast(), v(w(40.2, -181.8), sy), v(w(41.8, -180.2), sy + 1.3));
 }
 
 // ---------------------------------------------------------------- Western Metal Supply Co., towers, boards
@@ -1782,6 +2128,11 @@ pub fn core_routes(city: &city::City) -> Vec<Vec<([f32; 2], Option<f32>)>> {
 /// The way in behind home, as walk waypoints (world x, z) with the floor expected there: from the plaza up the
 /// grand stair, along the podium under the footbridge, through the frame onto the main concourse, and down the rows
 /// under the terrace.
+/// Across the park's lawn and up the amphitheatre hill to the square on its rim (world waypoints, expected levels).
+pub fn park_hill_route() -> Vec<([f32; 2], Option<f32>)> {
+    vec![([0.0, -160.0], None), ([20.0, -166.0], None), ([38.0, -170.0], None), ([42.0, -183.5], Some(HILL_TOP))]
+}
+
 pub fn home_gate_route() -> Vec<([f32; 2], Option<f32>)> {
     vec![
         ([7.05, 104.35], None),

@@ -42,7 +42,7 @@ pub struct Building {
 }
 
 /// OSM ids built here instead of by the generic prefab assembler.
-pub const OSM_IDS: &[&str] = &[factory::OSM, petco::OSM, petco::WESTERN_METAL];
+pub const OSM_IDS: &[&str] = &[factory::OSM, petco::OSM, petco::WESTERN_METAL, petco::PARK_PAVILION];
 
 /// Whether a city building is replaced by a bespoke one: listed ids, parts of them, and anything standing inside
 /// the ballpark's outline or (lidar-derived only) within 30 m of it: its concourse blocks, gates, plaza canopies.
@@ -87,7 +87,7 @@ pub fn all(c: &city::City) -> Vec<Building> {
 
 /// World plan rings where hand-built ground replaces the city's (the ballpark's field).
 pub fn ground_holes() -> Vec<Vec<[f64; 2]>> {
-    vec![petco::field_ring(), petco::plaza_ring()]
+    vec![petco::field_ring(), petco::plaza_ring(), petco::park_ring()]
 }
 
 pub const PARTITION_T: f32 = 0.12;

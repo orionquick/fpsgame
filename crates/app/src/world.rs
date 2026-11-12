@@ -324,6 +324,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn park_hill_can_be_walked_up_from_the_lawn() {
+        let c = city();
+        let col = Collision::new(&c, None);
+        walk(&c, &col, "park hill", &crate::bespoke::petco::park_hill_route());
+    }
+
     /// Walks a route of waypoints with the player's collision; returns the floor height at the end.
     fn walk(c: &city::City, col: &Collision, name: &str, route: &[([f32; 2], Option<f32>)]) -> f32 {
         let mut p = route[0].0;

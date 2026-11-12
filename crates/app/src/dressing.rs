@@ -188,11 +188,15 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
     let mut out = vec![];
     // Hand-built ballpark buildings: the lidar tree finder took their awnings, planters and roof gardens for tree
     // tops. (origin x, z; unit u; u0, u1, v0, v1) boxes in each building's own frame; v is u turned 90 degrees.
-    let solids: [([f64; 2], [f64; 2], [f64; 4]); 3] = [
+    let solids: [([f64; 2], [f64; 2], [f64; 4]); 5] = [
         ([66.0, 74.0], [0.70711, -0.70711], [-15.0, 60.0, -22.0, 4.5]),
         ([-95.0, 48.0], [0.84805, 0.52992], [2.0, 110.0, -20.0, 26.0]),
         // the left-field warehouse, its balconies and stair tower, and the foul pole on its corner
         ([-105.4, -94.2], [1.0, 0.0], [-1.0, 38.0, -8.0, 34.0]),
+        // the amphitheatre hill beyond centre field (its trees would stand at the old ground level), and the
+        // batter's eye with the terraces either side
+        ([4.0, -206.0], [1.0, 0.0], [0.0, 46.0, 0.0, 36.0]),
+        ([-37.0, -144.0], [1.0, 0.0], [0.0, 80.0, 0.0, 28.0]),
     ];
     // the sidewalk in front of the east building has broadleaf street trees, not palms (street photos)
     // (a jacaranda by Uncanny Bingchilling, CC BY: an umbrella crown on a clear stem, modelled 3 m tall)
