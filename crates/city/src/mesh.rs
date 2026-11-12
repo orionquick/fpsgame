@@ -15,6 +15,9 @@ pub struct Mesh {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Slot {
     Ground,
+    /// Kerb-side sidewalks (uv: metres along the street, metres in from the kerb) and their kerbs and gutters.
+    Sidewalk,
+    Curb,
     Road,
     Service,
     Path,
@@ -160,6 +163,110 @@ fn ribbon(m: &mut Mesh, pts: &[[f64; 2]], width: f64, lift: f64, ter: &Terrain, 
                 m.idx.extend([i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3]);
             } else {
                 m.idx.extend([i0, i0 + 2, i0 + 1, i0, i0 + 3, i0 + 2]);
+            }
+        }
+    }
+}
+
+/// How far the street surface is laid over the terrain, how high the kerb stands over the street, and how wide the
+/// kerb-side sidewalk is. The sidewalk falls from the kerb's top back to the ground behind it (the ground between it
+/// and the buildings stays at terrain level), so nothing needs to be cut out of the terrain mesh.
+pub const ROAD_LIFT: f64 = 0.10;
+pub const KERB: f64 = 0.15;
+pub const SIDEWALK: f64 = 3.6;
+const GUTTER: f64 = 0.45;
+
+/// The sidewalk's height over the terrain `d` metres in from the kerb line.
+pub fn sidewalk_lift(d: f64) -> f64 {
+    (ROAD_LIFT + KERB) * (1.0 - (d / SIDEWALK).clamp(0.0, 1.0)) + 0.012
+}
+
+/// Sidewalk, kerb face and gutter along both sides of a street's centre line. `blocked(p)` is true where no sidewalk
+/// belongs (on another street's carriageway, or inside a hand-built area); runs are trimmed to it exactly.
+fn sidewalks(top: &mut Mesh, kerb: &mut Mesh, pts: &[[f64; 2]], half: f64, ter: &Terrain, blocked: &dyn Fn([f64; 2]) -> bool) {
+    let pts: Vec<[f64; 2]> = pts.windows(2).filter(|w| w[0] != w[1]).map(|w| w[0]).chain(pts.last().copied()).collect();
+    if pts.len() < 2 {
+        return;
+    }
+    // arc length at each node; a point and the street's direction at any distance along
+    let mut acc = vec![0.0f64];
+    for w in pts.windows(2) {
+        acc.push(acc.last().unwrap() + (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]));
+    }
+    let total = *acc.last().unwrap();
+    let at = |s: f64| -> ([f64; 2], [f64; 2]) {
+        let k = acc.partition_point(|&a| a <= s).clamp(1, pts.len() - 1) - 1;
+        let (a, b) = (pts[k], pts[k + 1]);
+        let l = (acc[k + 1] - acc[k]).max(1e-9);
+        let t = ((s - acc[k]) / l).clamp(0.0, 1.0);
+        ([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], [(b[0] - a[0]) / l, (b[1] - a[1]) / l])
+    };
+    let white = [1.0f32; 3];
+    for side in [-1.0f64, 1.0] {
+        let edge = |s: f64, d: f64| { let (p, u) = at(s); [p[0] - u[1] * side * (half + d), p[1] + u[0] * side * (half + d)] };
+        let open = |s: f64| !blocked(edge(s, SIDEWALK * 0.5));
+        // stations every 3 m and at every node, plus the exact ends of each open run
+        let mut st: Vec<f64> = (0..=(total / 3.0).ceil() as usize).map(|k| (k as f64 * 3.0).min(total)).chain(acc.iter().copied()).collect();
+        st.sort_by(f64::total_cmp);
+        st.dedup_by(|a, b| (*a - *b).abs() < 0.05);
+        let mut runs: Vec<Vec<f64>> = vec![];
+        let mut cur: Vec<f64> = vec![];
+        for w in 0..st.len() {
+            let s = st[w];
+            let o = open(s);
+            if w > 0 && o != open(st[w - 1]) {
+                // the boundary between this station and the last, by bisection
+                let (mut lo, mut hi) = (st[w - 1], s);
+                for _ in 0..10 {
+                    let m = (lo + hi) / 2.0;
+                    if open(m) == open(st[w - 1]) { lo = m } else { hi = m }
+                }
+                let b = (lo + hi) / 2.0;
+                if o {
+                    cur = vec![b];
+                } else {
+                    cur.push(b);
+                    runs.push(std::mem::take(&mut cur));
+                }
+            }
+            if o {
+                cur.push(s);
+            }
+        }
+        if cur.len() >= 2 {
+            runs.push(cur);
+        }
+        for run in runs.iter().filter(|r| r.len() >= 2 && r[r.len() - 1] - r[0] > 0.3) {
+            for w in run.windows(2) {
+                let (s0, s1) = (w[0], w[1]);
+                if s1 - s0 < 1e-3 {
+                    continue;
+                }
+                let (u0, u1) = (at(s0).1, at(s1).1);
+                let y = |p: [f64; 2], lift: f64| ter.at(p[0], p[1]) + lift;
+                let (e0, e1, b0, b1, g0, g1) = (edge(s0, 0.0), edge(s1, 0.0), edge(s0, SIDEWALK), edge(s1, SIDEWALK), edge(s0, -GUTTER), edge(s1, -GUTTER));
+                // top: from the kerb line back
+                let i0 = top.base();
+                for (p, lift, uv) in [(e0, sidewalk_lift(0.0), [s0, 0.0]), (e1, sidewalk_lift(0.0), [s1, 0.0]), (b1, sidewalk_lift(SIDEWALK), [s1, SIDEWALK]), (b0, sidewalk_lift(SIDEWALK), [s0, SIDEWALK])] {
+                    top.pos.push([p[0] as f32, y(p, lift) as f32, p[1] as f32]);
+                    top.nrm.push(UP);
+                    top.col.push(white);
+                    top.uv.push([uv[0] as f32, uv[1] as f32]);
+                    top.tan.push([u0[0] as f32, 0.0, u0[1] as f32, 1.0]);
+                }
+                top.idx.extend(if side > 0.0 { [i0, i0 + 2, i0 + 1, i0, i0 + 3, i0 + 2] } else { [i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3] });
+                // kerb face, toward the street
+                let n = [(u0[1] + u1[1]) / 2.0 * side, 0.0, -(u0[0] + u1[0]) / 2.0 * side];
+                let nl = (n[0] * n[0] + n[2] * n[2]).sqrt().max(1e-9);
+                let nf = [(n[0] / nl) as f32, 0.0, (n[2] / nl) as f32];
+                let (ylo, yhi) = (ROAD_LIFT - 0.03, sidewalk_lift(0.0));
+                let (a, b, c, d) = ([e0[0], y(e0, ylo), e0[1]], [e1[0], y(e1, ylo), e1[1]], [e1[0], y(e1, yhi), e1[1]], [e0[0], y(e0, yhi), e0[1]]);
+                if side > 0.0 { kerb.quad(b, a, d, c, nf, white) } else { kerb.quad(a, b, c, d, nf, white) }
+                // gutter: a concrete band on the street's edge
+                // (clear of the street surface, which is laid from coarser terrain samples)
+                let lift = ROAD_LIFT + 0.04;
+                let (a, b, c, d) = ([g0[0], y(g0, lift), g0[1]], [g1[0], y(g1, lift), g1[1]], [e1[0], y(e1, lift), e1[1]], [e0[0], y(e0, lift), e0[1]]);
+                if side > 0.0 { kerb.quad(b, a, d, c, UP, white) } else { kerb.quad(a, b, c, d, UP, white) }
             }
         }
     }
@@ -387,7 +494,7 @@ pub fn build_slots_ex(c: &City, holes: &[Vec<[f64; 2]>]) -> Vec<(Slot, Mesh)> {
     lines.sort_by_key(|l| order(l.kind));
     for l in lines {
         let (slot, lift) = match l.kind {
-            LineKind::Road => (Slot::Road, 0.10),
+            LineKind::Road => (Slot::Road, ROAD_LIFT),
             LineKind::Service => (Slot::Service, 0.08),
             LineKind::Path => (Slot::Path, 0.06),
             LineKind::Rail => (Slot::Rail, 0.12),
@@ -404,6 +511,38 @@ pub fn build_slots_ex(c: &City, holes: &[Vec<[f64; 2]>]) -> Vec<(Slot, Mesh)> {
                 run.push(p);
             }
         }
+    }
+
+    // kerb-side sidewalks along every street, stopping at other carriageways and at hand-built areas
+    let ways: Vec<(usize, [f64; 2], [f64; 2], f64)> = c
+        .lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| matches!(l.kind, LineKind::Road | LineKind::Service))
+        .flat_map(|(i, l)| l.pts.windows(2).map(move |w| (i, w[0], w[1], l.width * 0.5)))
+        .collect();
+    let cell = 48.0;
+    let key = |p: [f64; 2]| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
+    for (k, w) in ways.iter().enumerate() {
+        let (a, b) = (key([w.1[0].min(w.2[0]) - 12.0, w.1[1].min(w.2[1]) - 12.0]), key([w.1[0].max(w.2[0]) + 12.0, w.1[1].max(w.2[1]) + 12.0]));
+        for gx in a.0..=b.0 {
+            for gz in a.1..=b.1 {
+                grid.entry((gx, gz)).or_default().push(k);
+            }
+        }
+    }
+    let seg_dist = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
+        let l2 = dx * dx + dz * dz;
+        let t = if l2 < 1e-9 { 0.0 } else { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / l2).clamp(0.0, 1.0) };
+        (p[0] - a[0] - dx * t).hypot(p[1] - a[1] - dz * t)
+    };
+    for (i, l) in c.lines.iter().enumerate().filter(|(_, l)| l.kind == LineKind::Road) {
+        let blocked = |p: [f64; 2]| inside(p) || grid.get(&key(p)).is_some_and(|v| v.iter().any(|&k| ways[k].0 != i && seg_dist(p, ways[k].1, ways[k].2) < ways[k].3));
+        let mut top = std::mem::take(ms.entry(Slot::Sidewalk).or_default());
+        sidewalks(&mut top, ms.entry(Slot::Curb).or_default(), &l.pts, l.width * 0.5, ter, &blocked);
+        *ms.entry(Slot::Sidewalk).or_default() = top;
     }
 
     for b in &c.buildings {

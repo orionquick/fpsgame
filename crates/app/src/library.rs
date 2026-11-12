@@ -24,8 +24,10 @@ pub fn slot_surface(s: Slot) -> Option<(&'static str, [f32; 3])> {
     Some(match s {
         Slot::Road => ("Cracked Asphalt", [0.66, 0.66, 0.68]),
         Slot::Service | Slot::Parking => ("Cracked Asphalt", [0.58, 0.58, 0.6]),
-        Slot::Path => ("Concrete Pavement", [0.95, 0.95, 0.95]),
-        Slot::Ground => ("Concrete Pavement", [1.0, 1.0, 1.0]),
+        // poured concrete scored in squares, as American sidewalks are (not the flagstones used before)
+        Slot::Path => ("pt_sidewalk", [0.97, 0.97, 0.97]),
+        Slot::Ground | Slot::Sidewalk => ("pt_sidewalk", [1.0, 1.0, 1.0]),
+        Slot::Curb => ("pt_kerb", [1.0, 1.0, 1.0]),
         Slot::Plaza => ("Brushed Concrete Floor", [1.0, 1.0, 1.0]),
         Slot::Rail => ("Concrete Pavement", [0.55, 0.5, 0.45]),
         Slot::Roof => ("Brushed Concrete Floor", [0.7, 0.7, 0.7]),

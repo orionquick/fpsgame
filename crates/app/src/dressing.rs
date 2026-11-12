@@ -19,6 +19,8 @@ struct Road {
     b: [f64; 2],
     half: f64,
     line: usize,
+    /// A service way: no kerb or sidewalk beside it.
+    service: bool,
 }
 
 fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -49,7 +51,7 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         .iter()
         .enumerate()
         .filter(|(_, l)| matches!(l.kind, LineKind::Road | LineKind::Service))
-        .flat_map(|(i, l)| l.pts.windows(2).map(move |w| Road { a: w[0], b: w[1], half: l.width * 0.5, line: i }))
+        .flat_map(|(i, l)| l.pts.windows(2).map(move |w| Road { a: w[0], b: w[1], half: l.width * 0.5, line: i, service: l.kind == LineKind::Service }))
         .filter(|r| in_rect(r.a, grow) || in_rect(r.b, grow))
         .collect();
     let near_buildings: Vec<&city::model::Building> = c.buildings.iter().filter(|b| b.outer.iter().any(|p| in_rect(*p, grow))).collect();
@@ -90,8 +92,7 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         }
     }
 
-    // curbs and sidewalk furniture along both edges of every road segment
-    let curb = pick("Modular Curb Kit", 0);
+    // sidewalk furniture along both edges of every road segment (the kerbs themselves are part of the street mesh)
     // US street furniture from Sketchfab (City Props Collection vol. 1/2 by TampaJoey, newspaper boxes by Keith Ito,
     // hydrant by Fayruso, trash can by Lyskilde): (asset ids, percent of 6 m slots)
     let furniture: [(&[&str], u64); 8] = [
@@ -115,26 +116,6 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
         let heading = ux.atan2(-uz).to_degrees();
         for side in [-1.0f64, 1.0] {
             let (nx, nz) = (-uz * side, ux * side);
-            if let Some(cb) = curb {
-                // the kit's longest part is the straight run; the others are ends and corners
-                let long = |i: usize| { let p = &cb.parts[i]; (p.max[0] - p.min[0]).max(p.max[2] - p.min[2]) };
-                // the kit's 0.7 m straight run (part 0); its other parts are ends and corners
-                let straight = 0usize;
-                let sp = &cb.parts[straight];
-                // run the piece's long axis along the road (some pieces are modelled along Z)
-                let turn = if sp.max[2] - sp.min[2] > sp.max[0] - sp.min[0] { 90.0 } else { 0.0 };
-                // bevelled ends: overlap pieces so the run reads as one curb
-                let step = (long(straight) as f64 * 0.82).max(0.3);
-                let n = (len / step).floor() as usize;
-                for k in 0..n {
-                    let t = (k as f64 + 0.5) * step;
-                    let p = [r.a[0] + ux * t + nx * (r.half + 0.12), r.a[1] + uz * t + nz * (r.half + 0.12)];
-                    if !in_rect(p, area) || on_other_road(p, r.line, 0.3) || in_building(p) {
-                        continue;
-                    }
-                    out.push(Placement { asset: cb.id.clone(), part: straight, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading + turn, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
-                }
-            }
             if have("sf_6881aa1e84") {
                 let n = (len / 32.0).floor() as usize;
                 for k in 0..n {
@@ -143,7 +124,7 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
                     if !in_rect(p, area) || on_other_road(p, r.line, 4.0) || in_building(p) {
                         continue;
                     }
-                    out.push(Placement { asset: "sf_6881aa1e84".into(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading + 90.0 * side, scale: [1.0; 3], tint: [1.0; 3], lod: 0, indoor: false });
+                    out.push(Placement { asset: "sf_6881aa1e84".into(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]) + if r.service { 0.0 } else { city::mesh::sidewalk_lift(0.6) }, rot: heading + 90.0 * side, scale: [1.0; 3], tint: [1.0; 3], lod: 0, indoor: false });
                 }
             }
             let slots = (len / 6.0).floor() as usize;
@@ -161,7 +142,7 @@ pub fn dress(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
                         if have(id) {
                             // a few degrees off square, as installed
                             let jitter = ((h >> 20) % 17) as f64 - 8.0;
-                            out.push(Placement { asset: id.to_string(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]), rot: heading + jitter, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
+                            out.push(Placement { asset: id.to_string(), part: crate::library::ALL_PARTS, x: p[0], z: p[1], y: c.terrain.at(p[0], p[1]) + if r.service { 0.0 } else { city::mesh::sidewalk_lift(0.9) }, rot: heading + jitter, scale: [1.0, 1.0, 1.0], tint: [1.0, 1.0, 1.0], lod: 0, indoor: false });
                         }
                         break;
                     }
@@ -266,43 +247,45 @@ pub fn trees(lib: &Library, c: &City, area: [f64; 4]) -> Vec<Placement> {
 
 /// Painted road markings from Quixel decals (real-world scale, alpha-cut): a double yellow centreline on wide
 /// streets, dashed white lane lines, and crosswalks set back from intersections. Returns (asset id, mesh) strips.
-pub fn markings(lib: &Library, c: &City, area: [f64; 4]) -> Vec<(String, Vec<render::TexVertex>, Vec<u32>)> {
-    let decal = |t: &str| lib.catalog.assets.iter().find(|a| a.title == t && a.kind == assets::AssetKind::Surface).map(|a| (a.id.clone(), a.tile_m.unwrap_or([1.0, 1.0])));
-    let (Some(yellow), Some(white), Some(cross)) = (decal("Yellow Road Line"), decal("White Road Line"), decal("Painted Pedestrian Crossing Lines")) else {
-        if std::env::var("FPS_DEBUG").is_ok() {
-            eprintln!("markings: decals missing {:?}", ["Yellow Road Line", "White Road Line", "Painted Pedestrian Crossing Lines"].map(|t| decal(t).is_some()));
-        }
+/// Paint on the streets (measured on a street photo of a downtown crossing): a double yellow centre line and broken
+/// white lane lines, a stop bar and a ladder crosswalk (0.6 m bars 3 m long at 1.5 m centres) wherever a street
+/// meets another. Returns meshes per paint colour: (surface id, tint, vertices, indices).
+pub fn markings(lib: &Library, c: &City, area: [f64; 4]) -> Vec<(String, [f32; 3], Vec<render::TexVertex>, Vec<u32>)> {
+    if lib.catalog.get(PAINT).is_none() {
         return vec![];
-    };
+    }
+    const WHITE: usize = 0;
+    const YELLOW: usize = 1;
     let grow = [area[0] - 60.0, area[1] - 60.0, area[2] + 60.0, area[3] + 60.0];
     let roads: Vec<Road> = c
         .lines
         .iter()
         .enumerate()
         .filter(|(_, l)| l.kind == LineKind::Road)
-        .flat_map(|(i, l)| l.pts.windows(2).map(move |w| Road { a: w[0], b: w[1], half: l.width * 0.5, line: i }))
+        .flat_map(|(i, l)| l.pts.windows(2).map(move |w| Road { a: w[0], b: w[1], half: l.width * 0.5, line: i, service: false }))
         .filter(|r| in_rect(r.a, grow) || in_rect(r.b, grow))
         .collect();
-    let mut meshes: std::collections::HashMap<String, (Vec<render::TexVertex>, Vec<u32>)> = Default::default();
-    // a strip from a to b, `w` wide, offset sideways by `off`; u runs along in tiles of `tile` metres
-    let mut strip = |id: &str, a: [f64; 2], b: [f64; 2], off: f64, w: f64, tile: f64, across_u: bool| {
+    let mut meshes: [(Vec<render::TexVertex>, Vec<u32>); 2] = Default::default();
+    // a stripe from a to b, `w` wide, its centre `off` to the left; the paint texture runs along it
+    let mut stripe = |col: usize, a: [f64; 2], b: [f64; 2], off: f64, w: f64| {
         let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
         let len = dx.hypot(dz);
-        if len < 0.5 {
+        if len < 0.2 {
             return;
         }
         let (ux, uz) = (dx / len, dz / len);
         let (nx, nz) = (-uz, ux);
-        let m = meshes.entry(id.to_string()).or_default();
-        let steps = (len / 2.0).ceil().max(1.0) as usize;
+        let m = &mut meshes[col];
+        let steps = (len / 2.5).ceil().max(1.0) as usize;
         let base = m.0.len() as u32;
+        // a different stretch of the worn texture for each stripe
+        let u0 = ((a[0] * 0.37 + a[1] * 0.91 + off * 1.7).fract() + 1.0).fract();
         for k in 0..=steps {
             let t = len * k as f64 / steps as f64;
             for side in [-0.5f64, 0.5] {
                 let p = [a[0] + ux * t + nx * (off + side * w), a[1] + uz * t + nz * (off + side * w)];
-                let y = c.terrain.at(p[0], p[1]) + 0.17;
-                let (u, v) = if across_u { ((side + 0.5) * w / tile, t / tile) } else { (t / tile, side + 0.5) };
-                m.0.push(render::TexVertex { pos: [p[0] as f32, y as f32, p[1] as f32], nrm: [0.0, 1.0, 0.0], uv: [u as f32, v as f32], tan: [ux as f32, 0.0, uz as f32, 1.0], edge: [0.0; 4] });
+                let y = c.terrain.at(p[0], p[1]) + city::mesh::ROAD_LIFT + 0.02;
+                m.0.push(render::TexVertex { pos: [p[0] as f32, y as f32, p[1] as f32], nrm: [0.0, 1.0, 0.0], uv: [(u0 + t / (w * 8.0).max(1.0)) as f32, (side + 0.5) as f32], tan: [ux as f32, 0.0, uz as f32, 1.0], edge: [0.0; 4] });
             }
         }
         for k in 0..steps as u32 {
@@ -310,55 +293,96 @@ pub fn markings(lib: &Library, c: &City, area: [f64; 4]) -> Vec<(String, Vec<ren
             m.1.extend([i, i + 2, i + 1, i + 1, i + 2, i + 3]);
         }
     };
-    let inter = |p: [f64; 2], line: usize| roads.iter().any(|r| r.line != line && seg_dist(p, r.a, r.b) < r.half + 1.0);
-    for r in &roads {
-        let (dx, dz) = (r.b[0] - r.a[0], r.b[1] - r.a[1]);
-        let len = dx.hypot(dz);
-        if len < 4.0 {
+    let inter = |p: [f64; 2], line: usize| roads.iter().any(|r| r.line != line && seg_dist(p, r.a, r.b) < r.half + 0.3);
+    // whole streets, so lines and dashes run through the joins between a street's segments
+    for (li, l) in c.lines.iter().enumerate().filter(|(_, l)| l.kind == LineKind::Road && l.pts.iter().any(|p| in_rect(*p, grow))) {
+        let half = l.width * 0.5;
+        let mut acc = vec![0.0f64];
+        for w in l.pts.windows(2) {
+            acc.push(acc.last().unwrap() + (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]));
+        }
+        let total = *acc.last().unwrap();
+        if total < 8.0 {
             continue;
         }
-        let (ux, uz) = (dx / len, dz / len);
-        // trim the run to stay out of intersections, leaving room for crosswalks
-        let mut t0 = 0.0;
-        while t0 < len && inter([r.a[0] + ux * t0, r.a[1] + uz * t0], r.line) {
-            t0 += 0.5;
-        }
-        let mut t1 = len;
-        while t1 > t0 && inter([r.a[0] + ux * t1, r.a[1] + uz * t1], r.line) {
-            t1 -= 0.5;
-        }
-        if t1 - t0 < 6.0 {
-            continue;
-        }
-        let at = |t: f64| [r.a[0] + ux * t, r.a[1] + uz * t];
-        let cw = cross.1[0] as f64;
-        // crosswalks at both ends where a street meets this one
-        if t0 > 0.0 {
-            let p = at(t0 + cw * 0.5 + 0.5);
-            strip(&cross.0, [p[0] - uz * r.half * 0.92, p[1] + ux * r.half * 0.92], [p[0] + uz * r.half * 0.92, p[1] - ux * r.half * 0.92], 0.0, cw, cross.1[0] as f64, true);
-        }
-        if t1 < len {
-            let p = at(t1 - cw * 0.5 - 0.5);
-            strip(&cross.0, [p[0] - uz * r.half * 0.92, p[1] + ux * r.half * 0.92], [p[0] + uz * r.half * 0.92, p[1] - ux * r.half * 0.92], 0.0, cw, cross.1[0] as f64, true);
-        }
-        let (a, b) = (at(t0 + cw + 1.5), at(t1 - cw - 1.5));
-        if seg_dist(a, b, b) < 3.0 {
-            continue;
-        }
-        let ylw = yellow.1[0] as f64;
-        let wht = white.1[0] as f64;
-        if r.half * 2.0 >= 14.0 {
-            strip(&yellow.0, a, b, 0.0, ylw, ylw, false);
-            // lane lines a lane and a half out from the centre
-            for side in [-1.0, 1.0] {
-                strip(&white.0, a, b, side * 3.4, wht, wht, false);
+        let at = |s: f64| -> [f64; 2] {
+            let k = acc.partition_point(|&a| a <= s).clamp(1, l.pts.len() - 1) - 1;
+            let t = ((s - acc[k]) / (acc[k + 1] - acc[k]).max(1e-9)).clamp(0.0, 1.0);
+            [l.pts[k][0] + (l.pts[k + 1][0] - l.pts[k][0]) * t, l.pts[k][1] + (l.pts[k + 1][1] - l.pts[k][1]) * t]
+        };
+        // the stretches between crossings
+        let mut spans: Vec<(f64, f64)> = vec![];
+        let mut start: Option<f64> = None;
+        let mut s = 0.0;
+        while s <= total + 0.25 {
+            let clear = !inter(at(s.min(total)), li);
+            match (start, clear) {
+                (None, true) => start = Some(s),
+                (Some(a), false) => {
+                    spans.push((a, s - 0.5));
+                    start = None;
+                }
+                _ => {}
             }
-        } else {
-            strip(&white.0, a, b, 0.0, wht, wht, false);
+            s += 0.5;
+        }
+        if let Some(a) = start {
+            spans.push((a, total));
+        }
+        for (s0, s1) in spans {
+            if s1 - s0 < 9.0 {
+                continue;
+            }
+            // crossings sit just outside the junction: a ladder, then a stop bar a little further back
+            let (meets0, meets1) = (s0 > 0.4, s1 < total - 0.4);
+            let (mut a, mut b) = (s0, s1);
+            for (meets, sign, end) in [(meets0, 1.0f64, s0), (meets1, -1.0, s1)] {
+                if !meets {
+                    continue;
+                }
+                let (p0, p1) = (at(end + sign * 0.8), at(end + sign * 3.8));
+                let mut off = -half + 1.0;
+                while off <= half - 1.0 + 1e-6 {
+                    stripe(WHITE, p0, p1, off * sign, 0.6);
+                    off += 1.5;
+                }
+                let q = at(end + sign * 5.0);
+                let (ux, uz) = { let d = [p1[0] - p0[0], p1[1] - p0[1]]; let n = d[0].hypot(d[1]); (d[0] / n, d[1] / n) };
+                stripe(WHITE, [q[0] + uz * (half - 0.5), q[1] - ux * (half - 0.5)], [q[0] - uz * (half - 0.5), q[1] + ux * (half - 0.5)], 0.0, 0.4);
+                if sign > 0.0 { a = end + 5.6 } else { b = end - 5.6 }
+            }
+            if b - a < 4.0 {
+                continue;
+            }
+            // centre and lane lines, laid node to node
+            let mut cuts: Vec<f64> = acc.iter().copied().filter(|&x| x > a + 0.5 && x < b - 0.5).collect();
+            cuts.insert(0, a);
+            cuts.push(b);
+            for w in cuts.windows(2) {
+                let (p, q) = (at(w[0]), at(w[1]));
+                for off in [-0.13, 0.13] {
+                    stripe(YELLOW, p, q, off, 0.1);
+                }
+                if l.width >= 15.0 {
+                    // broken lane lines: 3 m dashes, 9 m gaps, in step along the whole street
+                    for off in [-3.6f64, 3.6] {
+                        let mut d = (w[0] / 12.0).ceil() * 12.0;
+                        while d + 3.0 <= w[1] {
+                            stripe(WHITE, at(d), at(d + 3.0), off, 0.1);
+                            d += 12.0;
+                        }
+                    }
+                }
+                // parking lane line
+                for off in [-(half - 2.4), half - 2.4] {
+                    stripe(WHITE, p, q, off, 0.1);
+                }
+            }
         }
     }
-    if std::env::var("FPS_DEBUG").is_ok() {
-        eprintln!("markings: {} road segments; {:?}", roads.len(), meshes.iter().map(|(k, m)| (k.clone(), m.1.len() / 3)).collect::<Vec<_>>());
-    }
-    meshes.into_iter().map(|(k, (v, i))| (k, v, i)).collect()
+    let tints = [[0.86f32, 0.86, 0.84], [0.95, 0.68, 0.08]];
+    meshes.into_iter().zip(tints).filter(|(m, _)| !m.1.is_empty()).map(|((v, i), t)| (PAINT.to_string(), t, v, i)).collect()
 }
+
+/// The road-paint surface from `fps proctex`.
+const PAINT: &str = "pt_paint";

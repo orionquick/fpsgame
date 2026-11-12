@@ -57,10 +57,8 @@ impl Ctx {
             pl.extend(crate::dressing::dress(lib, &self.city, area));
             let marks = crate::dressing::markings(lib, &self.city, area);
             self.prefab_batches = crate::library::prefab_batches(&self.gpu, &self.renderer, lib, &pl);
-            for (id, v, i) in marks {
+            for (id, tint, v, i) in marks {
                 let mat = lib.material(&self.gpu, &self.renderer, &id);
-                let yellow = lib.catalog.get(&id).is_some_and(|a| a.title.contains("Yellow"));
-                let tint = if yellow { [1.15, 1.05, 0.55] } else { [1.0, 1.0, 1.0] };
                 self.prefab_batches.extend(render::Batch::new(&self.gpu, &v, &i, &[render::Instance::new(glam::Mat4::IDENTITY, tint, 1.0)], mat));
             }
         }

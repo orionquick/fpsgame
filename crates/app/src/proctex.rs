@@ -95,6 +95,72 @@ fn subway() -> std::io::Result<()> {
     write_surface("procedural", "pt_subway_tile", &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nm)), ("Roughness", png_gray(&rough))], (0.6, 0.6), "fps proctex")
 }
 
+/// Poured concrete sidewalk (3 m repeat of nine 1 m squares): broom-finished with exposed fine aggregate, narrow
+/// scored joints with a tooled edge, each square a slightly different pour, a few hairline cracks and old gum
+/// spots. `pt_kerb` is the same concrete without the scoring.
+/// Road paint (`pt_paint`): white, worn through in specks and along its edges, cut out by its opacity.
+fn street() -> std::io::Result<()> {
+    let n = 1024usize;
+    let size = 3.0f32;
+    for (id, scored) in [("pt_sidewalk", true), ("pt_kerb", false)] {
+        let mut h = vec![0f32; n * n];
+        let mut base = image::RgbImage::new(n as u32, n as u32);
+        let mut rough = image::GrayImage::new(n as u32, n as u32);
+        for y in 0..n {
+            for x in 0..n {
+                let (u, v) = (x as f32 / n as f32, y as f32 / n as f32);
+                let (px, py) = (u * size, v * size);
+                let sq = 1.0f32;
+                let (cx, cy) = ((px / sq).floor(), (py / sq).floor());
+                let (lx, ly) = (px - cx * sq, py - cy * sq);
+                // distance to the nearest joint
+                let d = if scored { lx.min(sq - lx).min(ly).min(sq - ly) } else { 1.0 };
+                let groove = (1.0 - d / 0.007).clamp(0.0, 1.0);
+                let tooled = (1.0 - d / 0.045).clamp(0.0, 1.0);
+                // broom finish across the walk, aggregate at two sizes, broad mottling
+                let broom = vnoise(u * 60.0, v * 1024.0, 60, 11) - 0.5;
+                let grit = vnoise(u * 512.0, v * 512.0, 512, 12) - 0.5;
+                let sand = vnoise(u * 190.0, v * 190.0, 190, 17) - 0.5;
+                let mottle = vnoise(u * 6.0, v * 6.0, 6, 13) * 0.6 + vnoise(u * 21.0, v * 21.0, 21, 14) * 0.4 - 0.5;
+                // hairline cracks: the zero line of a broad noise, in the squares that have one
+                let cracked = scored && hash(cx as i64, cy as i64, 23) > 0.72;
+                let crack = if cracked { (1.0 - (vnoise(u * 4.0, v * 4.0, 4, 18) + vnoise(u * 30.0, v * 30.0, 30, 19) * 0.12 - 0.56).abs() / 0.004).clamp(0.0, 1.0) } else { 0.0 };
+                // gum: small dark round spots
+                let (gx, gy) = ((u * 37.0).floor(), (v * 37.0).floor());
+                let gum = if hash(gx as i64, gy as i64, 24) > 0.985 {
+                    let (fx, fy) = (u * 37.0 - gx - 0.5, v * 37.0 - gy - 0.5);
+                    (1.0 - (fx * fx + fy * fy).sqrt() / 0.3).clamp(0.0, 1.0).min(0.6) / 0.6
+                } else {
+                    0.0
+                };
+                h[y * n + x] = broom * 0.08 * (1.0 - tooled) + grit * 0.07 + sand * 0.05 - groove * 0.45 - tooled * tooled * 0.1 - crack * 0.3;
+                let pour = if scored { hash(cx as i64, cy as i64, 21) * 0.045 - 0.0225 } else { 0.0 };
+                let l = 0.43 + pour + mottle * 0.035 + grit * 0.075 + sand * 0.05 - groove * 0.2 + tooled * 0.02 - crack * 0.16 - gum * 0.13;
+                let c = [l * 1.0, l * 0.975, l * 0.93];
+                base.put_pixel(x as u32, y as u32, image::Rgb(c.map(|c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8)));
+                rough.put_pixel(x as u32, y as u32, image::Luma([(238.0 - tooled * 25.0 + grit * 20.0) as u8]));
+            }
+        }
+        let nm = normals(&h, n, n, 4.0);
+        write_surface("procedural", id, &[("BaseColor", png_rgb(&base)), ("Normal", png_rgb(&nm)), ("Roughness", png_gray(&rough))], (size, size), "fps proctex")?;
+    }
+    let n = 512usize;
+    let base = image::RgbImage::from_pixel(n as u32, n as u32, image::Rgb([255, 255, 255]));
+    let mut alpha = image::GrayImage::new(n as u32, n as u32);
+    for y in 0..n {
+        for x in 0..n {
+            let (u, v) = (x as f32 / n as f32, y as f32 / n as f32);
+            // v runs across the stripe: ragged edges, specks worn through, tyre-worn patches
+            let edge = v.min(1.0 - v) / 0.06 + (vnoise(u * 40.0, v * 3.0, 40, 31) - 0.5) * 0.9;
+            let speck = vnoise(u * 90.0, v * 90.0, 90, 32);
+            let worn = vnoise(u * 3.0, v * 2.0, 3, 33) * 0.6 + vnoise(u * 11.0, v * 7.0, 11, 34) * 0.4;
+            let keep = edge > 0.5 && speck < 0.93 - (worn - 0.62).max(0.0) * 1.2;
+            alpha.put_pixel(x as u32, y as u32, image::Luma([if keep { 255 } else { 0 }]));
+        }
+    }
+    write_surface("signs", "pt_paint", &[("BaseColor", png_rgb(&base)), ("Opacity", png_gray(&alpha))], (1.0, 1.0), "fps proctex")
+}
+
 /// Brown and white cowhide (1.2 m square repeat): big irregular patches, fine hair.
 fn cowhide() -> std::io::Result<()> {
     let n = 1024usize;
@@ -505,6 +571,7 @@ fn signs() -> std::io::Result<()> {
 
 pub fn all() -> std::io::Result<()> {
     crate::procmodel::all()?;
+    street()?;
     ashlar()?;
     cleft()?;
     signs()?;

@@ -115,13 +115,12 @@ pub fn load(gpu: &Gpu, renderer: &Renderer, city: &City, editor_scene: Option<&e
         let pb = crate::library::prefab_batches(gpu, renderer, lib, &crate::buildings::build(lib, city, area).0);
         report("prefab buildings", &pb);
         batches.extend(pb);
-        if let Some(s) = editor_scene {
-            let mut pl = crate::world::object_placements(lib, city, s);
+        {
+            // streets are dressed (kerbs, furniture, markings) with or without an editor scene
+            let mut pl = editor_scene.map_or(vec![], |s| crate::world::object_placements(lib, city, s));
             pl.extend(crate::dressing::dress(lib, city, area));
-            for (id, v, i) in crate::dressing::markings(lib, city, area) {
+            for (id, tint, v, i) in crate::dressing::markings(lib, city, area) {
                 let mat = lib.material(gpu, renderer, &id);
-                let yellow = lib.catalog.get(&id).is_some_and(|a| a.title.contains("Yellow"));
-                let tint = if yellow { [1.15, 1.05, 0.55] } else { [1.0, 1.0, 1.0] };
                 batches.extend(render::Batch::new(gpu, &v, &i, &[render::Instance::new(glam::Mat4::IDENTITY, tint, 1.0)], mat));
             }
             let sb = crate::library::prefab_batches(gpu, renderer, lib, &pl);
