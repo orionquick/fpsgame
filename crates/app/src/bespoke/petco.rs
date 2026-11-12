@@ -1219,7 +1219,29 @@ fn tier(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], n0: f32, n1: f
         }
         // facia under the front row and the rail on it
         let (fa, fb) = (at(&a, n0), at(&b, n0));
-        g.poly(m.navy, &[v(fb, facia_from), v(fa, facia_from), v(fa, y0), v(fb, y0)], -ev, Vec3::Y);
+        if y0 - facia_from > 3.0 {
+            // a tier standing well clear of the level below (left field, in the 2019 photo): only a fascia band
+            // with a ribbon display along its front; under it the space is open, more seats in its shadow, a dark
+            // wall at the back
+            g.poly(m.navy, &[v(fb, y0 - 1.5), v(fa, y0 - 1.5), v(fa, y0), v(fb, y0)], -ev, Vec3::Y);
+            let (ra, rb) = (fa - a.n * 0.03, fb - b.n * 0.03);
+            g.poly(m.led, &[v(rb, y0 - 1.25), v(ra, y0 - 1.25), v(ra, y0 - 0.45), v(rb, y0 - 0.45)], -ev, Vec3::Y);
+            let (wa, wb) = (at(&a, n0 + 8.0), at(&b, n0 + 8.0));
+            g.shade = true;
+            g.poly(m.soffit, &[v(wb, facia_from), v(wa, facia_from), v(wa, y0 + 1.0), v(wb, y0 + 1.0)], -ev, Vec3::Y);
+            poly_up(g, m.concrete, &[v(fa, facia_from), v(fb, facia_from), v(wb, facia_from), v(wa, facia_from)]);
+            g.shade = false;
+            g.block_ring(&[fa, fb, wb, wa], 0.0, facia_from);
+            g.block_ring(&[wa, wb, wb + b.n * 0.3, wa + a.n * 0.3], facia_from, y0);
+            if !in_aisle {
+                for r in 0..4 {
+                    let n = n0 + 1.2 + r as f32 * LB_PITCH;
+                    seat_row(g, f, at(&a, n), at(&b, n), facia_from, -(a.n + b.n).normalize(), ends, along);
+                }
+            }
+        } else {
+            g.poly(m.navy, &[v(fb, facia_from), v(fa, facia_from), v(fa, y0), v(fb, y0)], -ev, Vec3::Y);
+        }
         g.tube(m.rail, v(fa, y0 + 1.0), v(fb, y0 + 1.0), 0.03, 6);
         let (ba, bb) = (at(&a, n0 + rows as f32 * LB_PITCH), at(&b, n0 + rows as f32 * LB_PITCH));
         if facia_from > 1.0 {
