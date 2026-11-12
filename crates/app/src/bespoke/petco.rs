@@ -1924,40 +1924,67 @@ fn light_rack(g: &mut Geo, m: &Mats, c: Vec2, fwd: Vec2, base: f32, y0: f32, y1:
     light_bank(g, m, c, fwd, y0, y1, w, 1.1);
 }
 
-/// One of the two cream towers behind the upper deck (lidar: a shaft 15.7 x 8.5 m turned 45 degrees to the grid,
-/// walls to 59 m, its field end 6 m higher; photos: plain pale stucco, a line of small square windows, a tall lamp
-/// bank on the field end). `c` plan centre, `a` the long axis toward the field.
+/// One of the two cream towers behind the upper deck. Lidar: a shaft 15.7 x 8.5 m turned 45 degrees to the grid,
+/// its walls to 59 m round a roof well at 47 m, and at the field end returns to 64.6 m - which is the lamp bank,
+/// not masonry. Photo from the right-field seats (9.4 px per metre on the tower): plain pale stucco; the lamp bank
+/// a frame about 5.6 m wide standing 5 m over the top and hanging 8 m down the field face; three balconies with
+/// glass guards low on that face, from about 32 m up to just under the canopy. `c` plan centre, `a` the long axis toward the field.
 fn stair_tower(g: &mut Geo, m: &Mats, c: Vec2, a: Vec2) {
     let stucco = pale_precast();
     let dark = Key::new(Mat::Plain(60), [0.02, 0.024, 0.028]);
     let a = a.normalize();
     let b = Vec2::new(-a.y, a.x);
-    let (hl, hw, top, tall, tall_len) = (7.85, 4.25, 59.0, 63.5, 6.0);
-    obox(g, stucco, c, a, hl, hw, 0.0, top);
-    obox(g, stucco, c + a * (hl - tall_len / 2.0), a, tall_len / 2.0, hw, top, tall);
-    // windows up both long faces, near the field end; a deep notch under the top of the lower part
+    let (hl, hw, top, well) = (7.85, 4.25, 59.0, 47.0);
+    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let (a3, b3) = (Vec3::new(a.x, 0.0, a.y), Vec3::new(b.x, 0.0, b.y));
+    // the shaft: walls to the top, the roof down in its well
+    let r = [c - a * hl - b * hw, c + a * hl - b * hw, c + a * hl + b * hw, c - a * hl + b * hw];
+    for k in 0..4 {
+        let (p, q) = (r[k], r[(k + 1) % 4]);
+        face(g, stucco, p, q, (p + q) / 2.0 - c, 0.0, top, &[]);
+        // the parapet's inner face
+        let inw = (c - (p + q) / 2.0).normalize() * 0.5;
+        face(g, stucco, q + inw, p + inw, inw, well, top, &[]);
+        poly_up(g, stucco, &[v(p, top), v(q, top), v(q + inw, top), v(p + inw, top)]);
+    }
+    poly_up(g, m.concrete, &r.map(|p| v(p, well)));
+    g.block_ring(&r, 0.0, top);
+    // small square windows up both long faces near the field end
     for side in [-1.0f32, 1.0] {
         let out = b * side;
         let right = Vec2::new(out.y, -out.x);
         let r3 = Vec3::new(right.x, 0.0, right.y);
-        let p = c + a * (hl - tall_len - 1.6) + out * (hw + 0.02);
+        let p = c + a * (hl - 3.0) + out * (hw + 0.02);
         let mut y = 26.0;
         while y < 55.0 {
             g.quad(dark, Vec3::new(p.x, y, p.y) - r3 * 0.45, r3 * 0.9, Vec3::Y * 0.9);
             y += 3.6;
         }
-        let q = c - a * (hl - 3.2) + out * (hw + 0.02);
-        g.quad(dark, Vec3::new(q.x, top - 6.5, q.y) - r3 * 1.6, r3 * 3.2, Vec3::Y * 3.4);
     }
-    // the lamp bank on brackets off the field end
-    let f = c + a * (hl + 1.3);
-    let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
-    for s in [-2.6f32, 2.6] {
-        for y in [56.0f32, 60.0, 63.3] {
-            g.member(m.white, v(c + a * hl + b * s, y), v(f + b * s + a * 0.25 * (y - 55.5) / 9.0, y), 0.22, 0.22, Vec3::Y);
+    // the field face: three balconies, a dark doorway behind each, glass guards
+    let f = c + a * hl;
+    let (bw, bd) = (3.5f32, 1.9f32);
+    for y in [32.4f32, 35.8, 39.2] {
+        g.quad(dark, v(f + a * 0.02 + b * (bw - 0.4), y), -b3 * (2.0 * bw - 0.8), Vec3::Y * 2.5);
+        obox(g, m.white, f + a * (bd / 2.0), a, bd / 2.0, bw, y - 0.3, y);
+        poly_down(g, m.white, &[v(f - b * bw, y - 0.3), v(f + b * bw, y - 0.3), v(f + b * bw + a * bd, y - 0.3), v(f - b * bw + a * bd, y - 0.3)]);
+        let (p0, p1) = (f - b * bw + a * bd, f + b * bw + a * bd);
+        for (q0, q1) in [(p0, p1), (f - b * bw, p0), (p1, f + b * bw)] {
+            let e = (q1 - q0).normalize();
+            g.poly(m.guard, &[v(q0, y), v(q1, y), v(q1, y + 1.05), v(q0, y + 1.05)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            g.poly(m.guard, &[v(q1, y), v(q0, y), v(q0, y + 1.05), v(q1, y + 1.05)], -Vec3::new(e.x, 0.0, e.y), Vec3::Y);
+            g.member(m.white, v(q0, y + 1.08), v(q1, y + 1.08), 0.06, 0.06, Vec3::Y);
         }
     }
-    light_bank(g, m, f, a, 55.5, 64.6, 6.4, 1.0);
+    // the lamp bank: a frame on two posts up the field face, standing over the top
+    let lf = f + a * 0.9;
+    for s in [-2.6f32, 2.6] {
+        g.member(m.white, v(lf + b * s - a * 0.5, 50.5), v(lf + b * s - a * 0.5, 64.2), 0.3, 0.3, a3);
+        for y in [51.0f32, 55.0, 58.6] {
+            g.member(m.white, v(f + b * s, y), v(lf + b * s - a * 0.5, y), 0.2, 0.2, Vec3::Y);
+        }
+    }
+    light_bank(g, m, lf, a, 51.5, 64.6, 5.6, 0.9);
 }
 
 /// A video board on a white steel frame (lidar: plan centre `c` of the frame, `n` the way the screen faces, the
