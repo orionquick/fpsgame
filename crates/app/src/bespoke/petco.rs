@@ -1177,14 +1177,42 @@ fn tier(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], n0: f32, n1: f
         let (fa, fb) = (at(&a, n0), at(&b, n0));
         g.poly(m.navy, &[v(fb, facia_from), v(fa, facia_from), v(fa, y0), v(fb, y0)], -ev, Vec3::Y);
         g.tube(m.rail, v(fa, y0 + 1.0), v(fb, y0 + 1.0), 0.03, 6);
-        // soffit under the tier and the back wall
         let (ba, bb) = (at(&a, n0 + rows as f32 * LB_PITCH), at(&b, n0 + rows as f32 * LB_PITCH));
         if facia_from > 1.0 {
-            g.poly(m.stucco, &[v(fa, facia_from), v(fb, facia_from), v(bb, y1 - 1.5), v(ba, y1 - 1.5)], ev, Vec3::new(a.n.x, 0.0, a.n.y));
+            // a raised tier stands on open white steel (street photos of the outfield stands' backs): the rows show
+            // from below as a staircase; a parapet and rail behind the top row; a raker on a column at each
+            // section, an eaves girder between them, and a low stone base at the street
+            let under = Key::new(Mat::Plain(215), [0.42, 0.43, 0.44]);
+            for j in 0..rows {
+                let (r0, r1) = (n0 + j as f32 * LB_PITCH, n0 + (j + 1) as f32 * LB_PITCH);
+                let y = y0 + j as f32 * rise - 0.5;
+                poly_down(g, under, &[v(at(&a, r0), y), v(at(&b, r0), y), v(at(&b, r1), y), v(at(&a, r1), y)]);
+                if j + 1 < rows {
+                    g.poly(under, &[v(at(&a, r1), y), v(at(&b, r1), y), v(at(&b, r1), y + rise), v(at(&a, r1), y + rise)], ev, Vec3::Y);
+                }
+            }
+            let top = y0 + (rows - 1) as f32 * rise;
+            g.poly(m.white, &[v(ba, top - 1.0), v(bb, top - 1.0), v(bb, top + 1.1), v(ba, top + 1.1)], ev, Vec3::Y);
+            g.poly(m.white, &[v(bb, top), v(ba, top), v(ba, top + 1.1), v(bb, top + 1.1)], -ev, Vec3::Y);
+            g.block_ring(&[ba, bb, bb + b.n * 0.3, ba + a.n * 0.3], top - 1.0, top + 1.1);
+            if in_aisle {
+                let (c, n3) = ((ba + bb) / 2.0, Vec3::new(a.n.x, 0.0, a.n.y));
+                let f = (fa + fb) / 2.0;
+                g.member(m.white, v(c, 0.0), v(c, top - 1.0), 0.6, 0.6, n3);
+                g.member(m.white, v(f, 0.0), v(f, y0 - 0.5), 0.6, 0.6, n3);
+                g.member(m.white, v(f, y0 - 0.9), v(c, top - 1.4), 0.5, 0.7, ev);
+                g.member(m.white, v(f, y0 * 0.45), v(c, top * 0.6), 0.35, 0.35, ev);
+                g.member(m.white, v(c, y0 * 0.45), v(f, y0 - 1.2), 0.35, 0.35, ev);
+                g.block_ring(&[c - e * 0.3 - a.n * 0.3, c + e * 0.3 - a.n * 0.3, c + e * 0.3 + a.n * 0.3, c - e * 0.3 + a.n * 0.3], 0.0, top);
+                g.block_ring(&[f - e * 0.3 - a.n * 0.3, f + e * 0.3 - a.n * 0.3, f + e * 0.3 + a.n * 0.3, f - e * 0.3 + a.n * 0.3], 0.0, y0);
+            }
+            g.poly(m.white, &[v(ba, top - 1.9), v(bb, top - 1.9), v(bb, top - 1.0), v(ba, top - 1.0)], ev, Vec3::Y);
+        } else {
+            // a tier on the ground: its back is a stone wall to the height of its own top row
+            wall_poly(g, m.sandstone, &[v(ba, 0.0), v(bb, 0.0), v(bb, y1 + 1.1), v(ba, y1 + 1.1)], ev, Vec3::Y);
+            g.poly(m.stucco, &[v(bb, y1 - rise), v(ba, y1 - rise), v(ba, y1 + 1.1), v(bb, y1 + 1.1)], -ev, Vec3::Y);
+            g.block_ring(&[ba, bb, bb + b.n * 0.4, ba + a.n * 0.4], 0.0, y1 + 1.1);
         }
-        wall_poly(g, m.sandstone, &[v(ba, 0.0), v(bb, 0.0), v(bb, y1 + 1.4), v(ba, y1 + 1.4)], ev, Vec3::Y);
-        g.poly(m.stucco, &[v(bb, 0.0), v(ba, 0.0), v(ba, y1 + 1.4), v(bb, y1 + 1.4)], -ev, Vec3::Y);
-        g.block_ring(&[ba, bb, bb + b.n * 0.4, ba + a.n * 0.4], 0.0, y1 + 1.4);
     }
 }
 
