@@ -114,7 +114,10 @@ pub fn shot(cx: &Ctx, x: f32, z: f32, yaw: f32, pitch: f32, w: u32, h: u32) -> R
     // FPS_CAM_Y: the eye's absolute height (metres over home plate) instead of a height over the ground;
     // FPS_FOV: vertical field of view in degrees - both for rendering from a camera solved on a photo
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
-    let y = env("FPS_CAM_Y").unwrap_or(cx.city.terrain.at(x as f64, z as f64) as f32 + up);
+    // (over the scan's own ground where the scan is what is drawn)
+    let terrain = cx.city.terrain.at(x as f64, z as f64) as f32;
+    let ground = crate::scan::Floors::load().and_then(|f| f.under(x, z, terrain + 3.0)).unwrap_or(terrain);
+    let y = env("FPS_CAM_Y").unwrap_or(ground + up);
     let cam = Camera::perspective(glam::Vec3::new(x, y, z), yaw, pitch, env("FPS_FOV").unwrap_or(70.0), w as f32 / h as f32);
     let batches = cx.batches();
     // flood-fill GI around the camera (before the probe bake, so reflections see the bounced light too)

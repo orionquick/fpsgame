@@ -28,7 +28,8 @@ pub fn mode() -> Mode {
     }
 }
 
-/// One batch per texture atlas. Brightness `FPS_SCAN_GAIN` (default 0.8) scales the photographed colour.
+/// One batch per texture atlas. Brightness `FPS_SCAN_GAIN` (default 0.8) scales the photographed colour;
+/// `FPS_SCAN_GRAIN` (default 1, 0 = none) the fine grain added close to the eye.
 pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library) -> Vec<Batch> {
     let Ok(b) = std::fs::read(file()) else { return vec![] };
     if b.len() < 8 || &b[..4] != b"SCN1" {
@@ -36,6 +37,7 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library) -> Ve
     }
     let u32_at = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as usize;
     let gain = std::env::var("FPS_SCAN_GAIN").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.8);
+    let grain = std::env::var("FPS_SCAN_GRAIN").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
     let mut o = 8;
     let mut parts = vec![];
     for _ in 0..u32_at(4) {
@@ -52,13 +54,19 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library) -> Ve
         parts.push((id, verts, idx));
     }
     let ids: Vec<String> = parts.iter().map(|p| p.0.clone()).collect();
-    lib.preload(gpu, r, &ids);
+    // (a few at a time: each atlas is 64 MB while it is being read)
+    for some in ids.chunks(8) {
+        lib.preload(gpu, r, some);
+    }
     parts
         .into_iter()
         .filter_map(|(id, v, i)| {
             let mat = lib.material(gpu, r, &id);
             // params.x = 4: shown as photographed (no lighting of ours on top of the light baked into it)
-            Batch::new(gpu, &v, &i, &[Instance::new(glam::Mat4::IDENTITY, [1.0; 3], 1.0).with_params([4.0, gain, 0.0, 0.0])], mat).map(|b| b.labelled(&id))
+            // (z: fine grain over the aerial photograph up close; the parts re-photographed from the street have
+            // their own detail)
+            let grain = if id.starts_with("scan_hd") { 0.0 } else { grain };
+            Batch::new(gpu, &v, &i, &[Instance::new(glam::Mat4::IDENTITY, [1.0; 3], 1.0).with_params([4.0, gain, grain, 0.0])], mat).map(|b| b.labelled(&id))
         })
         .collect()
 }

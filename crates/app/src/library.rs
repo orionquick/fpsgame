@@ -86,7 +86,12 @@ impl Library {
                             }
                         }
                         match assets::load_material_n(inbox, a, *n, size) {
-                            Ok(i) if bc => {
+                            Ok(mut i) if bc => {
+                                if a.group == "scan" {
+                                    // a photograph of the surface and nothing else: the other two maps hold one value
+                                    i.orm = image::imageops::resize(&i.orm, 4, 4, image::imageops::FilterType::Nearest);
+                                    i.normal = image::imageops::resize(&i.normal, 4, 4, image::imageops::FilterType::Nearest);
+                                }
                                 let t = render::compress_material(&i.base, &i.orm, &i.normal);
                                 let _ = std::fs::write(&file, render::write_compressed(&t));
                                 (key.clone(), Loaded::Bc(t))

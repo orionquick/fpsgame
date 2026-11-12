@@ -111,6 +111,22 @@ fn macro_var(w: vec3f, n: vec3f) -> f32 {
     return 0.55 * vnoise(p / 1.4) + 0.45 * vnoise(p / 7.0 + 13.1);
 }
 
+fn hash3(p: vec3f) -> f32 {
+    var q = fract(p * 0.1031);
+    q += dot(q, q.zyx + 31.32);
+    return fract((q.x + q.y) * q.z);
+}
+
+// Value noise on a 3D lattice: the same grain on a floor, a wall or a slope.
+fn grain3(p: vec3f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(mix(hash3(i), hash3(i + vec3f(1.0, 0.0, 0.0)), u.x), mix(hash3(i + vec3f(0.0, 1.0, 0.0)), hash3(i + vec3f(1.0, 1.0, 0.0)), u.x), u.y);
+    let b = mix(mix(hash3(i + vec3f(0.0, 0.0, 1.0)), hash3(i + vec3f(1.0, 0.0, 1.0)), u.x), mix(hash3(i + vec3f(0.0, 1.0, 1.0)), hash3(i + vec3f(1.0, 1.0, 1.0)), u.x), u.y);
+    return mix(a, b, u.z);
+}
+
 fn noise3(p: vec3f) -> f32 {
     return (vnoise(p.xy) + vnoise(p.yz + 17.3) + vnoise(p.xz + 41.7)) / 3.0;
 }
@@ -267,6 +283,17 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     }
     var base = texel.rgb * i.tint;
     if (i.params.x > 3.5) {
+        // a photograph from the air runs out of detail a few metres from the eye: fine grain (stronger on grass)
+        // keeps a surface from turning to smooth mush under the nose. params.z: its strength.
+        if (i.params.z > 0.0) {
+            let d = distance(i.world, g.eye.xyz);
+            let green = clamp((base.g - max(base.r, base.b)) * 8.0, 0.0, 1.0);
+            let w = i.world + vec3f(400.0, 50.0, 400.0);
+            let a = (grain3(w * 37.0) - 0.5) * (1.0 - smoothstep(6.0, 18.0, d));
+            let b = (grain3(w * 131.0) - 0.5) * (1.0 - smoothstep(2.0, 7.0, d));
+            let c = (grain3(w * 9.0) - 0.5) * (1.0 - smoothstep(12.0, 40.0, d));
+            base *= 1.0 + (a * 0.8 + b * 0.8 + c * 0.35) * mix(0.14, 0.34, green) * i.params.z;
+        }
         return vec4f(tonemap(haze(base * i.params.y, i.world)), 1.0);
     }
     var orm = textureSample(t_orm, samp, i.uv).rgb;
