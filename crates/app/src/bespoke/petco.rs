@@ -689,11 +689,24 @@ fn stations(front: &[Vec2]) -> Vec<Station> {
     sm
 }
 
-/// Tread height of the lower bowl at offset `n` (rows rise slowly at the front, faster near the top).
-fn lb_y(n: f32, end: f32) -> f32 {
-    let t = ((n - 0.8) / (end - 0.8)).clamp(0.0, 1.0);
-    0.45 + (LB_BREAK_Y - 0.45) * t.powf(1.35)
+/// The lower bowl's height `n` metres out from the guide (lidar profiles from home plate): rows climb gently from
+/// 0.5 m at the `front` to 2.75 m; then a level cross aisle at 3.1 m, 3.4 m wide, just in front of the terrace's
+/// overhang; then three steeper rows up to `LB_BREAK_Y` at `end`, where the rows carry on under the terrace.
+fn lb_y(n: f32, front: f32, end: f32) -> f32 {
+    let d = end - n;
+    if d >= LB_AISLE.1 {
+        let span = (end - LB_AISLE.1 - LB_PITCH - front).max(1.0);
+        0.5 + 2.25 * ((n - front) / span).clamp(0.0, 1.0).powf(1.15)
+    } else if d >= LB_AISLE.0 {
+        LB_AISLE_Y
+    } else {
+        LB_AISLE_Y + (LB_BREAK_Y - LB_AISLE_Y) * ((LB_AISLE.0 - d + LB_PITCH) / (LB_AISLE.0 + LB_PITCH)).clamp(0.0, 1.0)
+    }
 }
+
+/// The cross aisle: how far in front of the terrace face it lies (near edge, far edge), and its level.
+const LB_AISLE: (f32, f32) = (2.8, 6.2);
+const LB_AISLE_Y: f32 = 3.1;
 
 /// The seating bowl from foul pole to foul pole: the lower bowl's concrete steps and seats behind a padded front
 /// wall, the concourse under the terrace with suite glazing, the terrace, the upper deck with stepped aisles and
@@ -744,16 +757,18 @@ fn bowl(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], front: &[Vec2]
                 continue;
             }
             let (n0a, n0b) = (n0.max(a.front + 0.3), n0.max(b.front + 0.3));
-            let (ya, yb) = (lb_y(n0, a.lb_end), lb_y(n0, b.lb_end));
-            let y_next_a = lb_y(n1, a.lb_end);
-            let y_next_b = lb_y(n1, b.lb_end);
+            let (ya, yb) = (lb_y(n0, a.front, a.lb_end), lb_y(n0, b.front, b.lb_end));
+            let y_next_a = lb_y(n1, a.front, a.lb_end);
+            let y_next_b = lb_y(n1, b.front, b.lb_end);
+            let d_mid = (a.lb_end + b.lb_end) / 2.0 - n0;
+            let cross = d_mid >= LB_AISLE.0 - 0.3 && d_mid < LB_AISLE.1 + 0.2;
             // tread
             g.poly(m.concrete, &[v(at(&a, n0a), ya), v(at(&a, n1), ya), v(at(&b, n1), yb), v(at(&b, n0b), yb)], Vec3::new(a.n.x, 0.0, a.n.y), Vec3::new(e.x, 0.0, e.y));
             // riser up to the next row
             g.poly(m.riser, &[v(at(&a, n1), ya), v(at(&b, n1), yb), v(at(&b, n1), y_next_b), v(at(&a, n1), y_next_a)], Vec3::new(e.x, 0.0, e.y), Vec3::Y);
             g.block_ring(&[at(&a, n0a), at(&a, n1), at(&b, n1), at(&b, n0b)], 0.0, ya.min(yb));
             // seats, facing the field
-            if !in_aisle && n0 > a.front + 0.9 {
+            if !in_aisle && !cross && n0 > a.front + 0.9 {
                 seat_row(g, f, at(&a, n0 + LB_PITCH - SEAT_SETBACK), at(&b, n0 + LB_PITCH - SEAT_SETBACK), (ya + yb) / 2.0, -(a.n + b.n).normalize(), ends, along);
             }
         }
