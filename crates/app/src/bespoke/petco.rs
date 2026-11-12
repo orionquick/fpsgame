@@ -423,15 +423,30 @@ fn field(g: &mut Geo, m: &Mats, front: &[Vec2], wall: &[Vec2]) {
     let inset = |p: Vec2, k: f32| p + (Vec2::new(0.0, -19.4) - p).normalize() * k;
     let sq = [inset(Vec2::ZERO, 1.3), inset(b1, 1.3), inset(b2s, 1.3), inset(b3, 1.3)];
     poly_up(g, m.grass, &sq.map(|p| Vec3::new(p.x, 0.018, p.y)));
-    // base cutouts (13 ft), the plate circle (13 ft), the mound (18 ft) on top
-    for (p, r) in [(b1, 3.96), (b2s, 3.96), (b3, 3.96), (Vec2::ZERO, 3.96)] {
-        disc(g, m.dirt, p, r, 0.024);
+    // the plate circle (13 ft). At first and third the infield grass is cut back in a 13 ft arc about the base - a
+    // notch in the grass, not a circle: on the foul side the dirt keeps the straight edge of the base path (both
+    // photos from behind home show this; second base has no cutout, the grass comes to a point in front of it)
+    disc(g, m.dirt, Vec2::ZERO, 3.96, 0.024);
+    for (p, b) in [(b1, 45.0f32), (b3, -45.0)] {
+        let d = dir(b);
+        let side = Vec2::new(-d.y, d.x);
+        let foul = if side.dot(dir(0.0)) < 0.0 { side } else { -side };
+        let mut pts = vec![p];
+        for i in 0..=40 {
+            let a = i as f32 / 40.0 * std::f32::consts::TAU;
+            let q = p + Vec2::new(a.cos(), a.sin()) * 3.96;
+            let out = (q - p).dot(foul);
+            pts.push(if out > 0.91 { q - foul * (out - 0.91) } else { q });
+        }
+        fan(g, m.dirt, &pts, 0.024);
     }
-    // base paths: 3 ft either side of the lines from the plate circle to the arc
+    // base paths: 3 ft either side of the lines, from the plate circle out to where the skin's arc meets the line
     for b in [45.0f32, -45.0] {
         let d = dir(b);
         let side = Vec2::new(-d.y, d.x);
-        let (a, e) = (d * 3.9, d * 28.0);
+        let q = d.dot(rubber);
+        let reach = q + (q * q - rubber.length_squared() + arc_r * arc_r).sqrt();
+        let (a, e) = (d * 3.9, d * reach);
         let pts = [a - side * 0.91, e - side * 0.91, e + side * 0.91, a + side * 0.91].map(|p| Vec3::new(p.x, 0.022, p.y));
         poly_up(g, m.dirt, &pts);
     }
@@ -1338,10 +1353,13 @@ fn tier(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], n0: f32, n1: f
             }
         } else {
             g.poly(m.navy, &[v(fb, facia_from), v(fa, facia_from), v(fa, y0), v(fb, y0)], -ev, Vec3::Y);
+            if y0 - facia_from > 2.0 {
+                ribbon(g, fa - a.n * 0.03, fb - b.n * 0.03, y0 - 1.5, y0 - 0.7, prev + 5.0, arc + 5.0);
+            }
         }
         g.tube(m.rail, v(fa, y0 + 1.0), v(fb, y0 + 1.0), 0.03, 6);
         let (ba, bb) = (at(&a, n0 + rows as f32 * LB_PITCH), at(&b, n0 + rows as f32 * LB_PITCH));
-        if facia_from > 1.0 {
+        if y0 - facia_from > 1.5 {
             // a raised tier stands on open white steel (street photos of the outfield stands' backs): the rows show
             // from below as a staircase; a parapet and rail behind the top row; a raker on a column at each
             // section, an eaves girder between them, and a low stone base at the street
@@ -1383,11 +1401,20 @@ fn tier(g: &mut Geo, f: &mut Furnisher, m: &Mats, st: &[Station], n0: f32, n1: f
 /// low terrace, the bullpens in left-centre, the raised centre-field terrace and the batter's eye.
 fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
     let v = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
-    // right field: lower rows from the wall (1.6 -> 7.7 m over 20 m), the upper deck from 24 m out (14.5 -> 24 m)
-    let rf = wall_stations(18.0, 44.5);
-    tier(g, f, m, &rf, 1.2, 21.0, 1.6, 7.7, 0.0);
-    tier(g, f, m, &rf, 24.0, 42.0, 14.5, 24.0, 12.0);
-    // left field: a low terrace (2 m) behind the wall, then rows from 6 m out climbing 8 -> 14 m
+    // right field (lidar profiles behind the wall, every 2 degrees): a level strip at 2 m for 6 m; rows from there
+    // climbing 2.6 -> 8 m by 23 m out; the upper tier from 24 m out, 15 -> 23.5 m. The lower rows begin at about
+    // 20 degrees, the upper tier at 23
+    let rf_all = wall_stations(18.0, 44.5);
+    for w in rf_all.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let q = [a.p + a.n * 0.45, b.p + b.n * 0.45, b.p + b.n * 6.5, a.p + a.n * 6.5];
+        poly_up(g, m.concrete, &q.map(|p| v(p, 2.0)));
+        g.block_ring(&q, 0.0, 2.0);
+    }
+    tier(g, f, m, &wall_stations(19.6, 44.5), 6.5, 23.5, 2.6, 8.0, 2.0);
+    tier(g, f, m, &wall_stations(23.0, 44.5), 24.0, 42.0, 15.0, 23.5, 12.0);
+    // left field: a low terrace (2 m) behind the wall for 6 m (it runs on in front of the warehouse); from about
+    // 34 degrees, clear of the warehouse's balconies, rows from 6 m out climbing 8 -> 11 m
     let lf = wall_stations(-39.0, -16.0);
     for w in lf.windows(2) {
         let (a, b) = (w[0], w[1]);
@@ -1395,7 +1422,7 @@ fn outfield(g: &mut Geo, f: &mut Furnisher, m: &Mats) {
         g.block_ring(&[a.p + a.n * 0.45, b.p + b.n * 0.45, b.p + b.n * 6.0, a.p + a.n * 6.0], 0.0, 2.0);
         g.tube(m.rail, v(a.p + a.n * 0.5, 3.0), v(b.p + b.n * 0.5, 3.0), 0.03, 6);
     }
-    tier(g, f, m, &lf, 6.2, 18.0, 8.0, 13.6, 2.0);
+    tier(g, f, m, &wall_stations(-34.4, -16.0), 6.2, 18.0, 8.0, 11.3, 2.0);
     // the bullpens in left-centre: field level, two mounds side by side, a fence behind the wall
     let bp = wall_stations(-15.5, -5.5);
     for w in bp.windows(2) {
@@ -2164,9 +2191,10 @@ fn stair_tower(g: &mut Geo, m: &Mats, c: Vec2, a: Vec2) {
 
 /// A video board on a white steel frame (lidar: plan centre `c` of the frame, `n` the way the screen faces, the
 /// frame from `back` to `front` along `n`): the cabinet `w` wide from `y0` to `y1` showing `screen`; columns in two
-/// rows down to `base`, girts and bracing behind; `sign` = a name panel on top (from, to along the board, top);
+/// rows down to `base`, girts and bracing behind; `sign_on` = a name panel over it (from, to along the board, its
+/// bottom and top); `billboard` = a billboard on the back of the frame;
 /// `lights` = a mast and lamp bank over it (from, to along the board, bank foot, bank top).
-fn video_board(g: &mut Geo, m: &Mats, c: Vec2, n: Vec2, back: f32, front: f32, w: f32, y0: f32, y1: f32, base: f32, screen: &'static str, sign_on: Option<(f32, f32, f32)>, lights: (f32, f32, f32, f32)) {
+fn video_board(g: &mut Geo, m: &Mats, c: Vec2, n: Vec2, back: f32, front: f32, w: f32, y0: f32, y1: f32, base: f32, screen: &'static str, sign_on: Option<(f32, f32, f32, f32)>, billboard: bool, lights: (f32, f32, f32, f32)) {
     let cab = Key::new(Mat::Plain(240), [0.016, 0.018, 0.024]);
     let n = n.normalize();
     let right = Vec2::new(n.y, -n.x);
@@ -2198,17 +2226,23 @@ fn video_board(g: &mut Geo, m: &Mats, c: Vec2, n: Vec2, back: f32, front: f32, w
             }
         }
     }
-    if sign_on.is_some() {
+    if billboard {
         // the city side of the main board: a billboard on the back of the frame with the name across it
         let (bw, by0, by1) = (w * 0.62, y0 + 1.5, y1 - 1.0);
         g.quad(cab, v(bw / 2.0, back - 0.1, by0), -r3 * bw, Vec3::Y * (by1 - by0));
         let bc = c - n * (back.abs() + 0.14);
         sign(g, "sgn_ballpark", [0.95, 0.95, 0.93], Vec2::new(bc.x, bc.y), (by0 + by1) / 2.0 - 1.6, -right, bw * 0.8, 3.2);
     }
-    if let Some((t0, t1, top)) = sign_on {
-        obox(g, cab, c + right * ((t0 + t1) / 2.0) + n * (front - 0.5), right, (t1 - t0) / 2.0, 0.5, y1, top);
+    if let Some((t0, t1, bottom, top)) = sign_on {
+        // the name panel over the board, on posts where it stands clear of it
+        obox(g, cab, c + right * ((t0 + t1) / 2.0) + n * (front - 0.5), right, (t1 - t0) / 2.0, 0.5, bottom, top);
+        if bottom > y1 + 0.2 {
+            for t in [t0 + 1.0, (t0 + t1) / 2.0, t1 - 1.0] {
+                g.member(m.white, v(t, front - 0.5, y1), v(t, front - 0.5, bottom), 0.3, 0.3, n3);
+            }
+        }
         let sc = c + right * ((t0 + t1) / 2.0) + n * (front + 0.04);
-        sign(g, "sgn_ballpark", [0.95, 0.95, 0.93], sc, y1 + (top - y1) * 0.22, right, (t1 - t0) * 0.8, (top - y1) * 0.56);
+        sign(g, "sgn_ballpark", [0.95, 0.95, 0.93], sc, bottom + (top - bottom) * 0.22, right, (t1 - t0) * 0.8, (top - bottom) * 0.56);
     }
     // the mast: two braced legs up from the frame, the bank at their head
     let (t0, t1, ly0, ly1) = lights;
@@ -2252,9 +2286,11 @@ fn lights_and_boards(g: &mut Geo, m: &Mats) {
         light_rack(g, m, mx(ec), Vec2::NEG_X, canopy, 47.6, 54.0, 12.6);
     }
     // left field: the main board, 37.7 x 18.7 m, its name over the middle and a lamp bank on a mast to 66 m
-    video_board(g, m, w(-58.8, -110.6), Vec2::new(0.691, 0.723), -6.0, 4.5, 37.7, 17.8, 36.5, 7.0, "scr_lf_board", Some((-8.0, 7.0, 41.0)), (-6.5, 4.5, 56.5, 66.0));
+    // (sizes and heights of both boards, their name signs and the right-field lamp bank are read off the 2019
+    // photo through its solved camera: positions along each board's lidar plane, good to about half a metre)
+    video_board(g, m, w(-58.8, -110.6), Vec2::new(0.691, 0.723), -6.0, 4.5, 37.7, 17.9, 36.8, 7.0, "scr_lf_board", Some((-10.0, 10.0, 36.8, 42.3)), true, (-6.5, 4.5, 56.5, 66.0));
     // right field: a long three-panel board at the top of the stand, lamps to 58.5 m
-    video_board(g, m, w(87.3, -110.9), Vec2::new(-0.66, 0.751), -3.0, 3.0, 38.0, 29.5, 39.0, 17.0, "scr_rf_board", None, (-4.5, 8.0, 50.5, 58.5));
+    video_board(g, m, w(87.3, -110.9), Vec2::new(-0.66, 0.751), -3.0, 3.0, 40.0, 29.9, 40.5, 17.0, "scr_rf_board", Some((-8.0, 9.0, 42.6, 46.0)), false, (-4.9, 6.4, 49.9, 57.3));
 }
 
 // ---------------------------------------------------------------- dugouts, netting
