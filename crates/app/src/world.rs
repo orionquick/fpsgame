@@ -4,7 +4,8 @@ use render::{Gpu, Scene, Vertex};
 /// The part of the city that is drawn while work is concentrated on the ballpark: its own block out to the far
 /// kerbs of the streets round it - 7th Avenue on the west, J Street on the north, 10th Avenue and Park Boulevard on
 /// the east and south-east, the railway on the south-west. Everything outside is left out of the picture: ground,
-/// streets, trees, buildings. Two convex pieces (world x, z), both wound the same way.
+/// streets, trees. Generic buildings are left out everywhere, inside the block too (`building_hidden`).
+/// Two convex pieces (world x, z), both wound the same way.
 /// `FPS_CITY=full` brings the whole city back.
 const FOCUS: [&[[f64; 2]]; 2] = [
     &[[-129.0, -267.0], [152.0, -267.0], [152.0, -143.0], [-129.0, -143.0]],
@@ -29,19 +30,10 @@ pub fn in_focus(p: [f64; 2]) -> bool {
     !focused() || FOCUS.iter().any(|r| in_piece(r, p))
 }
 
-/// Whether a generic building is left out altogether (drawing, collision, bounce light): it stands outside the
-/// focus area. Judged by the middle of its outline, so a building across the street is never cut in half.
-pub fn building_hidden(b: &city::model::Building) -> bool {
-    let n = b.outer.len().max(1) as f64;
-    let c = [b.outer.iter().map(|p| p[0]).sum::<f64>() / n, b.outer.iter().map(|p| p[1]).sum::<f64>() / n];
-    if !focused() {
-        return false;
-    }
-    // 10th Avenue curves along the east side: the focus area's straight edge takes in a little ground beyond it,
-    // but no building beyond the street's centre line belongs to the block
-    const TENTH: [[f64; 2]; 4] = [[140.0, -140.0], [170.0, -67.0], [200.0, -37.0], [210.0, -27.0]];
-    let beyond_tenth = TENTH.windows(2).any(|w| c[1] >= w[0][1] && c[1] <= w[1][1] && c[0] > w[0][0] + (w[1][0] - w[0][0]) * (c[1] - w[0][1]) / (w[1][1] - w[0][1]));
-    !in_focus(c) || beyond_tenth
+/// Whether a generic (not hand-built) building is left out altogether - drawing, collision, bounce light. While
+/// work is concentrated on the ballpark's block that is all of them: only hand-built buildings are shown.
+pub fn building_hidden(_b: &city::model::Building) -> bool {
+    focused()
 }
 
 /// Cuts a city mesh down to the focus area: triangles are clipped on its boundary, not just dropped, so the ground
@@ -124,6 +116,10 @@ impl Base {
         let (mut verts, mut idx, mut slots) = (vec![], vec![], vec![]);
         for (slot, mut m) in city::mesh::build_slots_ex(c, &crate::bespoke::ground_holes()) {
             clip_to_focus(&mut m);
+            // (the placeholder building volumes are never drawn while only hand-built buildings are shown)
+            if focused() && matches!(slot, city::mesh::Slot::Wall(_) | city::mesh::Slot::Roof) {
+                continue;
+            }
             if prefabs && matches!(slot, city::mesh::Slot::Tree | city::mesh::Slot::Wall(_) | city::mesh::Slot::Roof) {
                 continue;
             }
