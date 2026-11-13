@@ -206,7 +206,7 @@ fn upload_compressed(gpu: &Gpu, t: &CompressedTex) -> wgpu::TextureView {
 }
 
 /// Fine surface detail shared by many materials (see the scan path in `tex.wgsl`): tiling brightness patterns, one
-/// per colour channel, 0.5 = no change. Red: turf. Green: clay.
+/// per channel, 0.5 = no change. Red: turf. Green: clay. Blue: concrete. Alpha: sand.
 pub struct Detail(wgpu::TextureView);
 
 impl Detail {

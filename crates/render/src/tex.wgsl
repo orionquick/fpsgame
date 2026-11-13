@@ -286,23 +286,29 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     let dgx = dpdx(i.world.xz);
     let dgy = dpdy(i.world.xz);
     if (i.params.x > 3.5) {
-        // params.w: the material carries the shared detail texture - real turf and clay, tiled over the ground,
-        // changing only the brightness of what the photograph shows. Chosen by the photograph's own colour.
+        // params.w: the material carries the shared detail texture - real turf, clay, concrete and sand (one per
+        // channel), tiled over the ground, changing only the brightness of what the photograph shows. Which of them
+        // is chosen by the photograph's own colour.
         var detailed = 0.0;
         if (i.params.w > 0.0) {
             let up = smoothstep(0.55, 0.85, normalize(i.nrm).y);
-            let turf = clamp((base.g - max(base.r, base.b)) * 8.0, 0.0, 1.0) * up;
-            let clay = clamp((base.r - max(base.g, base.b) * 1.08) * 6.0, 0.0, 1.0) * up;
+            let hi = max(base.r, max(base.g, base.b));
+            let lo = min(base.r, min(base.g, base.b));
+            let turf = clamp((base.g - max(base.r, base.b)) * 8.0, 0.0, 1.0);
+            let clay = clamp((base.r - base.g * 1.6) * 6.0, 0.0, 1.0) * (1.0 - turf);
+            let sand = clamp((base.g - base.b * 1.2) * 8.0, 0.0, 1.0) * step(base.g, base.r) * smoothstep(0.2, 0.4, hi) * (1.0 - turf) * (1.0 - clay);
+            let concrete = (1.0 - smoothstep(0.1, 0.22, (hi - lo) / max(hi, 0.01))) * smoothstep(0.04, 0.12, hi) * (1.0 - turf) * (1.0 - clay) * (1.0 - sand);
+            let wts = vec4f(turf, clay, concrete, sand) * up;
             let p = i.world.xz;
             // two lookups at unrelated sizes and angles, so the tile's repeat does not show across a field
             let q = vec2f(p.x * 0.819 - p.y * 0.574, p.x * 0.574 + p.y * 0.819);
             // (the same picture three times over: blades up close, tufts at a few paces, mottling beyond)
-            let t1 = textureSampleGrad(t_nrm, samp, p / 1.2, dgx / 1.2, dgy / 1.2).rg;
-            let t2 = textureSampleGrad(t_nrm, samp, q / 3.1 + vec2f(0.37, 0.11), dgx / 3.1, dgy / 3.1).rg;
-            let t3 = textureSampleGrad(t_nrm, samp, q.yx / 8.3 + vec2f(0.71, 0.53), dgx / 8.3, dgy / 8.3).rg;
+            let t1 = vec4f(textureSampleGrad(t_nrm, samp, p / 0.9, dgx / 0.9, dgy / 0.9));
+            let t2 = vec4f(textureSampleGrad(t_nrm, samp, q / 3.1 + vec2f(0.37, 0.11), dgx / 3.1, dgy / 3.1));
+            let t3 = vec4f(textureSampleGrad(t_nrm, samp, q.yx / 8.3 + vec2f(0.71, 0.53), dgx / 8.3, dgy / 8.3));
             let d = ((t1 - 0.5) * 1.0 + (t2 - 0.5) * 0.9 + (t3 - 0.5) * 0.7) * 2.0 * i.params.w;
-            base *= 1.0 + d.r * turf + d.g * clay;
-            detailed = max(turf, clay);
+            base *= 1.0 + dot(d, wts);
+            detailed = max(max(wts.x, wts.y), max(wts.z, wts.w));
         }
         // a photograph from the air runs out of detail a few metres from the eye: fine grain (stronger on grass)
         // keeps a surface from turning to smooth mush under the nose. params.z: its strength.
