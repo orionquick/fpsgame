@@ -58,6 +58,9 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library) -> Ve
     for some in ids.chunks(8) {
         lib.preload(gpu, r, some);
     }
+    // FPS_SCAN_DETAIL: how strongly the detail texture shows (default 1, 0 = off)
+    let strength = std::env::var("FPS_SCAN_DETAIL").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+    let detail = lib.scan_detail(gpu) && strength > 0.0;
     parts
         .into_iter()
         .filter_map(|(id, v, i)| {
@@ -66,7 +69,9 @@ pub fn batches(gpu: &Gpu, r: &Renderer, lib: &mut crate::library::Library) -> Ve
             // (z: fine grain over the aerial photograph up close; the parts re-photographed from the street have
             // their own detail)
             let grain = if id.starts_with("scan_hd") { 0.0 } else { grain };
-            Batch::new(gpu, &v, &i, &[Instance::new(glam::Mat4::IDENTITY, [1.0; 3], 1.0).with_params([4.0, gain, grain, 0.0])], mat).map(|b| b.labelled(&id))
+            // (w: turf and clay detail from the shared detail texture, where there is one)
+            let detail = if detail && !id.starts_with("scan_hd") { strength } else { 0.0 };
+            Batch::new(gpu, &v, &i, &[Instance::new(glam::Mat4::IDENTITY, [1.0; 3], 1.0).with_params([4.0, gain, grain, detail])], mat).map(|b| b.labelled(&id))
         })
         .collect()
 }

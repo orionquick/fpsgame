@@ -205,7 +205,33 @@ fn upload_compressed(gpu: &Gpu, t: &CompressedTex) -> wgpu::TextureView {
     tex.create_view(&Default::default())
 }
 
+/// Fine surface detail shared by many materials (see the scan path in `tex.wgsl`): tiling brightness patterns, one
+/// per colour channel, 0.5 = no change. Red: turf. Green: clay.
+pub struct Detail(wgpu::TextureView);
+
+impl Detail {
+    pub fn new(gpu: &Gpu, img: &image::RgbaImage) -> Self {
+        Self(upload(gpu, img, wgpu::TextureFormat::Rgba8Unorm))
+    }
+}
+
 impl Material {
+    /// A material that is a photograph only (`base`), with the shared detail texture in its other two slots.
+    pub fn from_compressed_with_detail(gpu: &Gpu, r: &crate::Renderer, base: &CompressedTex, detail: &Detail) -> Self {
+        let views = [upload_compressed(gpu, base), detail.0.clone(), detail.0.clone()];
+        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material"),
+            layout: &r.mat_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&views[0]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[1]) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[2]) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&r.mat_sampler) },
+            ],
+        });
+        Self { bind, views }
+    }
+
     /// A material from block-compressed maps (8x / 4x smaller on the GPU than RGBA8).
     pub fn from_compressed(gpu: &Gpu, r: &crate::Renderer, t: &[CompressedTex; 3]) -> Self {
         let views = [upload_compressed(gpu, &t[0]), upload_compressed(gpu, &t[1]), upload_compressed(gpu, &t[2])];

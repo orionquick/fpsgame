@@ -282,7 +282,28 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
         discard;
     }
     var base = texel.rgb * i.tint;
+    // (taken here, where every fragment passes, for the detail lookups below)
+    let dgx = dpdx(i.world.xz);
+    let dgy = dpdy(i.world.xz);
     if (i.params.x > 3.5) {
+        // params.w: the material carries the shared detail texture - real turf and clay, tiled over the ground,
+        // changing only the brightness of what the photograph shows. Chosen by the photograph's own colour.
+        var detailed = 0.0;
+        if (i.params.w > 0.0) {
+            let up = smoothstep(0.55, 0.85, normalize(i.nrm).y);
+            let turf = clamp((base.g - max(base.r, base.b)) * 8.0, 0.0, 1.0) * up;
+            let clay = clamp((base.r - max(base.g, base.b) * 1.08) * 6.0, 0.0, 1.0) * up;
+            let p = i.world.xz;
+            // two lookups at unrelated sizes and angles, so the tile's repeat does not show across a field
+            let q = vec2f(p.x * 0.819 - p.y * 0.574, p.x * 0.574 + p.y * 0.819);
+            // (the same picture three times over: blades up close, tufts at a few paces, mottling beyond)
+            let t1 = textureSampleGrad(t_nrm, samp, p / 1.2, dgx / 1.2, dgy / 1.2).rg;
+            let t2 = textureSampleGrad(t_nrm, samp, q / 3.1 + vec2f(0.37, 0.11), dgx / 3.1, dgy / 3.1).rg;
+            let t3 = textureSampleGrad(t_nrm, samp, q.yx / 8.3 + vec2f(0.71, 0.53), dgx / 8.3, dgy / 8.3).rg;
+            let d = ((t1 - 0.5) * 1.0 + (t2 - 0.5) * 0.9 + (t3 - 0.5) * 0.7) * 2.0 * i.params.w;
+            base *= 1.0 + d.r * turf + d.g * clay;
+            detailed = max(turf, clay);
+        }
         // a photograph from the air runs out of detail a few metres from the eye: fine grain (stronger on grass)
         // keeps a surface from turning to smooth mush under the nose. params.z: its strength.
         if (i.params.z > 0.0) {
@@ -292,7 +313,7 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
             let a = (grain3(w * 37.0) - 0.5) * (1.0 - smoothstep(6.0, 18.0, d));
             let b = (grain3(w * 131.0) - 0.5) * (1.0 - smoothstep(2.0, 7.0, d));
             let c = (grain3(w * 9.0) - 0.5) * (1.0 - smoothstep(12.0, 40.0, d));
-            base *= 1.0 + (a * 0.8 + b * 0.8 + c * 0.35) * mix(0.14, 0.34, green) * i.params.z;
+            base *= 1.0 + (a * 0.8 + b * 0.8 + c * 0.35) * mix(0.14, 0.34, green) * i.params.z * (1.0 - detailed * 0.8);
         }
         return vec4f(tonemap(haze(base * i.params.y, i.world)), 1.0);
     }

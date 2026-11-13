@@ -10,7 +10,7 @@ pub mod gi;
 pub mod prof;
 pub mod textured;
 pub use cull::CullWorld;
-pub use textured::{compress_material, read_compressed, write_compressed, Batch, CompressedTex, CompressedTex3, Instance, Material, TexVertex};
+pub use textured::{compress_material, read_compressed, write_compressed, Batch, CompressedTex, CompressedTex3, Detail, Instance, Material, TexVertex};
 
 pub const MSAA: u32 = 4;
 /// Material slots in the bindless arrays.

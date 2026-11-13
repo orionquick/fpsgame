@@ -14,6 +14,8 @@ pub struct Library {
     meshes: HashMap<String, Arc<Vec<MeshLods>>>,
     plain: Option<Arc<Material>>,
     glass: Option<Arc<Material>>,
+    /// Fine detail for the scan's ground (`data/scan/detail.png`, local): looked for once.
+    scan_detail: Option<Option<render::Detail>>,
 }
 
 /// Texture size loaded onto the GPU (from the 2K sources).
@@ -42,7 +44,7 @@ impl Library {
     pub fn open(root: &std::path::Path) -> Option<Self> {
         let out = root.join("data/assets");
         let catalog = Catalog::load(&out).ok()?;
-        Some(Self { catalog, inbox: root.join("data/megascans_inbox"), out, materials: HashMap::new(), meshes: HashMap::new(), plain: None, glass: None })
+        Some(Self { catalog, inbox: root.join("data/megascans_inbox"), out, materials: HashMap::new(), meshes: HashMap::new(), plain: None, glass: None, scan_detail: None })
     }
 
 
@@ -105,13 +107,22 @@ impl Library {
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (id, l) in loaded {
+            let scan = self.catalog.get(id.split('#').next().unwrap_or(&id)).map_or(false, |a| a.group == "scan");
             let m = match l {
+                Loaded::Bc(t) if scan && self.scan_detail(gpu) => Arc::new(Material::from_compressed_with_detail(gpu, r, &t[0], self.scan_detail.as_ref().unwrap().as_ref().unwrap())),
                 Loaded::Bc(t) => Arc::new(Material::from_compressed(gpu, r, &t)),
                 Loaded::Rgba(i) => Arc::new(Material::new(gpu, r, &i.base, &i.orm, &i.normal)),
                 Loaded::Missing => self.plain(gpu, r),
             };
             self.materials.insert(id, m);
         }
+    }
+
+    /// Whether there is a detail texture for the scan (loading it on first use).
+    pub fn scan_detail(&mut self, gpu: &Gpu) -> bool {
+        self.scan_detail
+            .get_or_insert_with(|| image::open(crate::root().join("data/scan/detail.png")).ok().map(|i| render::Detail::new(gpu, &i.to_rgba8())))
+            .is_some()
     }
 
     pub fn material(&mut self, gpu: &Gpu, r: &Renderer, id: &str) -> Arc<Material> {
